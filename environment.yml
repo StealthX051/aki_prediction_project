@@ -1,0 +1,38 @@
+# This file defines the Conda environment for the AKI prediction project.
+# To create the environment, run: conda env create -f environment.yml
+# To activate the environment, run: conda activate aki_prediction_project
+
+name: aki_prediction_project
+
+channels:
+  - pytorch
+  - nvidia
+  - defaults
+
+dependencies:
+  # Core Python version
+  - python=3.9
+
+  # Core deep learning libraries from specified channels
+  - pytorch
+  - torchvision
+  - torchaudio
+  - pytorch-cuda=11.8 # As specified in the project plan
+
+  # Pip for installing remaining packages
+  - pip
+
+  # Python packages to be installed with pip
+  - pip:
+    - "autogluon.multimodal"
+    - vitaldb
+    - pandas
+    - numpy
+    - scipy
+    - matplotlib
+    - scikit-learn
+    - xgboost
+    - pycatch22
+    - optuna
+    - shap
+    - pytorch-grad-cam
