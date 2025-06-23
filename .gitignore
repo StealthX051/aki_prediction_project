@@ -13,6 +13,9 @@
 # Model Artifacts: Trained models can be very large.
 /models/
 
+# documentation pdfs
+/documentation/
+
 # Python / Conda Environment Files
 # Ignore virtual environment folders
 /env/
