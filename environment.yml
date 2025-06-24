@@ -36,4 +36,7 @@ dependencies:
     - optuna
     - shap
     - nvitop
+    - ipykernel
+    - psutil
+    - ipywidgets
     - grad-cam  # <-- CORRECTED PACKAGE NAME

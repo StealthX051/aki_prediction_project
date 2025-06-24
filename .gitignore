@@ -13,6 +13,9 @@
 # Model Artifacts: Trained models can be very large.
 /models/
 
+# cache
+/cache/
+
 # documentation pdfs
 /documentation/
 
