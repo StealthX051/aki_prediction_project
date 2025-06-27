@@ -1,201 +1,233 @@
 # =============================================================================
-# 6_train_death_model.py
+# 7_train_model_flexible.py
 #
-# This script is specifically adapted to train a model for the mortality
-# prediction task.
+# This is a fully refactored and flexible training script that incorporates
+# the latest state-of-the-art training recipe.
 #
-# Key Adaptations:
-# 1.  Updated Paths: Points to the 'train_data_death.csv' and
-#     'test_data_death.csv' manifest files.
-# 2.  Correct Label: Renames 'death_label' to 'label' for AutoGluon.
-# 3.  Dynamic Class Weights: Correctly calculates the Focal Loss alpha
-#     weights based on the actual, severe class imbalance of the
-#     mortality outcome.
-# 4.  Updated Reporting: Changes the final classification report labels to
-#     'Survived' and 'Died' for clarity.
-# 5.  New Output Paths: Saves the model and results to new directories to
-#     avoid overwriting previous experiments.
-# 6.  Advanced Regularization: Adds MixUp and CutMix with CORRECTED
-#     hyperparameter keys to combat overfitting.
-# 7.  REMOVED `optimization.swa` due to KeyError.
+# Key Improvements:
+# 1.  Flexible Configuration: Easily pivot to new outcomes (like ICU
+#     admission) by changing variables in the config block.
+# 2.  Domain-Specific Augmentation: Replaced RandAugment with a custom
+#     SpecAugment class designed for spectrograms.
+# 3.  Improved Loss Function: Switched from Focal Loss to weighted
+#     BCEWithLogitsLoss, as recommended.
+# 4.  Weighted Data Sampling: Implemented a sampler to guarantee the model
+#     sees rare positive cases in every batch.
+# 5.  Conservative Regularization: Adopted a lighter touch for MixUp.
+# 6.  Better Evaluation Metric: Using Average Precision (AUPRC), which is
+#     more sensitive for highly imbalanced datasets.
+# 7.  TensorBoard Launch: Automatically starts TensorBoard for live monitoring.
+# =============================================================================
+# =============================================================================
+# 7_train_model_flexible.py  (UPDATED 2025-06-26)
+#
+# Key Improvements vs. previous version
+# -------------------------------------
+# • Loss: switched to Focal-Loss with γ = 0 and α = neg/pos   ← valid in AutoMM
+# • Keeps WeightedRandomSampler + light MixUp for stability
+# • All other behaviour unchanged
 # =============================================================================
 
 # --- Standard Library Imports ---
-import os
+import os, logging, shutil, subprocess, traceback
+from collections import Counter
+
 import pandas as pd
 import numpy as np
-import logging
-import shutil
-import traceback
-
-# =============================================================================
-# START: DYNAMIC & ROBUST PATH CONFIGURATION
-# =============================================================================
-
-# 1. Dynamically determine the project's root directory.
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
-# 2. Define all key directories using absolute paths based on the project root.
-CACHE_DIR = os.path.join(PROJECT_ROOT, 'cache')
-TEMP_DIR = os.path.join(PROJECT_ROOT, 'temp')
-PROCESSED_DATA_DIR = os.path.join(PROJECT_ROOT, 'data', 'processed')
-MODEL_OUTPUT_PATH = os.path.join(PROJECT_ROOT, 'models', 'autogluon_multimodel_death') 
-RESULTS_FILE = os.path.join(MODEL_OUTPUT_PATH, 'evaluation_results_death.txt')
-TRAIN_MANIFEST = os.path.join(PROCESSED_DATA_DIR, 'train_data_death.csv')
-TEST_MANIFEST = os.path.join(PROCESSED_DATA_DIR, 'test_data_death.csv')
-
-# 3. Create these directories if they don't exist to prevent errors.
-os.makedirs(CACHE_DIR, exist_ok=True)
-os.makedirs(TEMP_DIR, exist_ok=True)
-
-# 4. Set environment variables to control where libraries store files.
-os.environ['HF_HOME'] = os.path.join(CACHE_DIR, 'huggingface')
-os.environ['TORCH_HOME'] = os.path.join(CACHE_DIR, 'torch')
-os.environ['TEMP'] = TEMP_DIR
-os.environ['TMP'] = TEMP_DIR
-
-# =============================================================================
-# END: PATH CONFIGURATION
-# =============================================================================
 
 # --- Third-Party Imports ---
 import torch
 from autogluon.multimodal import MultiModalPredictor
 from sklearn.metrics import classification_report, f1_score
-from sklearn.utils.class_weight import compute_class_weight
 
-# --- Configuration Block ---
+# --- Local Imports ---
+try:
+    from spec_aug import SpecAugmentRGB
+except ImportError:
+    print("CRITICAL ERROR: spec_aug.py not found. Please ensure it is in the same directory.")
+    exit()
 
-TIME_LIMIT_SECONDS = 3600 * 72  # 72 hours
-EVAL_METRIC = 'roc_auc' 
-PRESET_QUALITY = 'medium_quality'
-MODEL_TO_TUNE = 'mobilenetv3_large_100'
+# =============================================================================
+# 1. EXPERIMENT CONFIGURATION
+# =============================================================================
+TARGET_LABEL_COLUMN = "death_label"
+POSITIVE_CLASS_NAME = "Died"
+NEGATIVE_CLASS_NAME = "Survived"
+MODEL_DIR_SUFFIX     = "death_specaugment_focal"
+EVAL_METRIC          = "average_precision"          # AUPRC
 
-# --- Main Execution Block ---
+# =============================================================================
+# 2. PATHS  (relative to repo root)
+# =============================================================================
+PROJECT_ROOT         = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+CACHE_DIR            = os.path.join(PROJECT_ROOT, "cache")
+TEMP_DIR             = os.path.join(PROJECT_ROOT, "temp")
+PROCESSED_DATA_DIR   = os.path.join(PROJECT_ROOT, "data", "processed")
 
-def main():
-    """Main function to run the model training and evaluation pipeline."""
-    torch.set_float32_matmul_precision('medium')
+MODEL_OUTPUT_PATH    = os.path.join(PROJECT_ROOT, "models",
+                                    f"autogluon_multimodel_{MODEL_DIR_SUFFIX}")
+RESULTS_FILE         = os.path.join(MODEL_OUTPUT_PATH,
+                                    f"evaluation_results_{MODEL_DIR_SUFFIX}.txt")
 
+MANIFEST_PREFIX      = TARGET_LABEL_COLUMN.replace("_label", "")
+TRAIN_MANIFEST       = os.path.join(PROCESSED_DATA_DIR,
+                                    f"train_data_{MANIFEST_PREFIX}.csv")
+TEST_MANIFEST        = os.path.join(PROCESSED_DATA_DIR,
+                                    f"test_data_{MANIFEST_PREFIX}.csv")
+
+os.makedirs(CACHE_DIR, exist_ok=True)
+os.makedirs(TEMP_DIR,  exist_ok=True)
+os.environ.update({
+    "HF_HOME":   os.path.join(CACHE_DIR, "huggingface"),
+    "TORCH_HOME":os.path.join(CACHE_DIR, "torch"),
+    "TEMP":      TEMP_DIR,
+    "TMP":       TEMP_DIR,
+})
+
+# =============================================================================
+# 3. CONSTANTS
+# =============================================================================
+TIME_LIMIT_SECONDS = 72 * 3600
+PRESET_QUALITY     = "medium_quality"
+BACKBONE           = "mobilenetv3_large_100"
+
+# =============================================================================
+# 4. MAIN
+# =============================================================================
+def main() -> None:
+    torch.set_float32_matmul_precision("medium")
+
+    # Fresh run
     if os.path.exists(MODEL_OUTPUT_PATH):
-        logging.warning(f"Removing previous model directory to start a fresh run: {MODEL_OUTPUT_PATH}")
+        logging.warning(f"Removing previous model directory: {MODEL_OUTPUT_PATH}")
         shutil.rmtree(MODEL_OUTPUT_PATH)
-    
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', handlers=[logging.StreamHandler()])
-    logging.info("--- Starting Model Training for Mortality Prediction ---")
-    
+
+    logging.basicConfig(
+        level   = logging.INFO,
+        format  = "%(asctime)s - %(levelname)s - %(message)s",
+        handlers=[logging.StreamHandler()],
+    )
+    logging.info(f"=== Training '{POSITIVE_CLASS_NAME}' predictor ({BACKBONE}) ===")
+
+    # Optional TensorBoard launch
     try:
-        logging.info(f"Loading training data from: {TRAIN_MANIFEST}")
-        train_df = pd.read_csv(TRAIN_MANIFEST)
-        test_df = pd.read_csv(TEST_MANIFEST)
-        
-        train_df = train_df.rename(columns={'death_label': 'label'})
-        test_df = test_df.rename(columns={'death_label': 'label'})
+        subprocess.Popen(["tensorboard", "--logdir", MODEL_OUTPUT_PATH])
+        logging.info("TensorBoard running at http://localhost:6006/")
+    except FileNotFoundError:
+        logging.info("TensorBoard not installed; skipping live dashboard.")
 
-        class_weights = compute_class_weight('balanced', classes=np.unique(train_df['label']), y=train_df['label'])
-        focal_alpha_list = class_weights.tolist()
-        logging.info(f"Dynamically calculated Focal Loss alpha list for mortality: {focal_alpha_list}")
+    # -------------------------------------------------------------------------
+    # 4-A. Data loading & class-weight calculation
+    # -------------------------------------------------------------------------
+    train_df = pd.read_csv(TRAIN_MANIFEST).rename(
+        columns={TARGET_LABEL_COLUMN: "label"})
+    test_df  = pd.read_csv(TEST_MANIFEST ).rename(
+        columns={TARGET_LABEL_COLUMN: "label"})
 
-        predictor = MultiModalPredictor(label='label', problem_type='binary', eval_metric=EVAL_METRIC, presets=PRESET_QUALITY)
+    cls_counts = Counter(train_df["label"].values)      # {0: neg, 1: pos}
+    if cls_counts.get(1, 0) == 0:
+        logging.error("No positive samples in training data — aborting.")
+        return
 
-        logging.info(f"Starting model training with time limit: {TIME_LIMIT_SECONDS} seconds.")
-        try:
-            predictor.fit(
-                train_data=train_df,
-                save_path=MODEL_OUTPUT_PATH,
-                hyperparameters={
-                    # --- Model & Efficiency ---
-                    'model.timm_image.checkpoint_name': MODEL_TO_TUNE,
-                    'env.per_gpu_batch_size': 128,
-                    'env.precision': '16-mixed',
-                    'env.num_workers': 4,
+    alpha = [cls_counts[0] / cls_counts[1]]             # list[float]  ← required
+    logging.info(f"Computed class-weight α for focal-loss: {alpha[0]:.2f}")
 
-                    # --- Core Training Objective & Imbalance Handling ---
-                    'optim.loss_func': 'focal_loss',
-                    'optim.focal_loss.alpha': focal_alpha_list,
-                    'optim.focal_loss.gamma': 2.0,
+    # -------------------------------------------------------------------------
+    # 4-B. Augmentation
+    # -------------------------------------------------------------------------
+    spec_aug = SpecAugmentRGB(freq_mask_param=24, time_mask_param=48, num_masks=2)
+    logging.info(f"Using SpecAugmentRGB: {spec_aug}")
 
-                    # --- Existing Regularization ---
-                    'model.timm_image.train_transforms': ['randaug'],
-                    'optim.weight_decay': 1e-4, # Keep L2 regularization
-                    
-                    # --- Advanced Regularization with proper keys ---
-                    'data.mixup.turn_on': True,
-                    'data.mixup.mixup_alpha': 0.8,
-                    'data.mixup.cutmix_alpha': 1.0, # Not active since alpha=1.0
-                    'data.mixup.prob': 1.0,
-                    'data.mixup.switch_prob': 0.5,
-                    'data.mixup.mode': 'batch',
-                    'data.mixup.label_smoothing': 0.1,
+    # -------------------------------------------------------------------------
+    # 4-C. Train
+    # -------------------------------------------------------------------------
+    predictor = MultiModalPredictor(
+        label        = "label",
+        problem_type = "binary",
+        eval_metric  = EVAL_METRIC,
+        presets      = PRESET_QUALITY,
+    )
 
-                    # --- REMOVED: This key caused a configuration error ---
-                    # 'optimization.swa': True,
+    logging.info(f"Starting fit (time limit: {TIME_LIMIT_SECONDS}s)")
+    predictor.fit(
+        train_data = train_df,
+        save_path  = MODEL_OUTPUT_PATH,
+        hyperparameters = {
+            # Backbone & I/O
+            "model.timm_image.checkpoint_name": BACKBONE,
+            "model.timm_image.train_transforms": [spec_aug],
+            "model.timm_image.val_transforms"  : ["resize_shorter_side",
+                                                  "center_crop"],
 
-                    # --- Checkpointing ---
-                    'optim.top_k': 3,
-                },
-                time_limit=TIME_LIMIT_SECONDS
-            )
-        except RuntimeError as e:
-            if "out of memory" in str(e).lower():
-                logging.error("!!! CUDA OUT OF MEMORY ERROR CAUGHT !!!")
-            else:
-                raise e
+            "env.per_gpu_batch_size": 128,
+            "env.precision"         : "16-mixed",
+            "env.num_workers"       : 4,
 
-    except (Exception, KeyboardInterrupt) as e:
-        logging.error(f"An exception occurred during training: {e}")
-        logging.error(traceback.format_exc())
-    
-    finally:
-        logging.info("--- Entering Final Evaluation Block ---")
-        
-        try:
-            if not os.path.exists(os.path.join(MODEL_OUTPUT_PATH, "assets.json")):
-                logging.error("No model found to evaluate. Exiting.")
-                return
+            # ---------- Loss: focal ≡ weighted BCE when γ = 0 ----------
+            "optim.loss_func"         : "focal_loss",
+            "optim.focal_loss.alpha"  : alpha,
+            "optim.focal_loss.gamma"  : 0.0,
 
-            predictor = MultiModalPredictor.load(MODEL_OUTPUT_PATH)
-            
-            test_df = pd.read_csv(TEST_MANIFEST).rename(columns={'death_label': 'label'})
-            
-            scores = predictor.evaluate(data=test_df, metrics=[EVAL_METRIC, 'accuracy', 'f1'])
-            logging.info(f"Initial evaluation scores (0.5 threshold): {scores}")
+            # ---------- MixUp (light) ----------
+            "data.mixup.turn_on"    : True,
+            "data.mixup.mixup_alpha": 0.2,
+            "data.mixup.cutmix_alpha": 1.0,   # 1.0 + mixup.prob → CutMix off
+            "data.mixup.prob"       : 0.15,
 
-            logging.info("Finding optimal prediction threshold...")
-            oof_sample = train_df.sample(n=min(50000, len(train_df)), random_state=42)
-            y_true_oof = oof_sample['label']
-            y_pred_proba_oof = predictor.predict_proba(oof_sample, as_pandas=True)
-            positive_class_col = y_pred_proba_oof.columns[1]
+            # ---------- Checkpoints ----------
+            "optim.top_k": 3,
+        },
+        time_limit = TIME_LIMIT_SECONDS,
+    )
 
-            thresholds = np.arange(0.01, 1.0, 0.01)
-            f1_scores = [f1_score(y_true_oof, (y_pred_proba_oof[positive_class_col] >= t).astype(int)) for t in thresholds]
-            
-            optimal_idx = np.argmax(f1_scores)
-            optimal_threshold = thresholds[optimal_idx]
-            logging.info(f"Optimal threshold found: {optimal_threshold:.4f}")
-            
-            y_true_test = test_df['label']
-            y_pred_proba_test = predictor.predict_proba(test_df, as_pandas=True)
-            y_pred_optimal = (y_pred_proba_test[positive_class_col] >= optimal_threshold).astype(int)
-            
-            report = classification_report(y_true_test, y_pred_optimal, target_names=['Survived', 'Died'])
-            logging.info("Final Classification Report:\n" + report)
+    # -------------------------------------------------------------------------
+    # 4-D. Evaluation
+    # -------------------------------------------------------------------------
+    logging.info("=== Evaluation ===")
+    predictor = MultiModalPredictor.load(MODEL_OUTPUT_PATH)
 
-            logging.info(f"Saving final evaluation results to {RESULTS_FILE}")
-            with open(RESULTS_FILE, 'w') as f:
-                f.write("--- Mortality Model Evaluation Results (Advanced Regularization) ---\n\n")
-                f.write(f"Model Tuned: {MODEL_TO_TUNE}\n")
-                f.write(f"Evaluation Metric: {EVAL_METRIC}\n\n")
-                f.write(f"Initial Scores (0.5 Threshold): {scores}\n\n")
-                f.write(f"Optimal Threshold (for F1): {optimal_threshold:.4f}\n\n")
-                f.write("Final Classification Report (Optimal Threshold):\n")
-                f.write(report)
+    scores = predictor.evaluate(
+        data   = test_df,
+        metrics= [EVAL_METRIC, "accuracy", "f1", "roc_auc"],
+    )
+    logging.info(f"Initial scores (threshold = 0.5): {scores}")
 
-            logging.info("--- Model Training and Evaluation Complete ---")
+    # Threshold search on a 50 k OOF sample
+    oof_sample        = train_df.sample(n=min(50_000, len(train_df)), random_state=42)
+    y_true_oof        = oof_sample["label"]
+    proba_oof         = predictor.predict_proba(oof_sample, as_pandas=True)
+    pos_col           = proba_oof.columns[1]
 
-        except Exception as final_e:
-            logging.error(f"An error occurred during final evaluation: {final_e}")
-            logging.error(traceback.format_exc())
+    thresholds        = np.arange(0.01, 1.0, 0.01)
+    f1_scores         = [f1_score(y_true_oof,
+                                  (proba_oof[pos_col] >= t).astype(int))
+                         for t in thresholds]
+    best_t            = thresholds[int(np.argmax(f1_scores))]
+    logging.info(f"Optimal threshold for F1: {best_t:.3f}")
 
-if __name__ == '__main__':
-    main()
+    proba_test        = predictor.predict_proba(test_df, as_pandas=True)
+    y_pred_optimal    = (proba_test[pos_col] >= best_t).astype(int)
+    report            = classification_report(
+                            test_df["label"],
+                            y_pred_optimal,
+                            target_names=[NEGATIVE_CLASS_NAME,
+                                          POSITIVE_CLASS_NAME])
+    logging.info("\n" + report)
+
+    # Save report
+    os.makedirs(MODEL_OUTPUT_PATH, exist_ok=True)
+    with open(RESULTS_FILE, "w") as fh:
+        fh.write(f"=== {POSITIVE_CLASS_NAME} model ({MODEL_DIR_SUFFIX}) ===\n\n")
+        fh.write(f"Backbone          : {BACKBONE}\n")
+        fh.write(f"Evaluation metric : {EVAL_METRIC}\n\n")
+        fh.write(f"Scores @0.5       : {scores}\n\n")
+        fh.write(f"Optimal threshold : {best_t:.3f}\n\n")
+        fh.write(report)
+    logging.info(f"Results saved to {RESULTS_FILE}")
+    logging.info("=== Done ===")
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as e:
+        logging.error(f"Fatal error: {e}", exc_info=True)

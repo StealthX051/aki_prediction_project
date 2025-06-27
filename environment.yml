@@ -37,6 +37,7 @@ dependencies:
     - shap
     - nvitop
     - ipykernel
+    - tensorboard
     - psutil
     - ipywidgets
     - grad-cam  # <-- CORRECTED PACKAGE NAME
