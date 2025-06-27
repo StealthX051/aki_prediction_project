@@ -119,19 +119,18 @@ def main() -> None:
     # -------------------------------------------------------------------------
     # 4-A. Data loading & class-weight calculation
     # -------------------------------------------------------------------------
-    train_df = pd.read_csv(TRAIN_MANIFEST).rename(
-        columns={TARGET_LABEL_COLUMN: "label"})
-    test_df  = pd.read_csv(TEST_MANIFEST ).rename(
-        columns={TARGET_LABEL_COLUMN: "label"})
+    train_df = pd.read_csv(TRAIN_MANIFEST).rename(columns={TARGET_LABEL_COLUMN: "label"})
+    test_df  = pd.read_csv(TEST_MANIFEST ).rename(columns={TARGET_LABEL_COLUMN: "label"})
 
-    cls_counts = Counter(train_df["label"].values)      # {0: neg, 1: pos}
-    if cls_counts.get(1, 0) == 0:
+    cls_counts = Counter(train_df["label"].values)         # {0:neg, 1:pos}
+    if cls_counts[1] == 0:
         logging.error("No positive samples in training data — aborting.")
         return
 
-    alpha = [cls_counts[0] / cls_counts[1]]             # list[float]  ← required
-    logging.info(f"Computed class-weight α for focal-loss: {alpha[0]:.2f}")
-
+    # >>> TWO weights, one per class  [w_neg, w_pos]
+    w_pos  = cls_counts[0] / cls_counts[1]                 # ≈ 145.3
+    alpha  = [1.0, float(w_pos)]                           # len == n_classes
+    logging.info(f"Focal-loss α set to [neg, pos] = {alpha}")
     # -------------------------------------------------------------------------
     # 4-B. Augmentation
     # -------------------------------------------------------------------------

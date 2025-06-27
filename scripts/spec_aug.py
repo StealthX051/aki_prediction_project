@@ -1,62 +1,37 @@
-# =============================================================================
-# spec_aug.py
-#
-# This file defines a custom SpecAugment transform that works on 3-channel
-# RGB images, which is necessary because the default PyTorch transform
-# expects a single-channel (grayscale) input.
-#
-# This implementation is based on the principles outlined in the Google Brain
-# paper on SpecAugment.
-# =============================================================================
-
-import torch
-import random
+# spec_aug.py  • drop-in replacement
+import random, torch
+from torchvision.transforms import functional as F
+from PIL import Image
 
 class SpecAugmentRGB(torch.nn.Module):
-    """
-    Custom SpecAugment for 3-channel (RGB) spectrogram images.
-
-    Args:
-        freq_mask_param (int): Maximum possible width of the frequency mask.
-        time_mask_param (int): Maximum possible width of the time mask.
-        num_masks (int): The number of masks to apply for both time and frequency.
-    """
     def __init__(self, freq_mask_param=24, time_mask_param=48, num_masks=2):
         super().__init__()
-        self.freq_mask_param = freq_mask_param
-        self.time_mask_param = time_mask_param
-        self.num_masks = num_masks
+        self.F, self.T, self.N = freq_mask_param, time_mask_param, num_masks
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Apply the SpecAugment transformations.
+    def _mask(self, x, dim, width):
+        if width < 1: return x
+        start = random.randint(0, x.size(dim) - width)
+        sl = [slice(None)] * x.ndim
+        sl[dim] = slice(start, start + width)
+        x[tuple(sl)] = 0.0
+        return x
 
-        Args:
-            x (torch.Tensor): Input tensor of shape (C, H, W)
-                              where C=3 for RGB.
+    def forward(self, img):
+        # ── 1 ensure tensor in 0-1 ──────────────────────────────────────────────
+        if isinstance(img, Image.Image):
+            x = F.pil_to_tensor(img).float() / 255.0          # [C,H,W]
+        elif isinstance(img, torch.Tensor):
+            x = img.float().clone()
+        else:
+            raise TypeError(f"Unsupported type {type(img)}")
 
-        Returns:
-            torch.Tensor: Augmented tensor.
-        """
-        # Clone the tensor to avoid modifying the original in-place
-        augmented_spec = x.clone()
-        _, height, width = augmented_spec.shape
+        # ── 2 apply N masks along freq (H) and time (W) ─────────────────────────
+        for _ in range(self.N):
+            x = self._mask(x, 1, random.randint(0, self.F))   # freq
+            x = self._mask(x, 2, random.randint(0, self.T))   # time
 
-        # Apply frequency masking
-        for _ in range(self.num_masks):
-            f = random.randint(0, self.freq_mask_param)
-            f0 = random.randint(0, height - f)
-            # Apply the same mask across all 3 channels
-            augmented_spec[:, f0:f0+f, :] = 0
-
-        # Apply time masking
-        for _ in range(self.num_masks):
-            t = random.randint(0, self.time_mask_param)
-            t0 = random.randint(0, width - t)
-            # Apply the same mask across all 3 channels
-            augmented_spec[:, :, t0:t0+t] = 0
-
-        return augmented_spec
+        # ── 3 return PIL so the rest of the pipeline is unchanged ──────────────
+        return F.to_pil_image(torch.clamp(x, 0, 1))
 
     def __repr__(self):
-        return self.__class__.__name__ + f'(F={self.freq_mask_param}, T={self.time_mask_param}, N={self.num_masks})'
+        return f"{self.__class__.__name__}(F={self.F}, T={self.T}, N={self.N})"
