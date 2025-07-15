@@ -36,6 +36,7 @@ dependencies:
     - optuna
     - shap
     - nvitop
+    - numba
     - ipykernel
     - tensorboard
     - psutil
