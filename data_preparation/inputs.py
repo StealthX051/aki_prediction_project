@@ -3,7 +3,9 @@ INPUT_FILE = './data/raw/clinical_data.csv'
 # {outcome}_{waveform1}_...{waveformN}_{dept1}---{dept_N}.csv
 COHORT_FILE = './data/processed/aki_pleth_ecg_co2_awp.csv'
 # {outcome}_{waveform1}_...{waveformN}_{dept1}---{dept_N}_{window_length}.csv
-CATCH_22_FILE = './data/processed/catch22_features_inf.csv'
+CATCH_22_FILE = './data/processed/aki_pleth_ecg_co2_awp_inf.csv'
+# {outcome}_{waveform1}_...{waveformN}_{dept1}---{dept_N}_{window_length}_errors.csv
+CATCH_22_ERROR_FILE = './data/processed/aki_pleth_ecg_co2_awp_inf_errors.csv'
 # List of departments you want to include (lowercase), or None to include all
 # list should look like: ['general surgery', 'thoracic surgery']
 DEPARTMENTS = None 
