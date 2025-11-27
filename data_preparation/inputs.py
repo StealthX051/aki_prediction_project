@@ -23,9 +23,24 @@ from data_preparation.custom_filters.postop_cr import filter_postop_cr
 from data_preparation.custom_filters.aki_label import add_aki_label
 CUSTOM_FILTERS = [filter_preop_cr, ensure_sample_independence, filter_postop_cr, add_aki_label]
 # window length and slide length for catch-22 feature extraction (in seconds). None is entire waveform
-WIN_SEC = None
-SLIDE_SEC = None
+WIN_SEC = 10
+SLIDE_SEC = 5
+# Configuration for feature extraction modes
+# You can enable both to generate both full-segment and windowed features in one run.
+GENERATE_FULL_FEATURES = True
+GENERATE_WINDOWED_FEATURES = True
 # target sampling frequency for resampling (in Hz)
 TARGET_SR = 10
 # name of column for outcome variable
 OUTCOME = 'aki_label'
+
+# === NEW: AEON export controls ===
+EXPORT_AEON = False
+AEON_OUT_DIR = "outputs/aeon"
+AEON_SAVE_FORMATS = ["nested_pkl", "numpy3d_npz", "np_list_pkl"]
+AEON_PAD_POLICY = "aeon_padding_transformer" # 'aeon_padding_transformer','in_memory_pad','none'
+AEON_PAD_LENGTH = None
+AEON_PAD_FILL = 0
+AEON_STRICT_CHANNELS = True
+AEON_COMMON_SR = 100.0
+AEON_WINDOW_POLICY = "intersection"

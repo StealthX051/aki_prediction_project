@@ -25,6 +25,8 @@ dependencies:
   # Python packages to be installed with pip
   - pip:
     - "autogluon.multimodal"
+    - setuptools wheel
+    - autogluon
     - vitaldb==1.0.0
     - pandas
     - numpy
@@ -41,4 +43,6 @@ dependencies:
     - tensorboard
     - psutil
     - ipywidgets
+    - tmux
+    - rich
     - grad-cam  # <-- CORRECTED PACKAGE NAME
