@@ -1,0 +1,52 @@
+# This file defines the Conda environment for the AKI prediction project (Linux/Jetstream 2).
+# To create the environment, run: conda env create -f environment_linux.yml
+# To activate the environment, run: conda activate aki_prediction_project
+
+name: aki_prediction_project
+
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+  - defaults
+
+dependencies:
+  # Core Python version
+  - python=3.9
+
+  # Core deep learning libraries from specified channels
+  - pytorch
+  - torchvision
+  - torchaudio
+  - pytorch-cuda=11.8 
+
+  # System dependencies often needed on Linux
+  - gcc_linux-64
+  - gxx_linux-64
+  - sysroot_linux-64
+
+  # Pip for installing remaining packages
+  - pip
+  - pip:
+    - "autogluon.multimodal"
+    - setuptools wheel
+    - autogluon
+    - vitaldb==1.0.0
+    - pandas
+    - numpy
+    - scipy
+    - matplotlib
+    - scikit-learn
+    - xgboost
+    - pycatch22
+    - optuna
+    - shap
+    - nvitop
+    - numba
+    - ipykernel
+    - tensorboard
+    - psutil
+    - ipywidgets
+    - tmux
+    - rich
+    - grad-cam

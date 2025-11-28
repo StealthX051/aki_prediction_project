@@ -329,7 +329,15 @@ def main():
 
     logging.info(f"{len(cohort_to_process)} pairs to process.")
 
-    num_processes = max(1, cpu_count() - 2)
+    # Determine number of processes
+    try:
+        # On Linux, this respects cgroups/quotas (important for VMs/Containers)
+        num_processes = max(1, len(os.sched_getaffinity(0)) - 2)
+    except AttributeError:
+        # Fallback for Windows/MacOS
+        num_processes = max(1, cpu_count() - 2)
+    
+    logging.info(f"Using {num_processes} worker processes.")
     
     # Aeon buffers
     aeon_buffers = {

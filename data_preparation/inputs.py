@@ -1,11 +1,21 @@
+from pathlib import Path
+
+# --- Project Paths ---
+# Resolve project root relative to this file (data_preparation/inputs.py)
+# This file is in <root>/data_preparation, so we go up two levels.
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+DATA_DIR = PROJECT_ROOT / 'data'
+RAW_DIR = DATA_DIR / 'raw'
+PROCESSED_DIR = DATA_DIR / 'processed'
+
 # --- User Parameters ---
-INPUT_FILE = './data/raw/clinical_data.csv'
+INPUT_FILE = RAW_DIR / 'clinical_data.csv'
 # {outcome}_{waveform1}_...{waveformN}_{dept1}---{dept_N}.csv
-COHORT_FILE = './data/processed/aki_pleth_ecg_co2_awp.csv'
+COHORT_FILE = PROCESSED_DIR / 'aki_pleth_ecg_co2_awp.csv'
 # {outcome}_{waveform1}_...{waveformN}_{dept1}---{dept_N}_{window_length}.csv
-CATCH_22_FILE = './data/processed/aki_pleth_ecg_co2_awp_inf.csv'
+CATCH_22_FILE = PROCESSED_DIR / 'aki_pleth_ecg_co2_awp_inf.csv'
 # {outcome}_{waveform1}_...{waveformN}_{dept1}---{dept_N}_{window_length}_errors.csv
-CATCH_22_ERROR_FILE = './data/processed/aki_pleth_ecg_co2_awp_inf_errors.csv'
+CATCH_22_ERROR_FILE = PROCESSED_DIR / 'aki_pleth_ecg_co2_awp_inf_errors.csv'
 # List of departments you want to include (lowercase), or None to include all
 # list should look like: ['general surgery', 'thoracic surgery']
 DEPARTMENTS = None 
@@ -44,3 +54,7 @@ AEON_PAD_FILL = 0
 AEON_STRICT_CHANNELS = True
 AEON_COMMON_SR = 100.0
 AEON_WINDOW_POLICY = "intersection"
+
+# --- Step 03 Output Paths ---
+WIDE_FEATURES_FILE = PROCESSED_DIR / 'aki_features_master_wide.csv'
+RESULTS_DIR = PROJECT_ROOT / 'results'
