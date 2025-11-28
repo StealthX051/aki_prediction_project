@@ -44,6 +44,5 @@ dependencies:
     - tensorboard
     - psutil
     - ipywidgets
-    - tmux
     - rich
     - grad-cam  # <-- CORRECTED PACKAGE NAME
