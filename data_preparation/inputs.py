@@ -38,9 +38,12 @@ SLIDE_SEC = 5
 # Configuration for feature extraction modes
 # You can enable both to generate both full-segment and windowed features in one run.
 GENERATE_FULL_FEATURES = True
-GENERATE_WINDOWED_FEATURES = True
+GENERATE_WINDOWED_FEATURES = False
 # target sampling frequency for resampling (in Hz)
 TARGET_SR = 10
+# Sampling rate for full-case feature extraction (Non-Windowed)
+# Reduced to 10 Hz to manage computational complexity of catch22 on long sequences.
+FULL_FEATURE_TARGET_SR = 10
 # name of column for outcome variable
 OUTCOME = 'aki_label'
 

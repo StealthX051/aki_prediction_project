@@ -22,7 +22,9 @@ from data_preparation.inputs import (
     EXPORT_AEON,
     AEON_COMMON_SR,
     GENERATE_FULL_FEATURES,
-    GENERATE_WINDOWED_FEATURES
+    GENERATE_FULL_FEATURES,
+    GENERATE_WINDOWED_FEATURES,
+    FULL_FEATURE_TARGET_SR
 )
 from data_preparation.waveform_processing import WAVEFORM_SPECS, process_signal, harmonize_sr
 from data_preparation.aeon_io import AeonSeriesPayload, collate_and_save_aeon
@@ -128,7 +130,10 @@ def _process_case(case: Tuple[int, float, float, int, str]) -> Tuple[Dict[str, A
                 # Log error but don't fail the whole case if windowed might work (unlikely but possible)
                 results['full'] = {'caseid': caseid, 'waveform': waveform_key, 'error': 'invalid_signal_flatline_or_all_nan'}
             else:
-                all_feature_results = pycatch22.catch22_all(seg, catch24=True)
+                # Downsample to 10 Hz for efficient full-series extraction
+                # This matches the "Old Code" effective resolution for this step
+                seg_full = harmonize_sr(seg, target_sr, FULL_FEATURE_TARGET_SR)
+                all_feature_results = pycatch22.catch22_all(seg_full, catch24=True)
                 out = {n: v for n, v in zip(all_feature_results['names'], all_feature_results['values'])}
                 out['caseid'] = caseid
                 out['waveform'] = waveform_key 
