@@ -59,5 +59,15 @@ AEON_COMMON_SR = 100.0
 AEON_WINDOW_POLICY = "intersection"
 
 # --- Step 03 Output Paths ---
+PREOP_PROCESSED_FILE = PROCESSED_DIR / 'aki_preop_processed.csv'
+CATCH_22_WINDOWED_FILE = PROCESSED_DIR / 'aki_pleth_ecg_co2_awp_inf_windowed.csv'
+
+# --- Step 04 Output Paths ---
+INTRAOP_WIDE_FILE = PROCESSED_DIR / 'aki_intraop_wide.csv'
+INTRAOP_WIDE_WINDOWED_FILE = PROCESSED_DIR / 'aki_intraop_wide_windowed.csv'
+
+# --- Step 05 Output Paths ---
 WIDE_FEATURES_FILE = PROCESSED_DIR / 'aki_features_master_wide.csv'
+WIDE_FEATURES_WINDOWED_FILE = PROCESSED_DIR / 'aki_features_master_wide_windowed.csv'
+
 RESULTS_DIR = PROJECT_ROOT / 'results'
