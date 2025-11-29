@@ -1,5 +1,7 @@
 # This file tells Git which files and directories to ignore.
-# It's crucial for keeping the repository clean and small.
+
+# AG models
+/notebooks/ag_models_extreme_run
 
 # Data Files: Never commit raw or processed data to the repository.
 /data/raw/
