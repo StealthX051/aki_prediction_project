@@ -23,6 +23,10 @@ RANDOM_STATE = 42
 PREOP_FEATURES_TO_SELECT = [
     'caseid',
     OUTCOME,
+    'y_severe_aki',
+    'y_inhosp_mortality',
+    'y_icu_admit',
+    'y_prolonged_los_postop',
 
     # Demographics & body size
     'age',
