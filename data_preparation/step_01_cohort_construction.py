@@ -85,6 +85,65 @@ for filter_func in CUSTOM_FILTERS:
 print(f"\nYour final cohort after all custom filters has {len(cohort_df)} cases.")
 print(cohort_df.head())
 
+
+# --- Derive Additional Outcomes ---
+print("\n--- Deriving Additional Outcomes ---")
+
+# Ensure source columns exist
+# Map icu_days -> los_icu if needed
+if 'icu_days' in cohort_df.columns and 'los_icu' not in cohort_df.columns:
+    print("Mapping 'icu_days' to 'los_icu'...")
+    cohort_df['los_icu'] = cohort_df['icu_days']
+
+# Calculate los_postop if needed
+if 'los_postop' not in cohort_df.columns:
+    print("Calculating 'los_postop' from 'dis' and 'opend'...")
+    # dis: Discharge time from casestart (sec)
+    # opend: Operation end time from casestart (sec)
+    # los_postop = (dis - opend) / (24 * 3600)
+    cohort_df['los_postop'] = (cohort_df['dis'] - cohort_df['opend']) / 86400.0
+
+# 1. In-hospital mortality
+# Source: death_inhosp (0/1/NaN)
+cohort_df["y_inhosp_mortality"] = cohort_df["death_inhosp"].astype("Int64")
+print(f"In-hospital mortality (y_inhosp_mortality) counts:\n{cohort_df['y_inhosp_mortality'].value_counts(dropna=False)}")
+
+# 2. ICU admission
+# Source: los_icu (days). 1 if > 0, 0 if == 0, NaN if missing.
+cohort_df["icu_los_days"] = cohort_df["los_icu"] # Keep raw continuous value
+icu_admit = np.where(
+    cohort_df["los_icu"].notna(),
+    (cohort_df["los_icu"] > 0).astype("int8"),
+    np.nan
+)
+cohort_df["y_icu_admit"] = pd.Series(icu_admit, index=cohort_df.index).astype("Int64")
+print(f"ICU admission (y_icu_admit) counts:\n{cohort_df['y_icu_admit'].value_counts(dropna=False)}")
+
+# 3. Prolonged postoperative hospital LOS (>= 75th percentile)
+# Source: los_postop (days).
+cohort_df["los_postop_days"] = cohort_df["los_postop"] # Keep raw continuous value
+
+# Compute 75th percentile on non-missing LOS
+los_q75 = cohort_df["los_postop"].dropna().quantile(0.75)
+LOS_PROLONGED_THRESHOLD = los_q75
+print(f"Prolonged LOS Threshold (75th percentile): {LOS_PROLONGED_THRESHOLD:.2f} days")
+
+# Binary prolonged LOS label
+prolonged_los = np.where(
+    cohort_df["los_postop"].notna(),
+    (cohort_df["los_postop"] >= LOS_PROLONGED_THRESHOLD).astype("int8"),
+    np.nan
+)
+cohort_df["y_prolonged_los_postop"] = pd.Series(
+    prolonged_los, index=cohort_df.index
+).astype("Int64")
+print(f"Prolonged LOS (y_prolonged_los_postop) counts:\n{cohort_df['y_prolonged_los_postop'].value_counts(dropna=False)}")
+
+# 4. Severe AKI (Stage 2/3)
+# Source: y_severe_aki (derived in add_aki_label)
+if 'y_severe_aki' in cohort_df.columns:
+    print(f"Severe AKI (y_severe_aki) counts:\n{cohort_df['y_severe_aki'].value_counts(dropna=False)}")
+
 # --- Save the final cohort to a CSV file ---
 cohort_df.to_csv(COHORT_FILE, index=False)
 print(f"\nFinal cohort saved to {COHORT_FILE}")

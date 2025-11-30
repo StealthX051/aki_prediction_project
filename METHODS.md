@@ -16,23 +16,72 @@ Patients were included in the study if they met the following criteria:
     *   Exclusion of patients with pre-existing end-stage renal disease (baseline creatinine > 4.0 mg/dL).
     *   Exclusion of cases with insufficient waveform duration or quality (>5% missing data in the signal segment).
 
-**Outcome Definition**: Postoperative Acute Kidney Injury (AKI) was defined according to the **KDIGO** (Kidney Disease: Improving Global Outcomes) criteria. The outcome was binary, comparing patients who developed AKI against those who did not.
-*   **AKI Positive**: Any increase in serum creatinine $\ge 0.3$ mg/dL within 48 hours of surgery OR $\ge 1.5$ times baseline within 7 days of surgery.
-*   **AKI Negative**: Patients not meeting the above criteria.
+
+**Outcome Definition**:
+*   **Primary Outcome**: Postoperative Acute Kidney Injury (AKI) was defined according to the **KDIGO** (Kidney Disease: Improving Global Outcomes) criteria. The outcome was binary, comparing patients who developed AKI against those who did not.
+    *   **AKI Positive**: Any increase in serum creatinine $\ge 0.3$ mg/dL within 48 hours of surgery OR $\ge 1.5$ times baseline within 7 days of surgery.
+    *   **AKI Negative**: Patients not meeting the above criteria.
+*   **Secondary Outcomes**:
+    *   **Severe AKI**: Defined as KDIGO Stage 2 or 3 AKI (`y_severe_aki`).
+        *   **Stage 2**: Serum creatinine $\ge 2.0$ times baseline.
+        *   **Stage 3**: Serum creatinine $\ge 3.0$ times baseline OR $\ge 4.0$ mg/dL.
+    *   **In-hospital Mortality**: Defined as death occurring before discharge from the index hospitalization (`y_inhosp_mortality`).
+    *   **ICU Admission**: Defined as any postoperative ICU stay > 0 days (`y_icu_admit`).
+    *   **Prolonged Postoperative Length of Stay (LOS)**: Defined as postoperative hospital stay $\ge$ 75th percentile of the cohort (`y_prolonged_los_postop`).
 
 ## Data Preprocessing
 
 ### Clinical Data
-A comprehensive set of preoperative variables was extracted:
-*   **Demographics**: Age, Sex, Body Mass Index (BMI).
-*   **Surgical Details**: Emergency Operation status (`emop`), Department, Surgical Approach.
-*   **Comorbidities**: Hypertension (`preop_htn`), Diabetes Mellitus (`preop_dm`), ECG abnormalities (`preop_ecg`), Pulmonary Function Test results (`preop_pft`).
-*   **Laboratory Values**: Hemoglobin (`preop_hb`), Platelets (`preop_plt`), Prothrombin Time (`preop_pt`), aPTT (`preop_aptt`), Sodium (`preop_na`), Potassium (`preop_k`), Glucose (`preop_gluc`), Albumin (`preop_alb`), AST (`preop_ast`), ALT (`preop_alt`), BUN (`preop_bun`), Creatinine (`preop_cr`), Bicarbonate (`preop_hco3`).
+A comprehensive set of preoperative variables was extracted from the VitalDB clinical and laboratory tables.
 
-**Preprocessing Steps**:
-*   **Outlier Handling**: To prevent data leakage, outlier thresholds (0.5th and 99.5th percentiles) were calculated strictly on the **training set**. Values outside this range in both training and test sets were clipped to these thresholds or replaced with random values within the plausible range.
-*   **Imputation**: Missing clinical values were imputed with a constant value (-99) to allow tree-based models to handle missingness explicitly.
-*   **Encoding**: Categorical variables were one-hot encoded. Rare categories (<30 occurrences) were merged into an 'other' category based on training set statistics.
+#### 1. Variable Definitions
+*   **Demographics**: Age (years), Sex (Male/Female), Height (cm), Weight (kg), Body Mass Index (BMI, kg/m²).
+*   **Surgical Context**:
+    *   **Emergency Operation (`emop`)**: Binary flag.
+    *   **Department**: Surgical department (e.g., General Surgery, Thoracic). Rare departments (<30 cases) were merged into 'other'.
+    *   **Approach**: Surgical approach (e.g., Open, Laparoscopic).
+    *   **ASA Class**: American Society of Anesthesiologists physical status classification.
+    *   **Operation Type (`optype`)**: Specific type of surgery.
+    *   **Anesthesia Type (`ane_type`)**: Type of anesthesia used.
+    *   **Position**: Patient position during surgery.
+*   **Comorbidities**:
+    *   **Hypertension (`preop_htn`)**: Binary.
+    *   **Diabetes Mellitus (`preop_dm`)**: Binary.
+    *   **ECG Abnormalities (`preop_ecg`)**: Categorical (Normal vs. various abnormalities).
+    *   **Pulmonary Function Test (`preop_pft`)**: Categorical results.
+*   **Laboratory Values**:
+    *   **Source**: Most recent value within 30 days prior to surgery.
+    *   **Hematology**: Hemoglobin (`preop_hb`), Platelets (`preop_plt`), White Blood Cells (`preop_wbc`).
+    *   **Coagulation**: Prothrombin Time (`preop_pt`, INR), aPTT (`preop_aptt`).
+    *   **Electrolytes/Metabolic**: Sodium (`preop_na`), Potassium (`preop_k`), Glucose (`preop_gluc`), Albumin (`preop_alb`), Bicarbonate (`preop_hco3`).
+    *   **Liver/Kidney**: AST (`preop_ast`), ALT (`preop_alt`), BUN (`preop_bun`), Creatinine (`preop_cr`).
+    *   **Inflammatory/Other**: C-Reactive Protein (`preop_crp`), Lactate (`preop_lac`).
+*   **Arterial Blood Gas (ABG)**: pH (`preop_ph`), Base Excess (`preop_be`), PaO2 (`preop_pao2`), PaCO2 (`preop_paco2`), SaO2 (`preop_sao2`).
+
+#### 2. Derived Features
+We computed several derived features to capture clinical status more effectively:
+*   **Preoperative Length of Stay (`preop_los_days`)**: Calculated as `(Surgery Start Time - Admission Time) / 24 hours`.
+*   **Inpatient Status (`inpatient_preop`)**: Binary flag indicating if the patient was admitted prior to the day of surgery (`preop_los_days > 0`).
+*   **Estimated GFR (`preop_egfr_ckdepi`)**: Calculated using the **CKD-EPI 2009** creatinine equation (race-free version):
+    $$ eGFR = 141 \times \min(S_{cr}/\kappa, 1)^\alpha \times \max(S_{cr}/\kappa, 1)^{-1.209} \times 0.993^{Age} \times 1.018 [if Female] $$
+    Where $S_{cr}$ is serum creatinine, $\kappa$ is 0.7 (F) or 0.9 (M), and $\alpha$ is -0.329 (F) or -0.411 (M).
+*   **Clinical Flags** (Binary indicators of abnormal physiology):
+    *   **High BUN**: `preop_bun > 27` mg/dL.
+    *   **Hypoalbuminemia**: `preop_alb < 3.5` g/dL.
+    *   **Anemia**: `preop_hb < 13.0` (Male) or `< 12.0` (Female) g/dL.
+    *   **Hyponatremia**: `preop_na < 135` mmol/L.
+    *   **Metabolic Acidosis**: `preop_hco3 < 22` mmol/L OR `preop_be < -2` mEq/L.
+    *   **Hypercapnia**: `preop_paco2 > 45` mmHg.
+    *   **Hypoxemia**: `preop_pao2 < 80` mmHg OR `preop_sao2 < 95` %.
+
+#### 3. Data Preprocessing
+*   **Train/Test Split**: An 80/20 stratified split was performed based on the primary outcome (`aki_label`) *before* any further processing to ensure strict separation.
+*   **Outlier Handling**: Continuous variables were checked for outliers. Percentiles (0.5% and 99.5%) were calculated **using only the training set**. Values outside this range in both training and test sets were replaced with random values drawn from the [0.5%, 5%] range (for low outliers) or [95%, 99.5%] range (for high outliers) to preserve distribution shape while capping extremes.
+*   **Imputation**: Missing values in continuous and categorical features were imputed with a constant value (**-99**) to allow tree-based models (XGBoost) to learn missingness patterns explicitly.
+*   **Encoding**:
+    *   Categorical variables (e.g., `department`, `approach`) were **One-Hot Encoded**.
+    *   Binary variables (e.g., `sex`, `emop`, clinical flags) were encoded as 0/1.
+    *   Rare categories in `department` (<30 occurrences in training set) were merged into an 'other' category.
 
 ### Waveform Signal Processing
 Raw waveforms were processed to remove artifacts and standardize sampling rates using the following specifications:

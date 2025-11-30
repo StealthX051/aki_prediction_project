@@ -10,6 +10,7 @@ PROCESSED_DIR = DATA_DIR / 'processed'
 
 # --- User Parameters ---
 INPUT_FILE = RAW_DIR / 'clinical_data.csv'
+LAB_DATA_FILE = RAW_DIR / 'lab_data.csv'
 # {outcome}_{waveform1}_...{waveformN}_{dept1}---{dept_N}.csv
 COHORT_FILE = PROCESSED_DIR / 'aki_pleth_ecg_co2_awp.csv'
 # {outcome}_{waveform1}_...{waveformN}_{dept1}---{dept_N}_{window_length}.csv

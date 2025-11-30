@@ -6,7 +6,7 @@ This project implements a machine learning pipeline to predict Postoperative Acu
 The pipeline consists of three main stages:
 1.  **Cohort Selection**: Filtering patients based on clinical criteria and waveform availability.
 2.  **Feature Extraction**: Extracting time-series features (Catch22) from high-frequency waveforms.
-3.  **Modeling**: Training XGBoost classifiers to predict AKI.
+3.  **Modeling**: Training XGBoost classifiers to predict AKI (Primary) and secondary outcomes (Mortality, ICU Admission, Prolonged LOS).
 
 ## 🛠️ Prerequisites & Setup
 
@@ -41,7 +41,12 @@ Central configuration file. Defines input/output paths, mandatory waveforms/colu
 **File**: `data_preparation/step_01_cohort_construction.py`
 Filters the raw dataset to create a valid cohort.
 *   **Logic**: Selects patients who have all `MANDATORY_WAVEFORMS` and `MANDATORY_COLUMNS`.
-*   **Output**: A cohort CSV containing valid `caseid`s.
+*   **Output**: A cohort CSV containing valid `caseid`s and the following derived outcomes:
+    *   `aki_label`: Primary outcome (KDIGO AKI).
+    *   `y_inhosp_mortality`: In-hospital mortality.
+    *   `y_icu_admit`: ICU admission (>0 days).
+    *   `y_prolonged_los_postop`: Prolonged postoperative LOS (>= 75th percentile).
+    *   `y_severe_aki`: Severe AKI (KDIGO Stage 2 or 3).
 ```bash
 python -m data_preparation.step_01_cohort_construction
 ```
@@ -61,10 +66,32 @@ python -m data_preparation.step_02_catch_22
 ### Step 4: Preoperative Data Prep & Split
 **File**: `data_preparation/step_03_preop_prep.py`
 Processes clinical data and defines the **stratified train/test split**.
-*   **Technical Details**:
-    *   **Splitting**: Performs an 80/20 stratified split based on the outcome. This `split_group` is saved and used downstream to prevent leakage.
-    *   **Outlier Handling**: Calculates percentiles (0.5%, 99.5%) **only on the training set** and applies them to clip/impute outliers in both train and test sets.
-    *   **Imputation**: Fills missing values with -99.
+
+#### 1. Variable Selection & Derivation
+We extract a comprehensive set of preoperative variables from `clinical_data.csv` and `lab_data.csv`:
+
+*   **Demographics**: Age, Sex, Height, Weight, BMI.
+*   **Surgical Context**: Emergency Operation (`emop`), Department, Approach, ASA Class, Operation Type (`optype`), Anesthesia Type (`ane_type`), Position.
+*   **Comorbidities**: Hypertension (`preop_htn`), Diabetes (`preop_dm`), ECG abnormalities (`preop_ecg`), Pulmonary Function Test (`preop_pft`).
+*   **Labs (Clinical Table)**: Hb, Platelets, PT (INR), aPTT, Na, K, Glucose, Albumin, AST, ALT, BUN, Creatinine, Bicarbonate.
+*   **ABG (Clinical Table)**: pH, Base Excess (`preop_be`), PaO2, PaCO2, SaO2.
+*   **Labs (Lab Table)**: Last preoperative value (within 30 days) for:
+    *   `preop_wbc`: White Blood Cell count.
+    *   `preop_gfr`: eGFR (from lab system).
+    *   `preop_crp`: C-Reactive Protein.
+    *   `preop_lac`: Lactate.
+*   **Derived Features**:
+    *   `preop_los_days`: Preoperative Length of Stay (days).
+    *   `inpatient_preop`: Binary flag for inpatient admission prior to surgery.
+    *   `preop_egfr_ckdepi`: eGFR calculated using CKD-EPI 2009 equation (race-free).
+    *   **Clinical Flags** (Binary): `bun_high` (>27), `hypoalbuminemia` (<3.5), `preop_anemia` (Sex-specific Hb thresholds), `hyponatremia` (<135), `metabolic_acidosis` (HCO3 < 22 or BE < -2), `hypercapnia` (PaCO2 > 45), `hypoxemia` (PaO2 < 80 or SaO2 < 95).
+
+#### 2. Processing Steps
+*   **Splitting**: Performs an 80/20 stratified split based on the outcome. This `split_group` is saved and used downstream to prevent leakage.
+*   **Outlier Handling**: Calculates percentiles (0.5%, 99.5%) **only on the training set** and applies them to clip/impute outliers in both train and test sets.
+*   **Imputation**: Fills missing values with -99.
+*   **Encoding**: Categorical variables are one-hot encoded. Rare categories (<30 occurrences) in `department` are merged into 'other'.
+
 ```bash
 python data_preparation/step_03_preop_prep.py
 ```
