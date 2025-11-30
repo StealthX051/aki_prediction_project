@@ -118,22 +118,37 @@ Combines preop and intraop data into master datasets.
 python data_preparation/step_05_data_merge.py
 ```
 
-### Step 7: Model Training
-**File**: `notebooks/EXPERIMENTAL_train_model.py`
-Train XGBoost models using the master datasets.
-*   **Technical Details**:
-    *   **XGBoost**: Uses histogram-based tree method for speed.
-    *   **HPO**: Integrates **Optuna** for Bayesian hyperparameter optimization.
-    *   **Explainability**: Generates SHAP summary plots (bar and dot) to interpret model feature importance.
-    *   **Metrics**: Reports AUROC, AUPRC, F1, Sensitivity, and Specificity.
+### Step 7: Model Training & Evaluation
+**Directory**: `model_creation/`
+
+We have refactored the modeling pipeline into two robust scripts: `run_hpo.py` and `train_evaluate.py`.
+
+#### 1. Hyperparameter Optimization (HPO)
+**File**: `model_creation/run_hpo.py`
+### 6. Hyperparameter Optimization (HPO)
+Run the HPO script to find the best hyperparameters for a specific configuration.
+*   **Optimization Metric**: AUPRC (Area Under the Precision-Recall Curve).
+*   **Trials**: Defaults to 100 trials.
+*   **Output**: Saves best parameters to `results/params/{outcome}/{branch}/{feature_set}.json`.
 
 ```bash
-# Train on Full Features
-python notebooks/EXPERIMENTAL_train_model.py --dataset full --features all
-
-# Train on Windowed Features
-python notebooks/EXPERIMENTAL_train_model.py --dataset windowed --features all
+python model_creation/step_06_run_hpo.py --outcome any_aki --branch windowed --feature_set all_waveforms
 ```
+
+### 7. Model Training & Evaluation
+Train the final model using the best hyperparameters and evaluate it on the test set.
+*   **Bootstrapping**: Performs 25 bootstrap iterations to calculate **95% Confidence Intervals** for all metrics.
+*   **Explainability**: Generates SHAP summary plots.
+*   **Output**: Saves metrics (`metrics.csv`), model artifacts (`model.json`), and plots to `results/models/{outcome}/{branch}/{feature_set}/`.
+
+```bash
+python model_creation/step_07_train_evaluate.py --outcome any_aki --branch windowed --feature_set all_waveforms
+```
+
+#### Available Options
+*   **Outcomes**: `any_aki`, `severe_aki`, `mortality`, `icu_admission`, `extended_los`.
+*   **Branches**: `non_windowed` (Full Case), `windowed` (Segmented).
+*   **Feature Sets**: `preop_only`, `all_waveforms`, `preop_and_all_waveforms`, `pleth_only`, `ecg_only`, etc.
 
 ---
 
@@ -177,9 +192,12 @@ jupyter notebook notebooks/04_hpo_xgboost.ipynb
     *   `step_05_data_merge.py`: Data merging (New).
     *   `aeon_io.py`: **(New)** Helper for exporting data to AEON formats (Nested, 3D NumPy) with padding support.
     *   `waveform_processing.py`: Helper functions for signal processing.
-    *   `EXPERIMENTAL_xgboost_hpo.py`: Alternative script for XGBoost HPO experiments.
-*   `notebooks/`: Jupyter notebooks and training scripts.
-    *   `EXPERIMENTAL_train_model.py`: Modular training script (New).
+*   `model_creation/`: **(New)** Modular modeling pipeline.
+    *   `utils.py`: Shared logic for data loading and preprocessing.
+    *   `run_hpo.py`: Hyperparameter optimization script.
+    *   `train_evaluate.py`: Model training and evaluation script.
+*   `notebooks/`: Jupyter notebooks.
     *   `03_tabular_data_prep.ipynb`: Legacy data transformation + preoperative data extraction notebook.
     *   `04_hpo_xgboost.ipynb`: Legacy modeling notebook.
 *   `data/`: Data storage (raw and processed).
+*   `results/`: Model outputs (params, metrics, plots).

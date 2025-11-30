@@ -111,10 +111,12 @@ Two feature extraction strategies were employed:
 We developed Gradient Boosted Decision Tree models using **XGBoost** (Extreme Gradient Boosting).
 
 *   **Data Splitting**: The dataset was split into a training set (80%) and a hold-out test set (20%) using stratified sampling to maintain the prevalence of AKI in both sets. This split was performed prior to any preprocessing to ensure no data leakage.
-*   **Hyperparameter Optimization (HPO)**: We used **Optuna**, a Bayesian optimization framework, to tune hyperparameters (e.g., learning rate, max depth, subsample ratio). The optimization objective was to maximize the Area Under the Receiver Operating Characteristic Curve (AUROC) using **3-fold stratified cross-validation** on the training set.
+*   **Class Imbalance**: To address the class imbalance of AKI outcomes, we applied **inverse sample weighting** (`scale_pos_weight`) calculated as $\sqrt{\frac{\text{Negative Samples}}{\text{Positive Samples}}}$.
+*   **Hyperparameter Optimization (HPO)**: We used **Optuna**, a Bayesian optimization framework, to tune hyperparameters (e.g., learning rate, max depth, subsample ratio). The optimization objective was to maximize the **Area Under the Precision-Recall Curve (AUPRC)** using **5-fold stratified cross-validation** on the training set. We ran 100 trials for each model configuration.
 *   **Final Model**: The final model was trained on the entire training set using the best hyperparameters found during HPO.
 
 ## Statistical Analysis
 Model performance was evaluated on the independent hold-out test set.
-*   **Metrics**: The primary performance metric was **AUROC**. Secondary metrics included Area Under the Precision-Recall Curve (AUPRC), F1-score, Sensitivity, Specificity, and Accuracy.
+*   **Metrics**: The primary performance metric was **AUPRC**, given the class imbalance. Secondary metrics included AUROC, F1-score, Sensitivity, Specificity, Accuracy, and Brier Score.
+*   **Confidence Intervals**: We calculated **95% Confidence Intervals (CIs)** for all performance metrics using **bootstrapping** with 25 iterations on the test set.
 *   **Interpretability**: SHapley Additive exPlanations (**SHAP**) values were calculated to quantify the contribution of each feature to the model's predictions, providing global and local interpretability.
