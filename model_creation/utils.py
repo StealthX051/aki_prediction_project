@@ -174,7 +174,7 @@ def prepare_data(
 
     # Calculate scale_pos_weight
     neg, pos = np.bincount(y_train)
-    scale_pos_weight = np.sqrt(neg / pos) if pos > 0 else 1.0
+    scale_pos_weight = neg / pos if pos > 0 else 1.0
     
     logger.info(f"Data prepared. Train shape: {X_train.shape}, Test shape: {X_test.shape}")
     logger.info(f"Positive samples in train: {pos}, Negative: {neg}, Scale Pos Weight: {scale_pos_weight:.4f}")
