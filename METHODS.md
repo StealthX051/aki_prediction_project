@@ -118,5 +118,13 @@ We developed Gradient Boosted Decision Tree models using **XGBoost** (Extreme Gr
 ## Statistical Analysis
 Model performance was evaluated on the independent hold-out test set.
 *   **Metrics**: The primary performance metric was **AUPRC**, given the class imbalance. Secondary metrics included AUROC, F1-score, Sensitivity, Specificity, Accuracy, and Brier Score.
-*   **Confidence Intervals**: We calculated **95% Confidence Intervals (CIs)** for all performance metrics using **bootstrapping** with 25 iterations on the test set.
 *   **Interpretability**: SHapley Additive exPlanations (**SHAP**) values were calculated to quantify the contribution of each feature to the model's predictions, providing global and local interpretability.
+
+## Post-hoc Analysis
+To ensure robust and clinically applicable performance estimates, a rigorous post-hoc analysis pipeline was implemented:
+
+1.  **Global Calibration**: Raw model probabilities were calibrated using **Logistic Regression (Platt Scaling)**. A single calibrator was fit for each model configuration (Outcome × Branch × Feature Set) on the entire prediction set. This approach ensures that the predicted probabilities reflect true risk levels while strictly preserving the global ranking of patients (monotone transformation), avoiding the rank distortions often caused by fold-wise calibration methods.
+
+2.  **Constrained Thresholding**: Optimal decision thresholds were selected to maximize the **F2-score** (which prioritizes recall over precision, reflecting the clinical importance of missing AKI cases). To prevent degenerate solutions in highly imbalanced scenarios (e.g., predicting all positives), we imposed a **minimum specificity constraint of 0.6**. If no threshold met this constraint, the unconstrained F2-optimal threshold was used as a fallback.
+
+3.  **Statistical Inference**: We computed **95% Confidence Intervals (CIs)** for all reported metrics (AUROC, AUPRC, Brier Score, Sensitivity, Specificity, F1) using **non-parametric bootstrapping** with **1000 iterations**. This provides a reliable measure of the uncertainty associated with our performance estimates.

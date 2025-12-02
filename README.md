@@ -150,6 +150,32 @@ python model_creation/step_07_train_evaluate.py --outcome any_aki --branch windo
 *   **Branches**: `non_windowed` (Full Case), `windowed` (Segmented).
 *   **Feature Sets**: `preop_only`, `all_waveforms`, `preop_and_all_waveforms`, `pleth_only`, `ecg_only`, etc.
 
+### Step 8: Prediction Generation
+**File**: `model_creation/step_08_generate_predictions.py`
+Decouples prediction from training to facilitate consistent post-hoc analysis.
+*   **Function**: Loads trained models and generates predictions for the test set.
+*   **Output**: Saves `predictions.csv` containing `y_true`, `y_pred_proba`, `caseid`, and metadata.
+```bash
+python model_creation/step_08_generate_predictions.py
+```
+
+### Step 9: Post-hoc Analysis & Visualization
+**File**: `results_recreation/results_analysis.py`
+Generates publication-ready tables and figures with rigorous statistical methods.
+*   **Global Calibration**: Applies Logistic Regression calibration to raw probabilities to ensure accurate risk estimates while preserving ranking.
+*   **Constrained Thresholding**: Selects optimal thresholds maximizing F2-score with a minimum specificity constraint (0.6) to ensure balanced performance.
+*   **Bootstrapping**: Calculates 95% Confidence Intervals using 1000 bootstrap iterations (parallelized).
+*   **Output**:
+    *   **Reports**:
+        *   `results/report.docx`: A formatted Word document containing all results tables with selective bolding and background gradients.
+        *   `results/report.pdf`: An aggregated PDF report of all tables.
+        *   `results/tables/*.html`: Individual HTML tables for each outcome/branch.
+    *   **Figures**: High-quality ROC, PR, and Calibration curves saved in `results/figures/`.
+    *   **Data**: `results/tables/metrics_summary.csv` containing all calculated metrics and CIs.
+```bash
+python results_recreation/results_analysis.py
+```
+
 ---
 
 ## 🕰️ Legacy Execution Guide (Notebook Based)
