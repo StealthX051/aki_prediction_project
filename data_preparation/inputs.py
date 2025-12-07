@@ -54,13 +54,13 @@ import os
 EXPORT_AEON = False
 AEON_OUT_DIR = os.getenv("AEON_OUT_DIR", "outputs/aeon")
 AEON_SAVE_FORMATS = ["nested_pkl", "numpy3d_npz", "np_list_pkl"]
-AEON_PAD_POLICY = "aeon_padding_transformer" # 'aeon_padding_transformer','in_memory_pad','none'
-AEON_PAD_LENGTH = None
+AEON_PAD_POLICY = "in_memory_pad" # 'aeon_padding_transformer','in_memory_pad','none'
+AEON_PAD_LENGTH = 57600
 AEON_PAD_FILL = 0
 AEON_STRICT_CHANNELS = True
-AEON_COMMON_SR = 100.0  # Kept for reference, but fixed length overrides this in step_02_aeon.
+AEON_COMMON_SR = 100.0  # Kept for reference
 AEON_WINDOW_POLICY = "intersection"
-AEON_FIXED_LENGTH = 8000  # Target length for fixed-length resampling (approx 1 Hz for long ops)
+AEON_FIXED_LENGTH = 57600  # Target length (16 hours @ 1 Hz)
 
 # --- Step 03 Output Paths ---
 PREOP_PROCESSED_FILE = PROCESSED_DIR / 'aki_preop_processed.csv'

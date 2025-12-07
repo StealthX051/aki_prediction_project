@@ -83,6 +83,7 @@ class RocketFused(FusedClassifier):
 
         # 3. Scale (Global)
         self.scaler = StandardScaler()
+        logging.info("Scaling features with StandardScaler...")
         X_scaled = self.scaler.fit_transform(X_combined)
         
         # 4. Fit Linear Head
@@ -153,6 +154,7 @@ class FreshPrinceFused(FusedClassifier):
         
         self.transformer = None
         self.imputer = None # TSFresh can produce NaNs
+        self.scaler = None
         self.classifier = None
         
     def fit(self, X_wave, X_preop, y):
@@ -185,14 +187,20 @@ class FreshPrinceFused(FusedClassifier):
         else:
              X_combined = X_tsfresh
 
-        # 3. Fit Rotation Forest
+        # 3. Scale (Global)
+        # Important for PCA in RotationForest, especially with mixed feature types (Wave+Preop)
+        self.scaler = StandardScaler()
+        logging.info("[FreshPrince] Scaling features...")
+        X_scaled = self.scaler.fit_transform(X_combined)
+
+        # 4. Fit Rotation Forest
         # RotationForest is an ensemble of trees on PCA-transformed subsets
         self.classifier = RotationForestClassifier(
             n_estimators=self.n_estimators,
             random_state=self.random_state,
             n_jobs=self.n_jobs
         )
-        self.classifier.fit(X_combined, y)
+        self.classifier.fit(X_scaled, y)
         
         return self
 
@@ -206,4 +214,5 @@ class FreshPrinceFused(FusedClassifier):
         else:
             X_combined = X_tsfresh
             
-        return self.classifier.predict_proba(X_combined)
+        X_scaled = self.scaler.transform(X_combined)
+        return self.classifier.predict_proba(X_scaled)

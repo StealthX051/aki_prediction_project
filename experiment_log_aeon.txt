@@ -1,0 +1,147 @@
+Starting Aeon Experiments...
+----------------------------------------------------------------
+Running: Model=minirocket | Branch=Aeon | Channels=all | Type=fused | Outcome=aki_label
+----------------------------------------------------------------
+  > Starting Training...
+  Command: /home/exouser/.conda/envs/aki_prediction_project/bin/python -m model_creation_aeon.step_06_aeon_train --model minirocket --outcome aki_label --channels all --include_preop
+2025-12-07 19:29:45,683 - Starting Experiment: minirocket_all_fused_aki_label
+2025-12-07 19:29:45,683 - Loading data from outputs/aeon...
+2025-12-07 19:29:47,886 - Using ALL channels: ['SNUADC/PLETH' 'SNUADC/ECG_II' 'Primus/CO2' 'Primus/AWP']
+2025-12-07 19:29:48,033 - Using 115 preop features.
+2025-12-07 19:29:48,102 - Train size: 2717, Test size: 682
+2025-12-07 19:29:48,103 - Train size: 2717, Test size: 682
+2025-12-07 19:29:48,103 - Initializing minirocket model...
+2025-12-07 19:29:48,103 - Starting training on 2717 samples...
+2025-12-07 19:29:48,103 - [miniRocket] Transforming waveforms shape (2717, 4, 8000)...
+2025-12-07 19:29:53,880 - [miniRocket] Output shape: (2717, 9996)
+2025-12-07 19:29:53,916 - Fused with Preop. Final shape: (2717, 10111)
+2025-12-07 19:29:54,117 - [miniRocket] Fitting linear head...
+2025-12-07 19:30:25,472 - [miniRocket] Linear head fit complete.
+2025-12-07 19:30:25,498 - Training complete.
+2025-12-07 19:30:25,499 - Predicting on 682 test samples...
+2025-12-07 19:30:26,906 - Prediction complete.
+2025-12-07 19:30:26,906 - Saving artifacts to /media/volume/catch22/projects/aki_prediction_project/results/aeon/models/minirocket/minirocket_all_fused_aki_label...
+2025-12-07 19:30:26,911 - Saved predictions to /media/volume/catch22/projects/aki_prediction_project/results/aeon/models/minirocket/minirocket_all_fused_aki_label/predictions.csv
+2025-12-07 19:30:26,917 - Saved model.
+  > Training Complete.
+  > Starting Bootstrap & Calibration...
+2025-12-07 19:30:29,035 - Loaded 682 predictions.
+2025-12-07 19:30:29,035 - Applying Logistic Calibration (Platt Scaling)...
+2025-12-07 19:30:29,043 - Starting 1000-fold Bootstrapping...
+2025-12-07 19:32:50,498 - --- Final Metrics (95% CI) ---
+2025-12-07 19:32:50,498 - AUROC: 0.6389 (0.5301 - 0.7437)
+2025-12-07 19:32:50,498 - AUPRC: 0.1572 (0.0740 - 0.2953)
+2025-12-07 19:32:50,498 - Brier Score: 0.0478 (0.0345 - 0.0640)
+2025-12-07 19:32:50,498 - Accuracy: 0.9340 (0.9018 - 0.9516)
+2025-12-07 19:32:50,498 - Precision: 0.3214 (0.1481 - 0.5162)
+2025-12-07 19:32:50,498 - Sensitivity (Recall): 0.2571 (0.1379 - 0.4194)
+2025-12-07 19:32:50,498 - Specificity: 0.9706 (0.9425 - 0.9832)
+2025-12-07 19:32:50,498 - F1-Score: 0.2857 (0.1429 - 0.4286)
+2025-12-07 19:32:50,498 - Threshold: 0.0700 (0.0600 - 0.0800)
+2025-12-07 19:32:50,500 - Saved metrics to results/aeon/models/minirocket/minirocket_all_fused_aki_label/metrics.csv
+  > Bootstrap Complete.
+----------------------------------------------------------------
+Running: Model=minirocket | Branch=Aeon | Channels=all | Type=waveonly | Outcome=aki_label
+----------------------------------------------------------------
+  > Starting Training...
+  Command: /home/exouser/.conda/envs/aki_prediction_project/bin/python -m model_creation_aeon.step_06_aeon_train --model minirocket --outcome aki_label --channels all 
+2025-12-07 19:32:54,130 - Starting Experiment: minirocket_all_waveonly_aki_label
+2025-12-07 19:32:54,130 - Loading data from outputs/aeon...
+2025-12-07 19:32:56,331 - Using ALL channels: ['SNUADC/PLETH' 'SNUADC/ECG_II' 'Primus/CO2' 'Primus/AWP']
+2025-12-07 19:32:56,483 - Preop features excluded.
+2025-12-07 19:32:56,561 - Train size: 2717, Test size: 682
+2025-12-07 19:32:56,561 - Train size: 2717, Test size: 682
+2025-12-07 19:32:56,561 - Initializing minirocket model...
+2025-12-07 19:32:56,561 - Starting training on 2717 samples...
+2025-12-07 19:32:56,562 - [miniRocket] Transforming waveforms shape (2717, 4, 8000)...
+2025-12-07 19:33:02,265 - [miniRocket] Output shape: (2717, 9996)
+2025-12-07 19:33:02,265 - No Preop provided. Using purely Rocket features.
+2025-12-07 19:33:02,486 - [miniRocket] Fitting linear head...
+2025-12-07 19:33:26,162 - [miniRocket] Linear head fit complete.
+2025-12-07 19:33:26,179 - Training complete.
+2025-12-07 19:33:26,179 - Predicting on 682 test samples...
+2025-12-07 19:33:27,498 - Prediction complete.
+2025-12-07 19:33:27,498 - Saving artifacts to /media/volume/catch22/projects/aki_prediction_project/results/aeon/models/minirocket/minirocket_all_waveonly_aki_label...
+2025-12-07 19:33:27,506 - Saved predictions to /media/volume/catch22/projects/aki_prediction_project/results/aeon/models/minirocket/minirocket_all_waveonly_aki_label/predictions.csv
+2025-12-07 19:33:27,530 - Saved model.
+  > Training Complete.
+  > Starting Bootstrap & Calibration...
+2025-12-07 19:33:29,909 - Loaded 682 predictions.
+2025-12-07 19:33:29,909 - Applying Logistic Calibration (Platt Scaling)...
+2025-12-07 19:33:29,916 - Starting 1000-fold Bootstrapping...
+2025-12-07 19:35:52,376 - --- Final Metrics (95% CI) ---
+2025-12-07 19:35:52,377 - AUROC: 0.5278 (0.4206 - 0.6288)
+2025-12-07 19:35:52,377 - AUPRC: 0.0610 (0.0383 - 0.1153)
+2025-12-07 19:35:52,377 - Brier Score: 0.0487 (0.0355 - 0.0658)
+2025-12-07 19:35:52,377 - Accuracy: 0.0513 (0.0367 - 0.0704)
+2025-12-07 19:35:52,377 - Precision: 0.0513 (0.0367 - 0.0704)
+2025-12-07 19:35:52,377 - Sensitivity (Recall): 1.0000 (1.0000 - 1.0000)
+2025-12-07 19:35:52,377 - Specificity: 0.0000 (0.0000 - 0.0000)
+2025-12-07 19:35:52,377 - F1-Score: 0.0976 (0.0707 - 0.1315)
+2025-12-07 19:35:52,377 - Threshold: 0.0100 (0.0100 - 0.0100)
+2025-12-07 19:35:52,379 - Saved metrics to results/aeon/models/minirocket/minirocket_all_waveonly_aki_label/metrics.csv
+  > Bootstrap Complete.
+----------------------------------------------------------------
+Running: Model=minirocket | Branch=Aeon | Channels=SNUADC_ECG_II | Type=fused | Outcome=aki_label
+----------------------------------------------------------------
+  > Starting Training...
+  Command: /home/exouser/.conda/envs/aki_prediction_project/bin/python -m model_creation_aeon.step_06_aeon_train --model minirocket --outcome aki_label --channels SNUADC_ECG_II --include_preop
+2025-12-07 19:35:56,075 - Starting Experiment: minirocket_SNUADC_ECG_II_fused_aki_label
+2025-12-07 19:35:56,075 - Loading data from outputs/aeon...
+Traceback (most recent call last):
+  File "/home/exouser/.conda/envs/aki_prediction_project/lib/python3.9/runpy.py", line 197, in _run_module_as_main
+    return _run_code(code, main_globals, None,
+  File "/home/exouser/.conda/envs/aki_prediction_project/lib/python3.9/runpy.py", line 87, in _run_code
+    exec(code, run_globals)
+  File "/media/volume/catch22/projects/aki_prediction_project/model_creation_aeon/step_06_aeon_train.py", line 248, in <module>
+    main()
+  File "/media/volume/catch22/projects/aki_prediction_project/model_creation_aeon/step_06_aeon_train.py", line 159, in main
+    data = load_aeon_data(args.outcome, args.channels, args.include_preop)
+  File "/media/volume/catch22/projects/aki_prediction_project/model_creation_aeon/step_06_aeon_train.py", line 52, in load_aeon_data
+    raise ValueError(f"Requested channel '{c}' (or '{c_slash}') not found in available: {available_channels}")
+ValueError: Requested channel 'SNUADC_ECG_II' (or 'SNUADC/ECG/II') not found in available: ['SNUADC/PLETH' 'SNUADC/ECG_II' 'Primus/CO2' 'Primus/AWP']
+  > Training Complete.
+  > Starting Bootstrap & Calibration...
+2025-12-07 19:36:00,041 - File not found: results/aeon/models/minirocket/minirocket_SNUADC_ECG_II_fused_aki_label/predictions.csv
+  > Bootstrap Complete.
+----------------------------------------------------------------
+Running: Model=minirocket | Branch=Aeon | Channels=SNUADC_ECG_II | Type=waveonly | Outcome=aki_label
+----------------------------------------------------------------
+  > Starting Training...
+  Command: /home/exouser/.conda/envs/aki_prediction_project/bin/python -m model_creation_aeon.step_06_aeon_train --model minirocket --outcome aki_label --channels SNUADC_ECG_II 
+2025-12-07 19:36:03,522 - Starting Experiment: minirocket_SNUADC_ECG_II_waveonly_aki_label
+2025-12-07 19:36:03,522 - Loading data from outputs/aeon...
+Traceback (most recent call last):
+  File "/home/exouser/.conda/envs/aki_prediction_project/lib/python3.9/runpy.py", line 197, in _run_module_as_main
+    return _run_code(code, main_globals, None,
+  File "/home/exouser/.conda/envs/aki_prediction_project/lib/python3.9/runpy.py", line 87, in _run_code
+    exec(code, run_globals)
+  File "/media/volume/catch22/projects/aki_prediction_project/model_creation_aeon/step_06_aeon_train.py", line 248, in <module>
+    main()
+  File "/media/volume/catch22/projects/aki_prediction_project/model_creation_aeon/step_06_aeon_train.py", line 159, in main
+    data = load_aeon_data(args.outcome, args.channels, args.include_preop)
+  File "/media/volume/catch22/projects/aki_prediction_project/model_creation_aeon/step_06_aeon_train.py", line 52, in load_aeon_data
+    raise ValueError(f"Requested channel '{c}' (or '{c_slash}') not found in available: {available_channels}")
+ValueError: Requested channel 'SNUADC_ECG_II' (or 'SNUADC/ECG/II') not found in available: ['SNUADC/PLETH' 'SNUADC/ECG_II' 'Primus/CO2' 'Primus/AWP']
+  > Training Complete.
+  > Starting Bootstrap & Calibration...
+2025-12-07 19:36:07,504 - File not found: results/aeon/models/minirocket/minirocket_SNUADC_ECG_II_waveonly_aki_label/predictions.csv
+  > Bootstrap Complete.
+----------------------------------------------------------------
+Running: Model=minirocket | Branch=Aeon | Channels=SNUADC_PLETH | Type=fused | Outcome=aki_label
+----------------------------------------------------------------
+  > Starting Training...
+  Command: /home/exouser/.conda/envs/aki_prediction_project/bin/python -m model_creation_aeon.step_06_aeon_train --model minirocket --outcome aki_label --channels SNUADC_PLETH --include_preop
+2025-12-07 19:36:11,148 - Starting Experiment: minirocket_SNUADC_PLETH_fused_aki_label
+2025-12-07 19:36:11,149 - Loading data from outputs/aeon...
+2025-12-07 19:36:13,348 - Mapped SNUADC_PLETH -> SNUADC/PLETH
+2025-12-07 19:36:13,349 - Using subset channels: ['SNUADC_PLETH']
+2025-12-07 19:36:13,415 - Using 115 preop features.
+2025-12-07 19:36:13,443 - Train size: 2717, Test size: 682
+2025-12-07 19:36:13,443 - Train size: 2717, Test size: 682
+2025-12-07 19:36:13,443 - Initializing minirocket model...
+2025-12-07 19:36:13,443 - Starting training on 2717 samples...
+2025-12-07 19:36:13,444 - [miniRocket] Transforming waveforms shape (2717, 1, 8000)...
+2025-12-07 19:36:15,813 - [miniRocket] Output shape: (2717, 9996)
+2025-12-07 19:36:15,852 - Fused with Preop. Final shape: (2717, 10111)
+2025-12-07 19:36:16,039 - [miniRocket] Fitting linear head...

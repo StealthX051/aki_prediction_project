@@ -43,13 +43,18 @@ def load_aeon_data(outcome_name, channels, include_preop):
             if c in available_channels:
                 target_indices.append(list(available_channels).index(c))
             else:
-                # Try replacing underscore with slash (common shell safety pattern)
-                c_slash = c.replace('_', '/')
-                if c_slash in available_channels:
-                    target_indices.append(list(available_channels).index(c_slash))
-                    logging.info(f"Mapped {c} -> {c_slash}")
+                # Try various slash replacements for mapping
+                c_slash_first = c.replace('_', '/', 1) # SNUADC_ECG_II -> SNUADC/ECG_II
+                c_slash_all = c.replace('_', '/')      # SNUADC_PLETH -> SNUADC/PLETH
+
+                if c_slash_first in available_channels:
+                    target_indices.append(list(available_channels).index(c_slash_first))
+                    logging.info(f"Mapped {c} -> {c_slash_first}")
+                elif c_slash_all in available_channels:
+                    target_indices.append(list(available_channels).index(c_slash_all))
+                    logging.info(f"Mapped {c} -> {c_slash_all}")
                 else:
-                    raise ValueError(f"Requested channel '{c}' (or '{c_slash}') not found in available: {available_channels}")
+                    raise ValueError(f"Requested channel '{c}' not found in available: {available_channels}")
 
         logging.info(f"Using subset channels: {channels}")
     
