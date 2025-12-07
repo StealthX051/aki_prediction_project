@@ -11,7 +11,7 @@ channels:
 
 dependencies:
   # Core Python version
-  - python=3.9
+  - python=3.9 # probably want to migrate to 3.10+ at some point
 
   # Core deep learning libraries from specified channels
   - pytorch
@@ -24,25 +24,27 @@ dependencies:
 
   # Python packages to be installed with pip
   - pip:
-    - "autogluon.multimodal"
-    - setuptools
-    - wheel
-    - autogluon
-    - vitaldb==1.0.0
-    - pandas
-    - numpy
-    - scipy
-    - matplotlib
-    - scikit-learn
-    - xgboost
-    - pycatch22
-    - optuna
-    - shap
-    - nvitop
-    - numba
-    - ipykernel
-    - tensorboard
-    - psutil
-    - ipywidgets
-    - rich
-    - grad-cam  # <-- CORRECTED PACKAGE NAME
+      - "autogluon.multimodal"
+      - setuptools
+      - wheel
+      - autogluon
+      - vitaldb==1.0.0
+      - pandas
+      - numpy
+      - scipy
+      - matplotlib
+      - scikit-learn
+      - xgboost
+      - pycatch22
+      - optuna
+      - shap
+      - nvitop
+      - numba
+      - ipykernel
+      - tensorboard
+      - psutil
+      - ipywidgets
+      - rich
+      - grad-cam
+      - aeon # 1.1.0 for python 3.9, current 1.3.0 for python 3.10+. 1.3.0 supports GPU acceleration
+      - tsfresh

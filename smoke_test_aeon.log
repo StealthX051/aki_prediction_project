@@ -1,0 +1,105 @@
+=== Starting Aeon Smoke Test ===
+Data Dir: outputs/aeon_smoke
+Results Dir: results/aeon_smoke
+--- Step 02: Aeon Export (Limit 50) ---
+2025-12-07 18:57:28,828 - INFO - Starting Aeon Export (Fixed Length = 8000)...
+2025-12-07 18:57:28,862 - INFO - Loaded 3462 cases.
+2025-12-07 18:57:28,909 - INFO - Limiting to first 50 cases (approx 200 tasks).
+2025-12-07 18:57:28,913 - INFO - Selected 50 cases (25 pos, 25 neg) for export.
+2025-12-07 18:57:28,948 - INFO - Using 30 processes.
+Exporting Waveforms:   0%|          | 0/200 [00:00<?, ?it/s]Exporting Waveforms:   0%|          | 1/200 [00:01<05:53,  1.78s/it]Exporting Waveforms:   3%|▎         | 6/200 [00:01<00:46,  4.21it/s]Exporting Waveforms:   6%|▌         | 11/200 [00:02<00:24,  7.72it/s]Exporting Waveforms:   8%|▊         | 15/200 [00:02<00:16, 11.19it/s]Exporting Waveforms:  10%|▉         | 19/200 [00:02<00:15, 11.99it/s]Exporting Waveforms:  11%|█         | 22/200 [00:02<00:13, 13.15it/s]Exporting Waveforms:  12%|█▎        | 25/200 [00:02<00:11, 14.81it/s]Exporting Waveforms:  14%|█▍        | 28/200 [00:02<00:11, 15.56it/s]Exporting Waveforms:  16%|█▌        | 31/200 [00:03<00:14, 11.85it/s]Exporting Waveforms:  18%|█▊        | 36/200 [00:03<00:09, 16.60it/s]Exporting Waveforms:  20%|█▉        | 39/200 [00:03<00:12, 12.71it/s]Exporting Waveforms:  21%|██        | 42/200 [00:04<00:13, 11.32it/s]Exporting Waveforms:  22%|██▏       | 44/200 [00:04<00:16,  9.42it/s]Exporting Waveforms:  24%|██▍       | 48/200 [00:04<00:14, 10.58it/s]Exporting Waveforms:  25%|██▌       | 50/200 [00:05<00:15,  9.75it/s]Exporting Waveforms:  26%|██▌       | 52/200 [00:05<00:14, 10.11it/s]Exporting Waveforms:  28%|██▊       | 56/200 [00:05<00:10, 13.77it/s]Exporting Waveforms:  29%|██▉       | 58/200 [00:05<00:10, 12.92it/s]Exporting Waveforms:  31%|███       | 62/200 [00:05<00:09, 14.01it/s]Exporting Waveforms:  32%|███▎      | 65/200 [00:06<00:10, 13.42it/s]Exporting Waveforms:  35%|███▌      | 70/200 [00:06<00:08, 15.44it/s]Exporting Waveforms:  36%|███▋      | 73/200 [00:06<00:07, 17.28it/s]Exporting Waveforms:  38%|███▊      | 75/200 [00:06<00:08, 15.25it/s]Exporting Waveforms:  39%|███▉      | 78/200 [00:06<00:08, 14.98it/s]Exporting Waveforms:  41%|████      | 82/200 [00:07<00:09, 12.99it/s]Exporting Waveforms:  42%|████▎     | 85/200 [00:07<00:08, 13.59it/s]Exporting Waveforms:  44%|████▍     | 88/200 [00:07<00:07, 15.19it/s]Exporting Waveforms:  48%|████▊     | 96/200 [00:07<00:04, 24.63it/s]Exporting Waveforms:  50%|████▉     | 99/200 [00:08<00:05, 19.40it/s]Exporting Waveforms:  51%|█████     | 102/200 [00:08<00:05, 19.18it/s]Exporting Waveforms:  52%|█████▎    | 105/200 [00:08<00:05, 17.19it/s]Exporting Waveforms:  54%|█████▎    | 107/200 [00:08<00:06, 14.55it/s]Exporting Waveforms:  55%|█████▍    | 109/200 [00:08<00:06, 14.65it/s]Exporting Waveforms:  56%|█████▌    | 111/200 [00:08<00:06, 13.78it/s]Exporting Waveforms:  56%|█████▋    | 113/200 [00:09<00:06, 12.71it/s]Exporting Waveforms:  57%|█████▊    | 115/200 [00:09<00:07, 11.50it/s]Exporting Waveforms:  58%|█████▊    | 117/200 [00:09<00:07, 11.68it/s]Exporting Waveforms:  60%|█████▉    | 119/200 [00:09<00:07, 11.33it/s]Exporting Waveforms:  60%|██████    | 121/200 [00:09<00:06, 11.74it/s]Exporting Waveforms:  62%|██████▏   | 124/200 [00:09<00:05, 15.19it/s]Exporting Waveforms:  64%|██████▎   | 127/200 [00:10<00:04, 15.70it/s]Exporting Waveforms:  65%|██████▌   | 130/200 [00:10<00:03, 18.06it/s]Exporting Waveforms:  66%|██████▌   | 132/200 [00:10<00:05, 12.13it/s]Exporting Waveforms:  67%|██████▋   | 134/200 [00:10<00:05, 13.15it/s]Exporting Waveforms:  68%|██████▊   | 136/200 [00:10<00:04, 13.06it/s]Exporting Waveforms:  69%|██████▉   | 138/200 [00:11<00:06,  9.57it/s]Exporting Waveforms:  70%|███████   | 140/200 [00:11<00:06,  8.96it/s]Exporting Waveforms:  71%|███████   | 142/200 [00:11<00:06,  8.85it/s]Exporting Waveforms:  72%|███████▏  | 144/200 [00:11<00:05,  9.53it/s]Exporting Waveforms:  73%|███████▎  | 146/200 [00:12<00:05,  9.26it/s]Exporting Waveforms:  74%|███████▍  | 148/200 [00:12<00:05,  9.45it/s]Exporting Waveforms:  75%|███████▌  | 150/200 [00:12<00:04, 10.48it/s]Exporting Waveforms:  76%|███████▌  | 152/200 [00:12<00:04, 10.55it/s]Exporting Waveforms:  77%|███████▋  | 154/200 [00:12<00:05,  8.90it/s]Exporting Waveforms:  78%|███████▊  | 157/200 [00:13<00:04,  9.24it/s]Exporting Waveforms:  80%|███████▉  | 159/200 [00:13<00:04, 10.03it/s]Exporting Waveforms:  81%|████████  | 162/200 [00:13<00:02, 12.72it/s]Exporting Waveforms:  82%|████████▎ | 165/200 [00:13<00:02, 15.12it/s]Exporting Waveforms:  84%|████████▍ | 169/200 [00:13<00:01, 17.84it/s]Exporting Waveforms:  86%|████████▌ | 171/200 [00:14<00:02, 12.28it/s]Exporting Waveforms:  86%|████████▋ | 173/200 [00:14<00:02, 12.70it/s]Exporting Waveforms:  88%|████████▊ | 177/200 [00:14<00:01, 14.74it/s]Exporting Waveforms:  90%|████████▉ | 179/200 [00:14<00:01, 12.03it/s]Exporting Waveforms:  91%|█████████ | 182/200 [00:15<00:01, 12.97it/s]Exporting Waveforms:  92%|█████████▏| 184/200 [00:15<00:01, 11.47it/s]Exporting Waveforms:  93%|█████████▎| 186/200 [00:15<00:01, 11.12it/s]Exporting Waveforms:  95%|█████████▌| 190/200 [00:15<00:00, 13.96it/s]Exporting Waveforms:  96%|█████████▌| 192/200 [00:15<00:00, 12.77it/s]Exporting Waveforms:  98%|█████████▊| 196/200 [00:16<00:00, 14.98it/s]Exporting Waveforms:  99%|█████████▉| 198/200 [00:16<00:00, 12.77it/s]Exporting Waveforms: 100%|██████████| 200/200 [00:16<00:00,  7.84it/s]Exporting Waveforms: 100%|██████████| 200/200 [00:16<00:00, 11.89it/s]
+2025-12-07 18:57:46,116 - INFO - Saved 6 errors to outputs/aeon_smoke/export_errors.csv
+2025-12-07 18:57:46,116 - INFO - Starting Aeon export collation (Windowed=False)...
+2025-12-07 18:57:46,116 - INFO - Collating non-windowed data for 49 cases.
+2025-12-07 18:57:46,117 - INFO - Retained 48 cases after applying strict_channels=True
+2025-12-07 18:57:46,117 - INFO - Saved non-windowed labels to outputs/aeon_smoke/y_nonwindowed.csv
+2025-12-07 18:57:46,117 - INFO - Padding to length 8000 with fill '0'
+2025-12-07 18:57:46,376 - INFO - Saved padded 3D NumPy to outputs/aeon_smoke/X_nonwindowed.npz with shape (48, 4, 8000)
+Export Complete.
+--- Step 04: Aeon Preop Prep ---
+2025-12-07 18:57:47,607 - INFO - Starting Aeon Preop Preparation...
+2025-12-07 18:57:47,607 - INFO - Loading preop data from /media/volume/catch22/projects/aki_prediction_project/data/processed/aki_preop_processed.csv
+2025-12-07 18:57:47,641 - INFO - Loading aeon labels from outputs/aeon_smoke/y_nonwindowed.csv
+2025-12-07 18:57:47,643 - INFO - Filtered preop data to 48 cases matching Aeon export.
+2025-12-07 18:57:47,643 - INFO - Deriving anesthesia_duration_minutes...
+2025-12-07 18:57:47,659 - INFO - Replacing -99 with NaN...
+2025-12-07 18:57:47,672 - INFO - Fitting SimpleImputer(median, add_indicator=True) on training set feature columns...
+/home/exouser/.conda/envs/aki_prediction_project/lib/python3.9/site-packages/sklearn/impute/_base.py:635: UserWarning: Skipping features without any observed values: ['preop_hco3' 'preop_ph' 'preop_be' 'preop_pao2' 'preop_paco2'
+ 'preop_sao2']. At least one non-missing value is needed for imputation with strategy='median'.
+  warnings.warn(
+2025-12-07 18:57:47,680 - INFO - Saving Aeon-ready preop data to outputs/aeon_smoke/aki_preop_aeon.csv...
+2025-12-07 18:57:47,685 - INFO - Complete.
+Preop Prep Complete.
+--- Step 06: Training (minirocket) ---
+Command: /home/exouser/.conda/envs/aki_prediction_project/bin/python -m model_creation_aeon.step_06_aeon_train --model minirocket --outcome aki_label --channels SNUADC_PLETH --include_preop --limit 50 --results_dir results/aeon_smoke
+2025-12-07 18:57:51,474 - Starting Experiment: minirocket_SNUADC_PLETH_fused_aki_label
+2025-12-07 18:57:51,474 - Loading data from outputs/aeon_smoke...
+2025-12-07 18:57:51,509 - Mapped SNUADC_PLETH -> SNUADC/PLETH
+2025-12-07 18:57:51,509 - Using subset channels: ['SNUADC_PLETH']
+2025-12-07 18:57:51,518 - Using 102 preop features.
+2025-12-07 18:57:51,520 - Limiting usage to 50 samples per split.
+2025-12-07 18:57:51,520 - Train size: 41, Test size: 7
+2025-12-07 18:57:51,520 - Train size: 41, Test size: 7
+2025-12-07 18:57:51,520 - Initializing minirocket model...
+2025-12-07 18:57:51,520 - Starting training on 41 samples...
+2025-12-07 18:57:51,520 - [miniRocket] Transforming waveforms shape (41, 1, 8000)...
+2025-12-07 18:57:52,557 - [miniRocket] Output shape: (41, 9996)
+2025-12-07 18:57:52,558 - Fused with Preop. Final shape: (41, 10098)
+2025-12-07 18:57:52,561 - [miniRocket] Fitting linear head...
+2025-12-07 18:57:54,657 - [miniRocket] Linear head fit complete.
+2025-12-07 18:57:54,657 - Training complete.
+2025-12-07 18:57:54,657 - Predicting on 7 test samples...
+2025-12-07 18:57:54,682 - Prediction complete.
+2025-12-07 18:57:54,682 - Saving artifacts to results/aeon_smoke/models/minirocket/minirocket_SNUADC_PLETH_fused_aki_label...
+2025-12-07 18:57:54,686 - Saved predictions to results/aeon_smoke/models/minirocket/minirocket_SNUADC_PLETH_fused_aki_label/predictions.csv
+2025-12-07 18:57:54,688 - Saved model.
+Training Complete.
+--- Step 06b: Training (freshprince) ---
+Command: /home/exouser/.conda/envs/aki_prediction_project/bin/python -m model_creation_aeon.step_06_aeon_train --model freshprince --outcome aki_label --channels SNUADC_PLETH --include_preop --limit 50 --results_dir results/aeon_smoke
+2025-12-07 18:57:59,075 - Starting Experiment: freshprince_SNUADC_PLETH_fused_aki_label
+2025-12-07 18:57:59,076 - Loading data from outputs/aeon_smoke...
+2025-12-07 18:57:59,116 - Mapped SNUADC_PLETH -> SNUADC/PLETH
+2025-12-07 18:57:59,116 - Using subset channels: ['SNUADC_PLETH']
+2025-12-07 18:57:59,127 - Using 102 preop features.
+2025-12-07 18:57:59,130 - Limiting usage to 50 samples per split.
+2025-12-07 18:57:59,130 - Train size: 41, Test size: 7
+2025-12-07 18:57:59,130 - Train size: 41, Test size: 7
+2025-12-07 18:57:59,130 - Initializing freshprince model...
+2025-12-07 18:57:59,130 - Starting training on 41 samples...
+2025-12-07 18:57:59,522 - init
+2025-12-07 18:57:59,750 - Dependency not available for matrix_profile, this feature will be disabled!
+2025-12-07 18:57:59,751 - Dependency not available for matrix_profile, this feature will be disabled!
+2025-12-07 18:57:59,752 - Dependency not available for matrix_profile, this feature will be disabled!
+2025-12-07 18:58:00,469 - [FreshPrince] Extracting features (comprehensive)... This may take a while.
+2025-12-07 18:58:00,472 - Dependency not available for matrix_profile, this feature will be disabled!
+2025-12-07 18:58:00,473 - Dependency not available for matrix_profile, this feature will be disabled!
+2025-12-07 18:58:00,474 - Dependency not available for matrix_profile, this feature will be disabled!
+2025-12-07 19:00:13,532 - [FreshPrince] Output shape: (41, 783)
+/home/exouser/.conda/envs/aki_prediction_project/lib/python3.9/site-packages/sklearn/base.py:474: FutureWarning: `BaseEstimator._validate_data` is deprecated in 1.6 and will be removed in 1.7. Use `sklearn.utils.validation.validate_data` instead. This function becomes public and is part of the scikit-learn developer API.
+  warnings.warn(
+2025-12-07 19:00:52,178 - Training complete.
+2025-12-07 19:00:52,178 - Predicting on 7 test samples...
+/home/exouser/.conda/envs/aki_prediction_project/lib/python3.9/site-packages/sklearn/base.py:474: FutureWarning: `BaseEstimator._validate_data` is deprecated in 1.6 and will be removed in 1.7. Use `sklearn.utils.validation.validate_data` instead. This function becomes public and is part of the scikit-learn developer API.
+  warnings.warn(
+2025-12-07 19:01:49,716 - Prediction complete.
+2025-12-07 19:01:49,716 - Saving artifacts to results/aeon_smoke/models/freshprince/freshprince_SNUADC_PLETH_fused_aki_label...
+2025-12-07 19:01:49,720 - Saved predictions to results/aeon_smoke/models/freshprince/freshprince_SNUADC_PLETH_fused_aki_label/predictions.csv
+2025-12-07 19:02:09,743 - Saved model.
+Training (freshprince) Complete.
+--- Step 07: Bootstrap ---
+2025-12-07 19:02:11,586 - Loaded 7 predictions.
+2025-12-07 19:02:11,586 - Applying Logistic Calibration (Platt Scaling)...
+2025-12-07 19:02:11,591 - Starting 1000-fold Bootstrapping...
+2025-12-07 19:03:40,930 - --- Final Metrics (95% CI) ---
+2025-12-07 19:03:40,930 - AUROC: 0.5000 (0.1667 - 0.8333)
+2025-12-07 19:03:40,930 - AUPRC: 0.2500 (0.1667 - 0.8000)
+2025-12-07 19:03:40,930 - Brier Score: 0.1224 (0.1222 - 0.3977)
+2025-12-07 19:03:40,930 - Accuracy: 0.1429 (0.1429 - 0.5286)
+2025-12-07 19:03:40,930 - Precision: 0.1429 (0.1429 - 0.5286)
+2025-12-07 19:03:40,930 - Sensitivity (Recall): 1.0000 (1.0000 - 1.0000)
+2025-12-07 19:03:40,930 - Specificity: 0.0000 (0.0000 - 0.0000)
+2025-12-07 19:03:40,930 - F1-Score: 0.2500 (0.2500 - 0.6891)
+2025-12-07 19:03:40,930 - Threshold: 0.0100 (0.0100 - 0.0100)
+2025-12-07 19:03:40,932 - Saved metrics to results/aeon_smoke/models/freshprince/freshprince_SNUADC_PLETH_fused_aki_label/metrics.csv
+Bootstrap Complete.
+=== Smoke Test Passed! ===

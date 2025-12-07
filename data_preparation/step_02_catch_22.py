@@ -26,8 +26,9 @@ from data_preparation.inputs import (
     GENERATE_WINDOWED_FEATURES,
     FULL_FEATURE_TARGET_SR
 )
-from data_preparation.waveform_processing import WAVEFORM_SPECS, process_signal, harmonize_sr
-from data_preparation.aeon_io import AeonSeriesPayload, collate_and_save_aeon
+from data_preparation.waveform_processing import WAVEFORM_SPECS, process_signal, harmonize_sr, load_and_validate_case
+from data_preparation.aeon_io import collate_and_save_aeon, AeonExportConfig
+
 
 # Create mapping from VitalDB ID to Spec Key
 ID_TO_SPEC_KEY = {spec['id']: key for key, spec in WAVEFORM_SPECS.items()}
@@ -52,47 +53,12 @@ def _process_case(case: Tuple[int, float, float, int, str]) -> Tuple[Dict[str, A
     start = time.perf_counter()
 
     try:
-        wave = None
-        spec_key_loaded = None
-        spec = None
+        # 1. Load waveform with substitutions logic
+        wave, spec_key_loaded, error_msg = load_and_validate_case(caseid, waveform_key, WAVEFORM_SUBSTITUTIONS)
         
-        # Resolve the primary spec key from the input waveform string (which might be an ID or a Key)
-        primary_spec_key = ID_TO_SPEC_KEY.get(waveform_key)
-        if not primary_spec_key and waveform_key in WAVEFORM_SPECS:
-            primary_spec_key = waveform_key
-
-        # 1. Try loading the primary waveform key
-        if primary_spec_key:
-            try:
-                spec = WAVEFORM_SPECS[primary_spec_key]
-                wave = vitaldb.load_case(caseid, spec['id'], interval=1/spec['native_sr']) 
-                if wave is not None and wave.size > 0:
-                    spec_key_loaded = primary_spec_key
-            except Exception:
-                pass 
-
-        # 2. If primary failed, try substitutions
-        if wave is None or wave.size == 0:
-            for sub_id in WAVEFORM_SUBSTITUTIONS.get(waveform_key, []):
-                # Resolve substitute spec key
-                sub_spec_key = ID_TO_SPEC_KEY.get(sub_id)
-                if not sub_spec_key and sub_id in WAVEFORM_SPECS:
-                    sub_spec_key = sub_id
-                
-                if sub_spec_key:
-                    try:
-                        spec = WAVEFORM_SPECS[sub_spec_key]
-                        wave = vitaldb.load_case(caseid, spec['id'], interval=1/spec['native_sr'])
-                        if wave is not None and wave.size > 0:
-                            spec_key_loaded = sub_spec_key
-                            break 
-                    except Exception:
-                        continue 
-
-        # 3. Check if loading failed entirely
-        if wave is None or wave.size == 0:
-            err = {'caseid': caseid, 'waveform': waveform_key, 'error': 'empty_signal_or_missing'}
-            return {'error': err}, timings, {}
+        if error_msg:
+             err = {'caseid': caseid, 'waveform': waveform_key, 'error': error_msg}
+             return {'error': err}, timings, {}
         
         spec = WAVEFORM_SPECS[spec_key_loaded]
         end = time.perf_counter()

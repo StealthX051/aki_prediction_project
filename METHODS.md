@@ -128,3 +128,44 @@ To ensure robust and clinically applicable performance estimates, a rigorous pos
 2.  **Constrained Thresholding**: Optimal decision thresholds were selected to maximize the **F2-score** (which prioritizes recall over precision, reflecting the clinical importance of missing AKI cases). To prevent degenerate solutions in highly imbalanced scenarios (e.g., predicting all positives), we imposed a **minimum specificity constraint of 0.6**. If no threshold met this constraint, the unconstrained F2-optimal threshold was used as a fallback.
 
 3.  **Statistical Inference**: We computed **95% Confidence Intervals (CIs)** for all reported metrics (AUROC, AUPRC, Brier Score, Sensitivity, Specificity, F1) using **non-parametric bootstrapping** with **1000 iterations**. This provides a reliable measure of the uncertainty associated with our performance estimates.
+
+## Experimental Pipeline: Time Series Classification (Aeon)
+
+> **Note**: This section describes the methodology for the experimental parallel pipeline designed to benchmark State-of-the-Art (SOTA) time series classifiers against the primary Catch22/XGBoost approach.
+
+### 1. Data Preprocessing (Aeon Branch)
+To accommodate fixed-input classifiers (e.g., Rocket), a distinct preprocessing strategy was employed:
+*   **Fixed-Length Resampling**: Instead of sliding windows, the entire intraoperative waveform for each case (regardless of duration) was linearly resampled to a fixed length of **$L=8,000$ points**. This preserves the global morphology while standardizing input dimensions for array-based classifiers.
+*   **Anesthesia Duration**: To compensate for the loss of absolute time information due to resampling, `anesthesia_duration_minutes` was explicitly added as a tabular feature.
+*   **Imputation**:
+    *   **Waveforms**: Cases with >5% missing data were dropped. Remaining gaps were linearly interpolated to prevent zero-padding artifacts which can distort convolution kernels.
+    *   **Tabular Data**: Unlike the tree-based pipeline (which uses -99), tabular features for linear heads (Ridge/Logistic) were imputed using **Median Imputation** and augmented with **Binary Missingness Indicators**.
+
+### 2. Modeling Strategy (Early Fusion)
+We implemented an **Early Fusion** architecture where waveform features and preoperative tabular features are concatenated into a single vector before being passed to the final classifier.
+
+*   **Convolutional Models (MultiRocket / MiniRocket)**:
+    *   **Transform**: We utilized `MultiRocket` and `MiniRocket` (Aeon implementations) to extract features. `MultiRocket` applies **10,000** random convolutional kernels (dilated, padded) to the raw 3D input `(N, Channels, 8000)`.
+    *   **Fusion**: The resulting feature map (approx. 50k features for MultiRocket) is concatenated with the processed preoperative vector (Median imputed).
+    *   **Scaling**: A global `StandardScaler` is applied to the combined feature matrix to normalize scales between waveform embeddings and clinical variables.
+    *   **Head**: A **Logistic Regression** classifier with **internal cross-validation** (`LogisticRegressionCV`) is trained on the fused, standardized feature set. This automatically optimizes the regularization parameter (C) using 5-fold cross-validation on the training set, eliminating the need for external HPO. We chose Logistic Regression to ensure accurate probability calibration via sigmoid outputs.
+*   **FreshPRINCE** (FreshPRince Is Not a Clustered Ensemble):
+    *   **Transform**: Extracts comprehensive time-series features using **TSFresh** (relevant features selected via FDR control).
+    *   **Head**: A **Rotation Forest** classifier (an ensemble of **200** PCA-based decision trees) is trained on the fused features.
+
+### 3. Software and Libraries
+The experimental pipeline relies on the **`aeon`** toolkit (v1.1.0+) for time series learning, **`tsfresh`** for feature extraction, and **`scikit-learn`** for underlying classifier implementations (Logistic Regression).
+
+### 4. Experimental Design and Evaluation
+The Aeon pipeline mirrors the rigorous design of the primary pipeline:
+*   **Outcomes**: We evaluate performance on the primary outcome (`aki_label`) and all secondary outcomes:
+    *   Severe AKI (`y_severe_aki`)
+    *   In-hospital Mortality (`y_inhosp_mortality`)
+    *   ICU Admission (`y_icu_admit`)
+    *   Prolonged Postoperative LOS (`y_prolonged_los_postop`)
+*   **Ablation Studies**: To quantify feature importance, we conduct systematic ablations:
+    *   **Single Channel**: Performance of each waveform individually (ECG, PLETH, CO2, AWP).
+    *   **Leave-One-Out**: Performance impact of removing a single waveform from the full set.
+    *   **Fusion Impact**: Comparison of "Waveform Only" vs. "Early Fusion" (Waveform + Preop) performance.
+*   **Bootstrapping**: 1000-fold bootstrapped metrics (AUROC, AUPRC) with 95% Confidence Intervals.
+*   **Calibration**: Logistic calibration (Platt Scaling) applied to the decision function outputs.

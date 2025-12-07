@@ -222,8 +222,62 @@ jupyter notebook notebooks/04_hpo_xgboost.ipynb
     *   `utils.py`: Shared logic for data loading and preprocessing.
     *   `run_hpo.py`: Hyperparameter optimization script.
     *   `train_evaluate.py`: Model training and evaluation script.
+*   `model_creation_aeon/`: **(New)** Experimental Aeon pipeline.
+    *   `classifiers.py`: Custom `FusedClassifier`, `RocketFused`, and `FreshPrinceFused` classes implementing early fusion.
+    *   `step_06_aeon_train.py`: CLI-driven script for training Aeon models.
+    *   `step_07_aeon_bootstrap.py`: Post-hoc analysis script (Bootstrap + Calibration).
 *   `notebooks/`: Jupyter notebooks.
     *   `03_tabular_data_prep.ipynb`: Legacy data transformation + preoperative data extraction notebook.
     *   `04_hpo_xgboost.ipynb`: Legacy modeling notebook.
 *   `data/`: Data storage (raw and processed).
 *   `results/`: Model outputs (params, metrics, plots).
+
+## 🧪 Experimental Pipeline: Aeon (Time Series Classification)
+
+> **⚠️ WARNING**: This pipeline is currently **UNTESTED** and operates separately from the main Catch22/XGBoost pipeline. Use with caution.
+
+This branch implements an end-to-end Deep Learning/State-of-the-Art Time Series Classification pipeline using the **Aeon** library. It bypasses manual feature engineering (Catch22) in favor of direct waveform processing and fusion.
+
+### Overview
+*   **Goal**: Compare manual feature engineering (Catch22+XGB) against SOTA Time Series Classifiers (Rocket, FreshPRINCE).
+*   **Fusion Strategy**: **Early Fusion**. Preoperative tabular features are concatenated with waveform embeddings before the final classifier head.
+
+### Pipeline Steps
+### Pipeline Components
+
+| Component | Script | Description |
+| :--- | :--- | :--- |
+| **Export** | `data_preparation/step_02_aeon_export.py` | Loads waveforms, resamples to `L=8000` (fixed length), exports to `.npz`. <br> **Args**: `--limit` (debug) |
+| **Preop Prep** | `data_preparation/step_04_aeon_prep.py` | Prepares tabular data: Median imputation + Missingness Indicators of preop features. |
+| **Training** | `model_creation_aeon/step_06_aeon_train.py` | Trains separate or fused models. <br> **Models**: `multirocket` (default `n_kernels=10000`), `minirocket`, `freshprince`. <br> **Fusion**: Concatenates preop features with Rocket embeddings. |
+| **Reference** | `model_creation_aeon/classifiers.py` | Contains `RocketFused` and `FreshPrinceFused` class definitions. |
+| **Analysis** | `model_creation_aeon/step_07_aeon_bootstrap.py` | 1000-fold bootstrapping, Platt Scaling calibration, Optimal F2 thresholding. |
+
+### Technical Specifications
+*   **Library**: `aeon` (Sktime fork), `tsfresh`.
+*   **Input Shape**: `(N_samples, N_channels=4, Length=8000)`.
+*   **Fusion Type**: Early Fusion (Preop features concatenated to transform embeddings).
+*   **Evaluation**: 
+    *   **Outcomes**: Primary (AKI) + Secondary (Mortality, ICU, Extended LOS, Severe AKI).
+    *   **Metrics**: 1000-fold bootstrapped CIs for AUROC, AUPRC, etc.
+    *   **Ablations**: Single Channel, Leave-One-Out, and Fusion impact analysis.
+
+### 5. Troubleshooting & Learnings
+*   **Aeon v1.1.0 Compatibility**:
+    *   The pipeline explicitly supports `aeon >= 1.1.0`. `MultiRocket` and `MiniRocket` are imported from `aeon.transformations.collection.convolution_based`.
+    *   The correct parameter for kernel count is `n_kernels` (not `num_kernels`).
+    *   Estimators must be passed as instantiated Objects (e.g., `LogisticRegression()`), not strings.
+*   **Class Balance in Testing**:
+    *   When running with `--limit` (e.g., smoke testing), the export script enforces a balanced selection of positive and negative cases. This is critical because `LogisticRegression` will crash if the training fold contains only a single class.
+*   **Performance**:
+    *   Crucial: Ensure `n_jobs=-1` is passed to both the Aeon transformer (internal C++ threading) and the Scikit-learn head classifier.
+
+### Execution
+Run the full experimental suite:
+```bash
+bash run_full_pipeline_aeon.sh
+```
+Or individual experiments:
+```bash
+bash run_experiments_aeon.sh
+```
