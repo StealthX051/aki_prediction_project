@@ -76,14 +76,14 @@ def _process_case_aeon(case: Tuple[int, float, float, int, str]) -> Tuple[Dict[s
     if error_msg:
          return {'error': {'caseid': caseid, 'waveform': waveform_key, 'error': error_msg}}, timings
 
-    # 5. Resample to 10 Hz (Fixed Frequency)
+    # 5. Resample to 1 Hz (Fixed Frequency)
     start_res = time.perf_counter()
-    # Calculate target length for 10 Hz
+    # Calculate target length for 1 Hz
     duration_sec = (idx_end - idx_start) / native_sr
-    target_hz = 10.0
+    target_hz = 1.0
     target_len = max(1, int(np.ceil(duration_sec * target_hz)))
     
-    # Resample to the dynamic 10 Hz length (padding happens in collate step)
+    # Resample to the dynamic 1 Hz length (padding happens in collate step)
     resampled_seg = resample_fixed_length(seg, target_len)
     timings['resample'] = time.perf_counter() - start_res
     
@@ -103,7 +103,7 @@ def main():
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-    logging.info(f"Starting Aeon Export (Freq=10Hz, Padding to {AEON_FIXED_LENGTH})...")
+    logging.info(f"Starting Aeon Export (Freq=1Hz, Padding to {AEON_FIXED_LENGTH})...")
 
     # Load Cohort
     if not os.path.exists(COHORT_FILE):

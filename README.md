@@ -239,9 +239,9 @@ jupyter notebook notebooks/04_hpo_xgboost.ipynb
 This branch implements an end-to-end Deep Learning/State-of-the-Art Time Series Classification pipeline using the **Aeon** library. It bypasses manual feature engineering (Catch22) in favor of direct waveform processing and fusion.
 
 ### Overview
-*   **Resampling**: All waveforms are resampled to **10 Hz** (10 data points per second) to preserve temporal structure while managing dimensionality.
-*   **Padding**: Variable-length sequences are right-padded with zeros to a fixed maximum length of **16 hours** (576,000 timepoints).
-*   **Fusion**: Early fusion of these 10 Hz waveforms (transformed via Rocket) with 115 static preoperative features. FreshPRINCE is currently disabled due to computational cost at this scale.
+*   **Resampling**: All waveforms are resampled to **1 Hz** (1 data point per second) to preserve temporal structure while managing dimensionality.
+*   **Padding**: Variable-length sequences are right-padded with zeros to a fixed maximum length of **16 hours** (57,600 timepoints).
+*   **Fusion**: Early fusion of these 1 Hz waveforms (transformed via Rocket) with 115 static preoperative features. FreshPRINCE is currently disabled due to computational constraints.
 *   **Goal**: Compare manual feature engineering (Catch22+XGB) against SOTA Time Series Classifiers (Rocket, FreshPRINCE).
 *   **Fusion Strategy**: **Early Fusion**. Preoperative tabular features are concatenated with waveform embeddings before the final classifier head.
 

@@ -135,8 +135,8 @@ To ensure robust and clinically applicable performance estimates, a rigorous pos
 
 ### 1. Data Preprocessing (Aeon Branch)
 To accommodate fixed-input classifiers (e.g., Rocket), a distinct preprocessing strategy was employed:
-*   **10 Hz Resampling**: All intraoperative waveforms (`SNUADC/PLETH`, `SNUADC/ECG_II`, `Primus/CO2`, `Primus/AWP`) were resampled to a uniform frequency of 10 Hz.
-*   **Fixed-Length Padding**: To facilitate batch processing and compatibility with certain classifiers, all series were right-padded with zeros to a fixed maximum duration of 16 hours (576,000 timepoints). Sequences longer than 16 hours were truncated.
+*   **1 Hz Resampling**: All intraoperative waveforms (`SNUADC/PLETH`, `SNUADC/ECG_II`, `Primus/CO2`, `Primus/AWP`) were resampled to a uniform frequency of 1 Hz.
+*   **Fixed-Length Padding**: To facilitate batch processing and compatibility with certain classifiers, all series were right-padded with zeros to a fixed maximum duration of 16 hours (57,600 timepoints). Sequences longer than 16 hours were truncated.
 *   **Anesthesia Duration**: To compensate for the loss of absolute time information due to resampling, `anesthesia_duration_minutes` was explicitly added as a tabular feature.
 *   **Imputation**:
     *   **Waveforms**: Cases with >5% missing data were dropped. Remaining gaps were linearly interpolated to prevent zero-padding artifacts which can distort convolution kernels.

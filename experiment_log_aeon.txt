@@ -955,3 +955,13 @@ Running: Model=freshprince | Branch=Aeon | Channels=all | Type=fused | Outcome=a
 2025-12-07 21:50:03,262 - Dependency not available for matrix_profile, this feature will be disabled!
 2025-12-07 21:50:03,263 - Dependency not available for matrix_profile, this feature will be disabled!
 2025-12-07 21:50:03,264 - Dependency not available for matrix_profile, this feature will be disabled!
+Starting Aeon Experiments...
+----------------------------------------------------------------
+Running: Model=minirocket | Branch=Aeon | Channels=all | Type=fused | Outcome=aki_label
+----------------------------------------------------------------
+  > Starting Training...
+  Command: /home/exouser/.conda/envs/aki_prediction_project/bin/python -m model_creation_aeon.step_06_aeon_train --model minirocket --outcome aki_label --channels all --include_preop
+2025-12-08 01:07:37,542 - Starting Experiment: minirocket_all_fused_aki_label
+2025-12-08 01:07:37,542 - Loading data from outputs/aeon...
+2025-12-08 01:09:15,226 - Using ALL channels: ['SNUADC/PLETH' 'SNUADC/ECG_II' 'Primus/CO2' 'Primus/AWP']
+2025-12-08 01:09:28,461 - Using 115 preop features.
