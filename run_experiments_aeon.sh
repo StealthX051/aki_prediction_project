@@ -11,7 +11,7 @@ OUTCOMES=("aki_label" "y_severe_aki" "y_inhosp_mortality" "y_icu_admit" "y_prolo
 # Models
 # Start with fast ones for debugging, then heavy ones
 MODELS=("minirocket") # "freshprince" is very slow for full sweep, maybe enable selectively or run separately
-MODELS+=("freshprince") # Uncomment for full run
+# MODELS+=("freshprince") # Uncomment for full run
 MODELS+=("multirocket")
 
 # Feature Sets (Channels)
