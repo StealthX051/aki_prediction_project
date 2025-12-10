@@ -137,9 +137,9 @@ python model_creation/step_06_run_hpo.py --outcome any_aki --branch windowed --f
 
 ### 7. Model Training & Evaluation
 Train the final model using the best hyperparameters and evaluate it on the test set.
-*   **Bootstrapping**: Performs 25 bootstrap iterations to calculate **95% Confidence Intervals** for all metrics.
+*   **Evaluation**: Generates predictions on the test set (`predictions.csv`) for unified analysis.
 *   **Explainability**: Generates SHAP summary plots.
-*   **Output**: Saves metrics (`metrics.csv`), model artifacts (`model.json`), and plots to `results/models/{outcome}/{branch}/{feature_set}/`.
+*   **Output**: Saves model (`model.json`), predictions (`predictions.csv`), and plots to `results/models/{outcome}/{branch}/{feature_set}/`.
 
 ```bash
 python model_creation/step_07_train_evaluate.py --outcome any_aki --branch windowed --feature_set all_waveforms
@@ -150,18 +150,10 @@ python model_creation/step_07_train_evaluate.py --outcome any_aki --branch windo
 *   **Branches**: `non_windowed` (Full Case), `windowed` (Segmented).
 *   **Feature Sets**: `preop_only`, `all_waveforms`, `preop_and_all_waveforms`, `pleth_only`, `ecg_only`, etc.
 
-### Step 8: Prediction Generation
-**File**: `model_creation/step_08_generate_predictions.py`
-Decouples prediction from training to facilitate consistent post-hoc analysis.
-*   **Function**: Loads trained models and generates predictions for the test set.
-*   **Output**: Saves `predictions.csv` containing `y_true`, `y_pred_proba`, `caseid`, and metadata.
-```bash
-python model_creation/step_08_generate_predictions.py
-```
-
-### Step 9: Post-hoc Analysis & Visualization
+### Step 8: Post-hoc Analysis & Visualization
 **File**: `results_recreation/results_analysis.py`
-Generates publication-ready tables and figures with rigorous statistical methods.
+Generates publication-ready tables and figures for both the **Primary Pipeline** (Catch22/XGBoost) and the **Experimental Pipeline** (Aeon/Multirocket).
+*   **Unified Reporting**: Automatically detects and aggregates results from both pipelines into a single report.
 *   **Global Calibration**: Applies Logistic Regression calibration to raw probabilities to ensure accurate risk estimates while preserving ranking.
 *   **Constrained Thresholding**: Selects optimal thresholds maximizing F2-score with a minimum specificity constraint (0.6) to ensure balanced performance.
 *   **Bootstrapping**: Calculates 95% Confidence Intervals using 1000 bootstrap iterations (parallelized).
@@ -221,11 +213,10 @@ jupyter notebook notebooks/04_hpo_xgboost.ipynb
 *   `model_creation/`: **(New)** Modular modeling pipeline.
     *   `utils.py`: Shared logic for data loading and preprocessing.
     *   `run_hpo.py`: Hyperparameter optimization script.
-    *   `train_evaluate.py`: Model training and evaluation script.
+    *   `train_evaluate.py`: Model training and evaluation script (consolidated).
 *   `model_creation_aeon/`: **(New)** Experimental Aeon pipeline.
     *   `classifiers.py`: Custom `FusedClassifier`, `RocketFused`, and `FreshPrinceFused` classes implementing early fusion.
     *   `step_06_aeon_train.py`: CLI-driven script for training Aeon models.
-    *   `step_07_aeon_bootstrap.py`: Post-hoc analysis script (Bootstrap + Calibration).
 *   `notebooks/`: Jupyter notebooks.
     *   `03_tabular_data_prep.ipynb`: Legacy data transformation + preoperative data extraction notebook.
     *   `04_hpo_xgboost.ipynb`: Legacy modeling notebook.
@@ -234,7 +225,7 @@ jupyter notebook notebooks/04_hpo_xgboost.ipynb
 
 ## 🧪 Experimental Pipeline: Aeon (Time Series Classification)
 
-> **⚠️ WARNING**: This pipeline is currently **UNTESTED** and operates separately from the main Catch22/XGBoost pipeline. Use with caution.
+> **Note**: This pipeline operates separately from the main Catch22/XGBoost pipeline.
 
 This branch implements an end-to-end Deep Learning/State-of-the-Art Time Series Classification pipeline using the **Aeon** library. It bypasses manual feature engineering (Catch22) in favor of direct waveform processing and fusion.
 
@@ -252,9 +243,9 @@ This branch implements an end-to-end Deep Learning/State-of-the-Art Time Series 
 | :--- | :--- | :--- |
 | **Export** | `data_preparation/step_02_aeon_export.py` | Loads waveforms, resamples to `L=8000` (fixed length), exports to `.npz`. <br> **Args**: `--limit` (debug) |
 | **Preop Prep** | `data_preparation/step_04_aeon_prep.py` | Prepares tabular data: Median imputation + Missingness Indicators of preop features. |
-| **Training** | `model_creation_aeon/step_06_aeon_train.py` | Trains separate or fused models. <br> **Models**: `multirocket` (default `n_kernels=10000`), `minirocket`, `freshprince`. <br> **Fusion**: Concatenates preop features with Rocket embeddings. |
+| **Training** | `model_creation_aeon/step_06_aeon_train.py` | Trains separate or fused models. <br> **Models**: `multirocket` (default `n_kernels=10000`), `minirocket`, `freshprince`. <br> **HPO**: Optuna optimization (100 trials) for linear head (`C`, `class_weight`) maximizing AUPRC. <br> **Fusion**: Concatenates preop features with Rocket embeddings. <br> **Outputs**: Saves `predictions.csv` for unified analysis. |
 | **Reference** | `model_creation_aeon/classifiers.py` | Contains `RocketFused` and `FreshPrinceFused` class definitions. |
-| **Analysis** | `model_creation_aeon/step_07_aeon_bootstrap.py` | 1000-fold bootstrapping, Platt Scaling calibration, Optimal F2 thresholding. |
+| **Analysis** | `results_recreation/results_analysis.py` | Unified 1000-fold bootstrapping and report generation for both pipelines. |
 
 ### Technical Specifications
 *   **Library**: `aeon` (Sktime fork), `tsfresh`.
@@ -269,7 +260,15 @@ This branch implements an end-to-end Deep Learning/State-of-the-Art Time Series 
 *   **Aeon v1.1.0 Compatibility**:
     *   The pipeline explicitly supports `aeon >= 1.1.0`. `MultiRocket` and `MiniRocket` are imported from `aeon.transformations.collection.convolution_based`.
     *   The correct parameter for kernel count is `n_kernels` (not `num_kernels`).
-    *   Estimators must be passed as instantiated Objects (e.g., `LogisticRegression()`), not strings.
+    *   Estimators must be passed as instantiated Objects
+    *   **Head**: A **Logistic Regression** classifier is trained on the fused, standardized feature set.
+    *   **Optimization (HPO)**: We optimize the linear head using **Optuna** with 5-fold stratified cross-validation on the training set.
+        *   **Objective**: Maximize **AUPRC**.
+        *   **Search Space**:
+            *   Regularization Strength (`C`): Log-uniform distribution [1e-3, 10.0].
+            *   Class Weight (`class_weight`): None vs. 'balanced'.
+        *   **Scaling**: A `StandardScaler` is fitted within each CV fold to prevent data leakage.
+        *   **Trials**: 100 trials.
 *   **Class Balance in Testing**:
     *   When running with `--limit` (e.g., smoke testing), the export script enforces a balanced selection of positive and negative cases. This is critical because `LogisticRegression` will crash if the training fold contains only a single class.
 *   **Performance**:

@@ -62,13 +62,13 @@ for outcome in "${OUTCOMES[@]}"; do
             fi
 
             # 2. Run Training & Evaluation
-            echo "  > Starting Training & Evaluation..." | tee -a "$LOG_FILE"
-            if python model_creation/step_07_train_evaluate.py --outcome "$outcome" --branch "$branch" --feature_set "$feature_set" 2>&1 | tee -a "$LOG_FILE"; then
-                 echo "  > Training Complete." | tee -a "$LOG_FILE"
-            else
-                 echo "  > Training FAILED." | tee -a "$LOG_FILE"
-            fi
-
+            echo "  > Starting Training & Evaluation..."        # Step 7: Train and Evaluate (includes prediction generation)
+        python3 model_creation/step_07_train_evaluate.py \
+            --outcome "$outcome" \
+            --branch "$branch" \
+            --feature_set "$feature_set" \
+            $SMOKE_TEST_FLAG
+            
         done
     done
 done

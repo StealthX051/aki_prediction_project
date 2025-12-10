@@ -11,8 +11,31 @@ import json
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.append(str(PROJECT_ROOT))
 
+# Imports for HPO
+import optuna
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import StratifiedKFold
+from sklearn.metrics import average_precision_score
+from sklearn.preprocessing import StandardScaler
+from aeon.transformations.collection.convolution_based import MiniRocket, MultiRocket
+
 from data_preparation.inputs import AEON_OUT_DIR, OUTCOME
-from model_creation_aeon.classifiers import RocketFused, FreshPrinceFused
+from model_creation_aeon.classifiers import FreshPrinceFused # Keep FreshPrince as is
+
+# Outcome Mapping (Friendly Name -> Column Name)
+OUTCOME_MAPPING = {
+    'any_aki': 'aki_label',
+    'severe_aki': 'y_severe_aki',
+    'mortality': 'y_inhosp_mortality',
+    'extended_los': 'y_prolonged_los_postop',
+    'icu_admission': 'y_icu_admit',
+    # Fallback for direct column usage or if already mapped
+    'aki_label': 'aki_label',
+    'y_severe_aki': 'y_severe_aki',
+    'y_inhosp_mortality': 'y_inhosp_mortality',
+    'y_prolonged_los_postop': 'y_prolonged_los_postop',
+    'y_icu_admit': 'y_icu_admit'
+}
 
 def load_aeon_data(outcome_name, channels, include_preop):
     """
@@ -22,8 +45,6 @@ def load_aeon_data(outcome_name, channels, include_preop):
     logging.info(f"Loading data from {AEON_OUT_DIR}...")
     
     # 1. Load Waveform Data (NPZ usually)
-    # We used 'numpy3d_npz' format in aeon_io.py -> 'X_nonwindowed.npz'
-    # Wait, we only made non-windowed 8000 len in step_02_aeon_export.
     npz_path = Path(AEON_OUT_DIR) / 'X_nonwindowed.npz'
     if not npz_path.exists():
         raise FileNotFoundError(f"Waveform data not found at {npz_path}")
@@ -60,15 +81,8 @@ def load_aeon_data(outcome_name, channels, include_preop):
     
     X_wave = X_all[:, target_indices, :]
 
-    # 3. Load Labels (y_nonwindowed.csv)
-    y_path = Path(AEON_OUT_DIR) / 'y_nonwindowed.csv'
-    y_df = pd.read_csv(y_path)
-    
-    # Align caseids just in case (though npz and csv should match order if generated together)
-    # Better to create a dataframe mapping to split_group?
-    # We need split_group. Where is it?
-    # step_02_aeon_export didn't save split_group in y_nonwindowed.csv, only outcome.
-    # However, step_04_aeon_prep.py SAVES split_group in 'aki_preop_aeon.csv'.
+    # 3. Load Labels (y_nonwindowed.csv) is typically redundant if we merge with preop
+    # logic handled below.
     
     # 4. Load Preop (contains split_group) to align splits
     preop_path = Path(AEON_OUT_DIR) / 'aki_preop_aeon.csv'
@@ -76,33 +90,24 @@ def load_aeon_data(outcome_name, channels, include_preop):
         raise FileNotFoundError(f"Preop data not found at {preop_path}. Run step_04.")
     
     preop_df = pd.read_csv(preop_path)
-    # preop_df has 'caseid', 'split_group', 'outcome', features...
     
     # Merge to align X_wave with preop
     # X_wave is numpy array aligned with 'caseids' variable.
-    # Let's create a DataFrame for mapping
     wave_map = pd.DataFrame({'caseid': caseids, 'idx': range(len(caseids))})
     
     # Master DF: Preop (has splits) + Wave Map
-    # We treat preop_df as the "cohort with valid preop features"
     full_df = preop_df.merge(wave_map, on='caseid', how='inner')
     
-    if len(full_df) < len(preop_df):
-        logging.warning("Some cases in preop data missing from waveform export.")
-    if len(full_df) < len(caseids):
-        logging.warning("Some cases in waveform export missing from preop data.")
-
-    # Sort to ensure alignment if convenient, or just use indices
+    # Sort to ensure alignment
     X_wave_aligned = X_wave[full_df['idx'].values]
     
     # Preop Features
     if include_preop:
-        meta_cols = ['caseid', 'split_group', 'idx'] + list(OUTCOME) if isinstance(OUTCOME, str) else [OUTCOME] # OUTCOME might be str
-        # Safely determine non-feature cols.
-        # OUTCOME is typically 'aki_label' string.
-        # step_04 saved: caseid, outcome, split_group, other outcomes...
-        # Look at preop_df columns
-        ignore = ['caseid', 'split_group', 'idx', OUTCOME, 'y_severe_aki', 'y_inhosp_mortality', 'y_icu_admit', 'y_prolonged_los_postop']
+        # Determine actual column names to exclude
+        mapped_outcome = OUTCOME_MAPPING.get(outcome_name, outcome_name)
+        
+        # Safe exclusion list
+        ignore = ['caseid', 'split_group', 'idx', mapped_outcome] + list(OUTCOME_MAPPING.values())
         feat_cols = [c for c in preop_df.columns if c not in ignore and c in full_df.columns]
         X_preop_aligned = full_df[feat_cols].values
         logging.info(f"Using {len(feat_cols)} preop features.")
@@ -110,10 +115,12 @@ def load_aeon_data(outcome_name, channels, include_preop):
         X_preop_aligned = None
         logging.info("Preop features excluded.")
 
-    y_aligned = full_df[OUTCOME if isinstance(OUTCOME, str) else OUTCOME[0]].values # Logic check
-    if isinstance(OUTCOME, dict): # inputs.py defines OUTCOME as string 'aki_label'?
-        # inputs.py says: OUTCOME = 'aki_label'
-        pass
+    # Resolve Outcome Column
+    target_col = OUTCOME_MAPPING.get(outcome_name, outcome_name)
+    if target_col not in full_df.columns:
+        raise KeyError(f"Target column '{target_col}' not found in data (mapped from '{outcome_name}').")
+
+    y_aligned = full_df[target_col].values
 
     # 5. Split
     train_mask = full_df['split_group'] == 'train'
@@ -137,14 +144,87 @@ def load_aeon_data(outcome_name, channels, include_preop):
     return (X_wave_train, X_preop_train, y_train, 
             X_wave_test, X_preop_test, y_test, caseids_test, full_df.loc[test_mask])
 
+def optimize_aeon_model(X_wave_tr, X_preop_tr, y_tr, model_type, n_trials=100, n_jobs=-1):
+    """
+    Runs Optuna HPO for generic Aeon models (MiniRocket/MultiRocket).
+    1. Precompute Rocket features.
+    2. Optimize Linear Head (LogisticRegression).
+    """
+    
+    logging.info(f"Starting HPO for {model_type}...")
+    
+    # 1. Transform Waveforms Once
+    if model_type == 'minirocket':
+        transformer = MiniRocket(n_kernels=10000, n_jobs=n_jobs, random_state=42)
+    elif model_type == 'multirocket':
+        transformer = MultiRocket(n_kernels=10000, n_jobs=n_jobs, random_state=42)
+    else:
+        raise ValueError(f"HPO not implemented for {model_type}")
+        
+    logging.info(f"Transforming training data with {model_type}...")
+    X_rocket_tr = transformer.fit_transform(X_wave_tr)
+    logging.info(f"Transformer output shape: {X_rocket_tr.shape}")
+    
+    # 2. Define Objective
+    def objective(trial):
+        # Hyperparameters
+        C = trial.suggest_float("C", 1e-3, 10.0, log=True)
+        class_weight = trial.suggest_categorical("class_weight", [None, "balanced"])
+        
+        kf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+        auprcs = []
+        
+        for train_idx, val_idx in kf.split(X_rocket_tr, y_tr):
+            # Split
+            X_r_train, X_r_val = X_rocket_tr[train_idx], X_rocket_tr[val_idx]
+            y_train_fold, y_val_fold = y_tr[train_idx], y_tr[val_idx]
+            
+            # Fuse Preop (if exists)
+            if X_preop_tr is not None:
+                X_p_train, X_p_val = X_preop_tr[train_idx], X_preop_tr[val_idx]
+                X_train_fold = np.hstack([X_r_train, X_p_train])
+                X_val_fold = np.hstack([X_r_val, X_p_val])
+            else:
+                X_train_fold = X_r_train
+                X_val_fold = X_r_val
+            
+            # Scale (StandardScaler fitted on fold training data)
+            scaler = StandardScaler()
+            X_train_scaled = scaler.fit_transform(X_train_fold)
+            X_val_scaled = scaler.transform(X_val_fold)
+            
+            # Train Logistic Regression
+            clf = LogisticRegression(
+                C=C, 
+                class_weight=class_weight,
+                solver='lbfgs', 
+                max_iter=1000,
+                n_jobs=-1 # Use all cores since trials are sequential
+            )
+            clf.fit(X_train_scaled, y_train_fold)
+            
+            # Predict
+            probs = clf.predict_proba(X_val_scaled)[:, 1]
+            ap = average_precision_score(y_val_fold, probs)
+            auprcs.append(ap)
+            
+        return np.mean(auprcs)
+
+    # 3. Optimize
+    study = optuna.create_study(direction="maximize")
+    study.optimize(objective, n_trials=n_trials, n_jobs=1) # trials sequential
+    
+    logging.info(f"Best Trial: {study.best_trial.value} | Params: {study.best_params}")
+    return study.best_params, transformer, X_rocket_tr
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", type=str, required=True, choices=['multirocket', 'minirocket', 'freshprince'])
     parser.add_argument("--channels", type=str, nargs='+', default=['all'], help="List of channels or 'all'")
     parser.add_argument("--include_preop", action='store_true')
-    parser.add_argument("--outcome", type=str, default='aki_label')
-    parser.add_argument("--n_kernels", type=int, default=10000)
+    parser.add_argument("--outcome", type=str, default='any_aki')
     parser.add_argument("--limit", type=int, help="Limit number of train/test samples for debugging")
+    parser.add_argument("--n_trials", type=int, default=100, help="Number of HPO trials")
     parser.add_argument("--results_dir", type=str, default=str(PROJECT_ROOT / 'results' / 'aeon'), help="Base results directory")
     args = parser.parse_args()
     
@@ -175,54 +255,73 @@ def main():
     
     logging.info(f"Train size: {len(y_tr)}, Test size: {len(y_te)}")
     
-    logging.info(f"Train size: {len(y_tr)}, Test size: {len(y_te)}")
+    # 2. HPO & Training
+    model = None
+    best_params = {}
     
-    # 3b. Initialize Model
-    # Use actual sklearn objects for head estimators to be compatible with Aeon/Sklearn cloning
-    from sklearn.linear_model import LogisticRegressionCV
-    linear_head = LogisticRegressionCV(
-        Cs=10, penalty='l2', solver='lbfgs', max_iter=2000, n_jobs=-1, random_state=42, cv=5
-    )
-    
-    logging.info(f"Initializing {args.model} model...")
-    if args.model == 'multirocket':
-        clf = RocketFused(
-            variant='multi', 
-            n_kernels=args.n_kernels, 
-            n_jobs=-1, 
-            estimator=linear_head
-        )
-    elif args.model == 'minirocket':
-        # MiniRocket is smaller/faster
-        clf = RocketFused(
-            variant='mini', 
-            n_kernels=args.n_kernels, 
-            n_jobs=-1, 
-            estimator=linear_head
-        )
-    elif args.model == 'freshprince':
-        clf = FreshPrinceFused(n_estimators=200, n_jobs=-1)
-        # raise ValueError(f"Unknown model: {args.model}") # Removed buggy line
-    else:
-        raise ValueError(f"Unknown model: {args.model}")
+    if args.model == 'freshprince':
+        # FreshPrince HPO is too expensive; use default/existing wrapper
+        logging.info("Using FreshPrinceFused (No HPO Loop)...")
+        model = FreshPrinceFused(n_estimators=200, n_jobs=-1)
+        model.fit(Xw_tr, Xp_tr, y_tr)
         
-    # 3. Train
-    logging.info(f"Starting training on {len(y_tr)} samples...")
-    clf.fit(Xw_tr, Xp_tr, y_tr)
-    logging.info("Training complete.")
-    
-    # 4. Predict (Test Set)
-    logging.info(f"Predicting on {len(y_te)} test samples...")
-    if hasattr(clf, 'predict_proba'):
-        # Get probs for positive class
-        probs = clf.predict_proba(Xw_te, Xp_te)[:, 1]
+        # Predict
+        probs = model.predict_proba(Xw_te, Xp_te)[:, 1]
+        
     else:
-        # Fallback if no predict_proba (shouldn't happen with our wrappers)
-        probs = clf.predict(Xw_te, Xp_te)
-    logging.info("Prediction complete.")
-    
-    # 5. Save Predictions (Standard Format for Step 07)
-    # Format: caseid, y_true, y_pred_proba, split_group, model_name, feature_set, outcome...
+        # MiniRocket / MultiRocket with Optuna HPO
+        best_params, transformer, X_rocket_tr = optimize_aeon_model(
+            Xw_tr, Xp_tr, y_tr, 
+            model_type=args.model, 
+            n_trials=args.n_trials
+        )
+        
+        # Refit Final Model on Full Train
+        logging.info("Refitting final model with best params on full training set...")
+        
+        # 1. Transform Train (Already done, using returned X_rocket_tr)
+        # X_rocket_tr = transformer.transform(Xw_tr) # Removed redundant transform
+        
+        # 2. Fuse
+        if Xp_tr is not None:
+            X_combined_tr = np.hstack([X_rocket_tr, np.array(Xp_tr, dtype=np.float32)])
+        else:
+            X_combined_tr = X_rocket_tr
+            
+        # 3. Scale
+        scaler = StandardScaler()
+        X_scaled_tr = scaler.fit_transform(X_combined_tr)
+        
+        # 4. Train Classifier
+        final_clf = LogisticRegression(
+            C=best_params['C'],
+            class_weight=best_params['class_weight'],
+            solver='lbfgs',
+            max_iter=1000,
+            n_jobs=-1
+        )
+        final_clf.fit(X_scaled_tr, y_tr)
+        
+        # Predictions on Test
+        logging.info("Predicting on Test Set...")
+        X_rocket_te = transformer.transform(Xw_te)
+        
+        if Xp_te is not None:
+             X_combined_te = np.hstack([X_rocket_te, np.array(Xp_te, dtype=np.float32)])
+        else:
+             X_combined_te = X_rocket_te
+             
+        X_scaled_te = scaler.transform(X_combined_te)
+        probs = final_clf.predict_proba(X_scaled_te)[:, 1]
+        
+        # Save Model Components manually since we aren't using the FusedClassifier wrapper
+        # We can construct a pipeline or save simple dict
+        joblib.dump(transformer, out_dir / 'transformer.pkl')
+        joblib.dump(scaler, out_dir / 'scaler.pkl')
+        joblib.dump(final_clf, out_dir / 'classifier.pkl')
+        model = "Optuna_Pipeline" # Sentinel
+
+    # 3. Save Predictions
     logging.info(f"Saving artifacts to {out_dir}...")
     pred_df = pd.DataFrame({
         'caseid': caseids_te,
@@ -239,15 +338,13 @@ def main():
     pred_df.to_csv(pred_path, index=False)
     logging.info(f"Saved predictions to {pred_path}")
     
-    # 6. Save Model
-    # Joblib pickle
-    # Note: Rocket models can be large
-    joblib.dump(clf, out_dir / 'model.pkl')
-    logging.info("Saved model.")
-    
-    # 7. Save Config
+    # Save Config/Best Params
+    config = vars(args)
+    config.update(best_params)
     with open(out_dir / 'config.json', 'w') as f:
-        json.dump(vars(args), f, indent=4)
+        json.dump(config, f, indent=4)
+        
+    logging.info("Experiment Complete.")
 
 if __name__ == "__main__":
     main()

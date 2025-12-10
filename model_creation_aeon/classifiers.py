@@ -91,7 +91,7 @@ class RocketFused(FusedClassifier):
         
         if self.estimator is None:
              # Default to RidgeClassifierCV if not provided
-             self.classifier = RidgeClassifierCV(alphas=np.logspace(-3, 3, 10))
+             self.classifier = RidgeClassifierCV(alphas=np.logspace(-3, 3, 10), class_weight='balanced')
         else:
              # Clone would be better practice but direct assignment works for this script
              from sklearn.base import clone

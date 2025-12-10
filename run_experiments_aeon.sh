@@ -6,7 +6,7 @@
 PYTHON_EXEC="/home/exouser/.conda/envs/aki_prediction_project/bin/python"
 
 # Outcomes
-OUTCOMES=("aki_label" "y_severe_aki" "y_inhosp_mortality" "y_icu_admit" "y_prolonged_los_postop")
+OUTCOMES=("any_aki" "severe_aki" "mortality" "icu_admission" "extended_los")
 
 # Models
 # Start with fast ones for debugging, then heavy ones
@@ -82,24 +82,7 @@ for outcome in "${OUTCOMES[@]}"; do
                     echo "  > Training Complete." | tee -a "$LOG_FILE"
                     
                     # 2. Bootstrap & Calibrate
-                    # Reconstruct Exp Name logic from step_06
-                    # step_06 uses: sorted channels or just input order? 
-                    # step_06 logic: chan_str = "all" if args.channels == ['all'] else "_".join(args.channels)
-                    # Note: args.channels preserves order from CLI.
-                    # Our bash expansion "$channels" passes them in the order defined in FEATURE_SETS string.
-                    # So "SNUADC_PLETH Primus_CO2" -> args.channels=['SNUADC_PLETH', 'Primus_CO2'] -> joined with '_'
-                    
-                    # So we need to match that joining logic here to find the folder.
-                    chan_str="${channels// /_}" 
-                    exp_name="${model}_${chan_str}_${PREOP_TAG}_${outcome}"
-                    pred_file="results/aeon/models/$model/$exp_name/predictions.csv"
-                    
-                    echo "  > Starting Bootstrap & Calibration..." | tee -a "$LOG_FILE"
-                    if $PYTHON_EXEC -m model_creation_aeon.step_07_aeon_bootstrap "$pred_file" --calibrate 2>&1 | tee -a "$LOG_FILE"; then
-                         echo "  > Bootstrap Complete." | tee -a "$LOG_FILE"
-                    else
-                         echo "  > Bootstrap FAILED (Check logs)." | tee -a "$LOG_FILE"
-                    fi
+                    # Note: Step 07 (Bootstrap) is removed. Results are handled by results_analysis.py
                     
                 else
                     echo "  > Training FAILED. Skipping bootstrap." | tee -a "$LOG_FILE"

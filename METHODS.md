@@ -107,13 +107,13 @@ Two feature extraction strategies were employed:
 1.  **Full-Case Features**: Features were extracted from the entire duration of the surgery (resampled to 10 Hz for computational efficiency).
 2.  **Windowed Features**: Waveforms were segmented into **10-second windows** with a **5-second overlap** (50% overlap). Catch24 features were calculated for each window. To generate a fixed-size input for the tabular model, these windowed features were aggregated across the entire case, calculating the **Mean**, **Standard Deviation**, **Minimum**, and **Maximum** for each of the 24 features.
 
-## Model Development
-We developed Gradient Boosted Decision Tree models using **XGBoost** (Extreme Gradient Boosting).
+### 3. Model Development
+Feature selection and hyperparameter optimization were performed using the training set.
 
-*   **Data Splitting**: The dataset was split into a training set (80%) and a hold-out test set (20%) using stratified sampling to maintain the prevalence of AKI in both sets. This split was performed prior to any preprocessing to ensure no data leakage.
-*   **Class Imbalance**: To address the class imbalance of AKI outcomes, we applied **inverse sample weighting** (`scale_pos_weight`) calculated as $\frac{\text{Negative Samples}}{\text{Positive Samples}}$.
-*   **Hyperparameter Optimization (HPO)**: We used **Optuna**, a Bayesian optimization framework, to tune hyperparameters (e.g., learning rate, max depth, subsample ratio). The optimization objective was to maximize the **Area Under the Precision-Recall Curve (AUPRC)** using **5-fold stratified cross-validation** on the training set. We ran 100 trials for each model configuration.
-*   **Final Model**: The final model was trained on the entire training set using the best hyperparameters found during HPO.
+*   **Algorithm**: XGBoost (Extreme Gradient Boosting).
+*   **Hyperparameter Optimization (HPO)**: Performed using Optuna with 5-fold stratified cross-validation on the training set to maximize the Area Under the Precision-Recall Curve (AUPRC).
+*   **Final Model Training**: The optimal hyperparameters identified were used to train the final model on the full training set.
+*   **Evaluation**: The final model was evaluated on the held-out test set. We generated 95% confidence intervals (CIs) for all performance metrics using 1000-fold bootstrapping of the test set predictions. Platt scaling was applied to calibrate predicted probabilities.
 
 ## Statistical Analysis
 Model performance was evaluated on the independent hold-out test set.
@@ -149,7 +149,14 @@ We implemented an **Early Fusion** architecture where waveform features and preo
     *   **Transform**: We utilized `MultiRocket` and `MiniRocket` (Aeon implementations) to extract features. `MultiRocket` applies **10,000** random convolutional kernels (dilated, padded) to the raw 3D input `(N, Channels, 8000)`.
     *   **Fusion**: The resulting feature map (approx. 50k features for MultiRocket) is concatenated with the processed preoperative vector (Median imputed).
     *   **Scaling**: A global `StandardScaler` is applied to the combined feature matrix to normalize scales between waveform embeddings and clinical variables.
-    *   **Head**: A **Logistic Regression** classifier with **internal cross-validation** (`LogisticRegressionCV`) is trained on the fused, standardized feature set. This automatically optimizes the regularization parameter (C) using 5-fold cross-validation on the training set, eliminating the need for external HPO. We chose Logistic Regression to ensure accurate probability calibration via sigmoid outputs.
+    *   **Head**: A **Logistic Regression** classifier is trained on the fused, standardized feature set.
+    *   **Optimization (HPO)**: We optimize the linear head using **Optuna** with 5-fold stratified cross-validation on the training set.
+        *   **Objective**: Maximize **AUPRC**.
+        *   **Search Space**:
+            *   Regularization Strength (`C`): Log-uniform distribution [1e-3, 10.0].
+            *   Class Weight (`class_weight`): None vs. 'balanced'.
+        *   **Scaling**: A `StandardScaler` is fitted within each CV fold to prevent data leakage.
+        *   **Trials**: 100 trials.
 *   **FreshPRINCE** (FreshPRince Is Not a Clustered Ensemble):
     *   **Transform**: Extracts comprehensive time-series features using **TSFresh** (relevant features selected via FDR control).
     *   **Head**: A **Rotation Forest** classifier (an ensemble of **200** PCA-based decision trees) is trained on the fused features.
@@ -159,11 +166,7 @@ The experimental pipeline relies on the **`aeon`** toolkit (v1.1.0+) for time se
 
 ### 4. Experimental Design and Evaluation
 The Aeon pipeline mirrors the rigorous design of the primary pipeline:
-*   **Outcomes**: We evaluate performance on the primary outcome (`aki_label`) and all secondary outcomes:
-    *   Severe AKI (`y_severe_aki`)
-    *   In-hospital Mortality (`y_inhosp_mortality`)
-    *   ICU Admission (`y_icu_admit`)
-    *   Prolonged Postoperative LOS (`y_prolonged_los_postop`)
+*   **Outcomes**: We train separate models for the primary outcome (`aki_label`) and each secondary outcome (`y_severe_aki`, `y_inhosp_mortality`, `y_icu_admit`, `y_prolonged_los_postop`). This ensures that the training labels correctly correspond to the intended prediction target.
 *   **Ablation Studies**: To quantify feature importance, we conduct systematic ablations:
     *   **Single Channel**: Performance of each waveform individually (ECG, PLETH, CO2, AWP).
     *   **Leave-One-Out**: Performance impact of removing a single waveform from the full set.

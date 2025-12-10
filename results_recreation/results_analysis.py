@@ -47,6 +47,9 @@ FEATURE_SET_MAPPING = {
     'preop_and_all_minus_co2': 'Preop + All (No CO2)',
     'preop_and_all_minus_ecg': 'Preop + All (No ECG)',
     'preop_and_all_minus_pleth': 'Preop + All (No Pleth)',
+    # Aeon / Multirocket Mappings
+    'all_fused': 'All Channels (Fused)',
+    'all_waveonly': 'All Channels (Waveform Only)',
 }
 
 NEURIPS_CSS = """
@@ -117,25 +120,49 @@ NEURIPS_CSS = """
 
 def load_all_predictions() -> pd.DataFrame:
     """
-    Crawls results/models to find all predictions.csv files and concatenates them.
+    Crawls results/models AND results/aeon/models to find and concat predictions.csv files.
     """
-    pred_files = list(RESULTS_DIR.glob('models/**/predictions.csv'))
-    if not pred_files:
-        print("No predictions.csv files found!")
-        return pd.DataFrame()
+    all_dfs = []
     
-    dfs = []
-    for f in pred_files:
-        try:
-            df = pd.read_csv(f)
-            dfs.append(df)
-        except Exception as e:
-            print(f"Error loading {f}: {e}")
-            
-    if not dfs:
+    # 1. Standard (Catch22) Models
+    try:
+        catch22_path = RESULTS_DIR / 'models'
+        if catch22_path.exists():
+            pred_files = list(catch22_path.glob('**/predictions.csv'))
+            print(f"Found {len(pred_files)} Catch22 prediction files.")
+            for f in pred_files:
+                try:
+                    df = pd.read_csv(f)
+                    all_dfs.append(df)
+                except Exception as e:
+                    print(f"Error loading {f}: {e}")
+        else:
+            print(f"Warning: {catch22_path} does not exist.")
+    except Exception as e:
+        print(f"Error searching standard models: {e}")
+
+    # 2. Aeon (Multirocket) Models
+    try:
+        aeon_path = RESULTS_DIR / 'aeon' / 'models'
+        if aeon_path.exists():
+            aeon_files = list(aeon_path.glob('**/predictions.csv'))
+            print(f"Found {len(aeon_files)} Aeon prediction files.")
+            for f in aeon_files:
+                try:
+                    df = pd.read_csv(f)
+                    all_dfs.append(df)
+                except Exception as e:
+                    print(f"Error loading {f}: {e}")
+        else:
+            print(f"Warning: {aeon_path} does not exist.")
+    except Exception as e:
+        print(f"Error searching Aeon models: {e}")
+
+    if not all_dfs:
+        print("No prediction files found in any location!")
         return pd.DataFrame()
         
-    full_df = pd.concat(dfs, ignore_index=True)
+    full_df = pd.concat(all_dfs, ignore_index=True)
     return full_df
 
 def calibrate_predictions(df: pd.DataFrame) -> pd.DataFrame:
@@ -146,7 +173,7 @@ def calibrate_predictions(df: pd.DataFrame) -> pd.DataFrame:
     print("Calibrating predictions...")
     calibrated_dfs = []
     
-    # Group by Model Configuration (Outcome, Branch, Feature Set)
+    groups = df.groupby(['outcome', 'branch', 'feature_set', 'model_name'])
     # We calibrate each model instance independently
     groups = df.groupby(['outcome', 'branch', 'feature_set', 'model_name'])
     
@@ -320,7 +347,7 @@ def generate_html_tables(metrics_df: pd.DataFrame):
     metrics_df['Feature Set'] = metrics_df['Feature Set'].map(FEATURE_SET_MAPPING).fillna(metrics_df['Feature Set'])
     
     # Group by Outcome and Branch
-    for (outcome, branch), group in metrics_df.groupby(['Outcome', 'Branch']):
+    for (outcome, branch, model_name), group in metrics_df.groupby(['Outcome', 'Branch', 'Model']):
         # Sort by AUROC Value (Hidden column)
         table_df = group.sort_values('AUROC_val', ascending=False)
         
@@ -400,7 +427,7 @@ def generate_html_tables(metrics_df: pd.DataFrame):
         # Center align all cells
         styler.set_properties(**{'text-align': 'center'})
                                
-        html_table = styler.to_html(table_id=f"results_{outcome}_{branch}", escape=False)
+        html_table = styler.to_html(table_id=f"results_{outcome}_{branch}_{model_name}", escape=False)
         
         # Construct Full HTML
         full_html = f"""
@@ -408,11 +435,11 @@ def generate_html_tables(metrics_df: pd.DataFrame):
         <html>
         <head>
             {NEURIPS_CSS}
-            <title>Results: {outcome} ({branch})</title>
+            <title>Results: {outcome} ({branch}) - {model_name}</title>
         </head>
         <body>
             <h1>Model Performance Analysis</h1>
-            <div class="subtitle">Outcome: {outcome} | Branch: {branch}</div>
+            <div class="subtitle">Outcome: {outcome} | Branch: {branch} | Model: {model_name}</div>
             
             {html_table}
             
@@ -424,7 +451,7 @@ def generate_html_tables(metrics_df: pd.DataFrame):
         """
         
         # Save
-        with open(TABLES_DIR / f'results_{outcome}_{branch}.html', 'w') as f:
+        with open(TABLES_DIR / f'results_{outcome}_{branch}_{model_name}.html', 'w') as f:
             f.write(full_html)
             
     print("Tables generated.")
@@ -449,7 +476,7 @@ def plot_curves(df: pd.DataFrame):
     plt.rcParams['legend.edgecolor'] = 'white'
     
     # Group by Outcome and Branch
-    for (outcome, branch), group in df.groupby(['outcome', 'branch']):
+    for (outcome, branch, model_name), group in df.groupby(['outcome', 'branch', 'model_name']):
         
         # 1. ROC Curve (Raw)
         plt.figure(figsize=(8, 6)) # Standard academic figure size
@@ -477,10 +504,10 @@ def plot_curves(df: pd.DataFrame):
         plt.plot([0, 1], [0, 1], 'k--', alpha=0.5, linewidth=1)
         plt.xlabel('False Positive Rate')
         plt.ylabel('True Positive Rate')
-        plt.title(f'ROC Curves - {outcome} ({branch})')
+        plt.title(f'ROC Curves - {outcome} ({branch}) - {model_name}')
         plt.legend(loc='lower right')
         plt.tight_layout()
-        plt.savefig(FIGURES_DIR / f'roc_{outcome}_{branch}.png', dpi=300)
+        plt.savefig(FIGURES_DIR / f'roc_{outcome}_{branch}_{model_name}.png', dpi=300)
         plt.close()
         
         # 2. PR Curve (Raw)
@@ -508,10 +535,10 @@ def plot_curves(df: pd.DataFrame):
             
         plt.xlabel('Recall')
         plt.ylabel('Precision')
-        plt.title(f'PR Curves - {outcome} ({branch})')
+        plt.title(f'PR Curves - {outcome} ({branch}) - {model_name}')
         plt.legend(loc='lower left')
         plt.tight_layout()
-        plt.savefig(FIGURES_DIR / f'pr_{outcome}_{branch}.png', dpi=300)
+        plt.savefig(FIGURES_DIR / f'pr_{outcome}_{branch}_{model_name}.png', dpi=300)
         plt.close()
         
         # 3. Calibration Curve
@@ -527,10 +554,10 @@ def plot_curves(df: pd.DataFrame):
         plt.plot([0, 1], [0, 1], 'k--', alpha=0.5, linewidth=1)
         plt.xlabel('Mean Predicted Probability')
         plt.ylabel('Fraction of Positives')
-        plt.title(f'Calibration Curves - {outcome} ({branch})')
+        plt.title(f'Calibration Curves - {outcome} ({branch}) - {model_name}')
         plt.legend(loc='best')
         plt.tight_layout()
-        plt.savefig(FIGURES_DIR / f'calibration_{outcome}_{branch}.png', dpi=300)
+        plt.savefig(FIGURES_DIR / f'calibration_{outcome}_{branch}_{model_name}.png', dpi=300)
         plt.close()
 
 def set_cell_background(cell, color_hex):
@@ -613,8 +640,8 @@ def generate_docx_report(metrics_df: pd.DataFrame):
     # Ensure mapping is applied (idempotent)
     metrics_df['Feature Set'] = metrics_df['Feature Set'].map(FEATURE_SET_MAPPING).fillna(metrics_df['Feature Set'])
     
-    for (outcome, branch), group in metrics_df.groupby(['Outcome', 'Branch']):
-        doc.add_heading(f'Outcome: {outcome} | Branch: {branch}', level=1)
+    for (outcome, branch, model_name), group in metrics_df.groupby(['Outcome', 'Branch', 'Model']):
+        doc.add_heading(f'Outcome: {outcome} | Branch: {branch} | Model: {model_name}', level=1)
         
         # Sort
         table_df = group.sort_values('AUROC_val', ascending=False)
@@ -670,7 +697,7 @@ def generate_pdf_report(metrics_df: pd.DataFrame):
     metrics_df['Feature Set'] = metrics_df['Feature Set'].map(FEATURE_SET_MAPPING).fillna(metrics_df['Feature Set'])
     
     with PdfPages(RESULTS_DIR / 'report.pdf') as pdf:
-        for (outcome, branch), group in metrics_df.groupby(['Outcome', 'Branch']):
+        for (outcome, branch, model_name), group in metrics_df.groupby(['Outcome', 'Branch', 'Model']):
             # Sort
             table_df = group.sort_values('AUROC_val', ascending=False)
             display_cols = ['Feature Set', 'AUROC', 'AUPRC', 'Brier Score', 'Sensitivity', 'Specificity', 'F1 Score']
@@ -698,7 +725,7 @@ def generate_pdf_report(metrics_df: pd.DataFrame):
             
             fig, ax = plt.subplots(figsize=(12, fig_height))
             ax.axis('off')
-            ax.set_title(f"Outcome: {outcome} | Branch: {branch}", fontsize=14, fontweight='bold', pad=20)
+            ax.set_title(f"Outcome: {outcome} | Branch: {branch} | Model: {model_name}", fontsize=14, fontweight='bold', pad=20)
             
             # Create Table
             table = ax.table(cellText=display_data, colLabels=display_cols, loc='center', cellLoc='center')
