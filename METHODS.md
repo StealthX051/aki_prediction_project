@@ -154,7 +154,7 @@ We implemented an **Early Fusion** architecture where waveform features and preo
         *   **Objective**: Maximize **AUPRC**.
         *   **Search Space**:
             *   Regularization Strength (`C`): Log-uniform distribution [1e-3, 10.0].
-            *   Class Weight (`class_weight`): None vs. 'balanced'.
+            *   Class Weight (`class_weight`): Fixed to 'balanced'.
         *   **Scaling**: A `StandardScaler` is fitted within each CV fold to prevent data leakage.
         *   **Trials**: 100 trials.
 *   **FreshPRINCE** (FreshPRince Is Not a Clustered Ensemble):

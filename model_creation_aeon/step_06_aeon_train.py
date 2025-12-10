@@ -169,7 +169,9 @@ def optimize_aeon_model(X_wave_tr, X_preop_tr, y_tr, model_type, n_trials=100, n
     def objective(trial):
         # Hyperparameters
         C = trial.suggest_float("C", 1e-3, 10.0, log=True)
-        class_weight = trial.suggest_categorical("class_weight", [None, "balanced"])
+        # class_weight = trial.suggest_categorical("class_weight", [None, "balanced"]) 
+        # User requested to fix class_weight to 'balanced'
+        class_weight = 'balanced'
         
         kf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
         auprcs = []
@@ -194,25 +196,30 @@ def optimize_aeon_model(X_wave_tr, X_preop_tr, y_tr, model_type, n_trials=100, n
             X_val_scaled = scaler.transform(X_val_fold)
             
             # Train Logistic Regression
-            clf = LogisticRegression(
-                C=C, 
-                class_weight=class_weight,
-                solver='lbfgs', 
-                max_iter=1000,
-                n_jobs=-1 # Use all cores since trials are sequential
-            )
-            clf.fit(X_train_scaled, y_train_fold)
-            
-            # Predict
-            probs = clf.predict_proba(X_val_scaled)[:, 1]
-            ap = average_precision_score(y_val_fold, probs)
-            auprcs.append(ap)
+            try:
+                clf = LogisticRegression(
+                    C=C, 
+                    class_weight=class_weight,
+                    solver='lbfgs', 
+                    max_iter=1000,
+                    n_jobs=1 # Use 1 core since trials are parallel
+                )
+                clf.fit(X_train_scaled, y_train_fold)
+                
+                # Predict
+                probs = clf.predict_proba(X_val_scaled)[:, 1]
+                ap = average_precision_score(y_val_fold, probs)
+                auprcs.append(ap)
+            except ValueError as e:
+                # This catches cases where a fold has only 1 class
+                logging.warning(f"Fold failed: {e}")
+                auprcs.append(0.0) # Penalty for failure
             
         return np.mean(auprcs)
 
     # 3. Optimize
     study = optuna.create_study(direction="maximize")
-    study.optimize(objective, n_trials=n_trials, n_jobs=1) # trials sequential
+    study.optimize(objective, n_trials=n_trials, n_jobs=n_jobs) # trials parallel
     
     logging.info(f"Best Trial: {study.best_trial.value} | Params: {study.best_params}")
     return study.best_params, transformer, X_rocket_tr
@@ -295,7 +302,7 @@ def main():
         # 4. Train Classifier
         final_clf = LogisticRegression(
             C=best_params['C'],
-            class_weight=best_params['class_weight'],
+            class_weight='balanced', # Fixed to balanced
             solver='lbfgs',
             max_iter=1000,
             n_jobs=-1

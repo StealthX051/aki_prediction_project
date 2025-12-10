@@ -243,7 +243,7 @@ This branch implements an end-to-end Deep Learning/State-of-the-Art Time Series 
 | :--- | :--- | :--- |
 | **Export** | `data_preparation/step_02_aeon_export.py` | Loads waveforms, resamples to `L=8000` (fixed length), exports to `.npz`. <br> **Args**: `--limit` (debug) |
 | **Preop Prep** | `data_preparation/step_04_aeon_prep.py` | Prepares tabular data: Median imputation + Missingness Indicators of preop features. |
-| **Training** | `model_creation_aeon/step_06_aeon_train.py` | Trains separate or fused models. <br> **Models**: `multirocket` (default `n_kernels=10000`), `minirocket`, `freshprince`. <br> **HPO**: Optuna optimization (100 trials) for linear head (`C`, `class_weight`) maximizing AUPRC. <br> **Fusion**: Concatenates preop features with Rocket embeddings. <br> **Outputs**: Saves `predictions.csv` for unified analysis. |
+| **Training** | `model_creation_aeon/step_06_aeon_train.py` | Trains separate or fused models. <br> **Models**: `multirocket` (default `n_kernels=10000`), `minirocket`, `freshprince`. <br> **HPO**: Optuna optimization (100 trials) for linear head (`C`) maximizing AUPRC. Class weight is fixed to 'balanced'. <br> **Fusion**: Concatenates preop features with Rocket embeddings. <br> **Outputs**: Saves `predictions.csv` for unified analysis. |
 | **Reference** | `model_creation_aeon/classifiers.py` | Contains `RocketFused` and `FreshPrinceFused` class definitions. |
 | **Analysis** | `results_recreation/results_analysis.py` | Unified 1000-fold bootstrapping and report generation for both pipelines. |
 
@@ -266,13 +266,13 @@ This branch implements an end-to-end Deep Learning/State-of-the-Art Time Series 
         *   **Objective**: Maximize **AUPRC**.
         *   **Search Space**:
             *   Regularization Strength (`C`): Log-uniform distribution [1e-3, 10.0].
-            *   Class Weight (`class_weight`): None vs. 'balanced'.
+            *   Class Weight (`class_weight`): Fixed to 'balanced'.
         *   **Scaling**: A `StandardScaler` is fitted within each CV fold to prevent data leakage.
         *   **Trials**: 100 trials.
 *   **Class Balance in Testing**:
     *   When running with `--limit` (e.g., smoke testing), the export script enforces a balanced selection of positive and negative cases. This is critical because `LogisticRegression` will crash if the training fold contains only a single class.
 *   **Performance**:
-    *   Crucial: Ensure `n_jobs=-1` is passed to both the Aeon transformer (internal C++ threading) and the Scikit-learn head classifier.
+    *   Crucial: Ensure `n_jobs=-1` is passed to the Aeon transformer. For HPO, we utilize **parallel Optuna trials** (`n_jobs=-1`) with **sequential** scikit-learn fits (`n_jobs=1`) to maximize CPU utilization, as `LogisticRegression` parallelization was found to be inefficient for this workload.
 
 ### Execution
 Run the full experimental suite:
