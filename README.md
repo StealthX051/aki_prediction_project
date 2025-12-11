@@ -272,7 +272,10 @@ This branch implements an end-to-end Deep Learning/State-of-the-Art Time Series 
 *   **Class Balance in Testing**:
     *   When running with `--limit` (e.g., smoke testing), the export script enforces a balanced selection of positive and negative cases. This is critical because `LogisticRegression` will crash if the training fold contains only a single class.
 *   **Performance**:
-    *   Crucial: Ensure `n_jobs=-1` is passed to the Aeon transformer. For HPO, we utilize **parallel Optuna trials** (`n_jobs=-1`) with **sequential** scikit-learn fits (`n_jobs=1`) to maximize CPU utilization, as `LogisticRegression` parallelization was found to be inefficient for this workload.
+    *   Crucial: Ensure `n_jobs=-1` is passed to the Aeon transformer. For HPO, we utilize **parallel Optuna trials** (`n_jobs=-1`) with **sequential** scikit-learn fits (`n_jobs=1`).
+    *   **Threading**: We explicitly set `OMP_NUM_THREADS=1` (and related BLAS variables) to prevent thread contention. This ensures that the 32 parallel trials (processes) each use a single core efficiently, rather than each trial attempting to spawn multiple threads.
+*   **Convergence**:
+    *   **Max Iterations**: The default `lbfgs` solver in `LogisticRegression` may fail to converge on the high-dimensional MiniRocket features (10k+). We increased `max_iter` to **5000** to resolve `ConvergenceWarning`s.
 
 ### Execution
 Run the full experimental suite:

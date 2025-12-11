@@ -1,4 +1,12 @@
 import argparse
+import os
+
+# Set thread limits BEFORE other imports to avoid BLAS contention
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
+os.environ["NUMEXPR_NUM_THREADS"] = "1"
 import sys
 import logging
 import pandas as pd
@@ -201,7 +209,7 @@ def optimize_aeon_model(X_wave_tr, X_preop_tr, y_tr, model_type, n_trials=100, n
                     C=C, 
                     class_weight=class_weight,
                     solver='lbfgs', 
-                    max_iter=1000,
+                    max_iter=5000,
                     n_jobs=1 # Use 1 core since trials are parallel
                 )
                 clf.fit(X_train_scaled, y_train_fold)
@@ -304,7 +312,7 @@ def main():
             C=best_params['C'],
             class_weight='balanced', # Fixed to balanced
             solver='lbfgs',
-            max_iter=1000,
+            max_iter=5000,
             n_jobs=-1
         )
         final_clf.fit(X_scaled_tr, y_tr)

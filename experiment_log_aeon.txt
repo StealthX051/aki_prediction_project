@@ -10443,3 +10443,572 @@ Running: Model=minirocket | Branch=Aeon | Channels=Primus_AWP | Type=waveonly | 
 [I 2025-12-10 08:45:16,723] Trial 57 finished with value: 0.13708124362009902 and parameters: {'C': 0.0014306648735562192, 'class_weight': 'balanced'}. Best is trial 54 with value: 0.15489585750838616.
 [I 2025-12-10 08:45:31,135] Trial 58 finished with value: 0.14966252206818004 and parameters: {'C': 0.002881620270329587, 'class_weight': None}. Best is trial 54 with value: 0.15489585750838616.
 [I 2025-12-10 08:45:44,305] Trial 59 finished with value: 0.15313674638632804 and parameters: {'C': 0.0010518336343493646, 'class_weight': None}. Best is trial 54 with value: 0.15489585750838616.
+Starting Aeon Experiments...
+----------------------------------------------------------------
+Running: Model=minirocket | Branch=Aeon | Channels=all | Type=fused | Outcome=any_aki
+----------------------------------------------------------------
+  > Starting Training...
+  Command: /home/exouser/.conda/envs/aki_prediction_project/bin/python -m model_creation_aeon.step_06_aeon_train --model minirocket --outcome any_aki --channels all --include_preop
+2025-12-10 09:12:21,598 - Starting Experiment: minirocket_all_fused_any_aki
+2025-12-10 09:12:21,599 - Loading data from outputs/aeon...
+2025-12-10 09:12:31,914 - Using ALL channels: ['SNUADC/PLETH' 'SNUADC/ECG_II' 'Primus/CO2' 'Primus/AWP']
+2025-12-10 09:12:33,030 - Using 115 preop features.
+2025-12-10 09:12:34,501 - Train size: 2717, Test size: 682
+2025-12-10 09:12:34,502 - Starting HPO for minirocket...
+2025-12-10 09:12:34,502 - Transforming training data with minirocket...
+2025-12-10 09:13:44,166 - Transformer output shape: (2717, 9996)
+[I 2025-12-10 09:13:44,168] A new study created in memory with name: no-name-e4c13f76-91ac-4ef7-ad2f-17e28098e84b
+[I 2025-12-10 09:57:11,507] Trial 11 finished with value: 0.40642489285290456 and parameters: {'C': 0.0013162690935165468}. Best is trial 11 with value: 0.40642489285290456.
+[I 2025-12-10 10:02:47,935] Trial 29 finished with value: 0.41324395566751126 and parameters: {'C': 0.0023495210676453193}. Best is trial 29 with value: 0.41324395566751126.
+[I 2025-12-10 10:02:59,652] Trial 24 finished with value: 0.40783207645581604 and parameters: {'C': 0.0015602787832757277}. Best is trial 29 with value: 0.41324395566751126.
+[I 2025-12-10 10:07:40,314] Trial 7 finished with value: 0.417651448524994 and parameters: {'C': 0.003857994286074877}. Best is trial 7 with value: 0.417651448524994.
+[I 2025-12-10 10:11:28,267] Trial 6 finished with value: 0.41684204455572865 and parameters: {'C': 0.00304059506598896}. Best is trial 7 with value: 0.417651448524994.
+[I 2025-12-10 10:19:16,142] Trial 22 finished with value: 0.4110063210304681 and parameters: {'C': 0.006620506240006572}. Best is trial 7 with value: 0.417651448524994.
+[I 2025-12-10 10:19:44,826] Trial 1 finished with value: 0.4109933339125149 and parameters: {'C': 0.01029825776247987}. Best is trial 7 with value: 0.417651448524994.
+[I 2025-12-10 10:19:46,877] Trial 28 finished with value: 0.41583929535257935 and parameters: {'C': 0.006202080427303307}. Best is trial 7 with value: 0.417651448524994.
+[I 2025-12-10 10:24:46,020] Trial 25 finished with value: 0.40753066311391867 and parameters: {'C': 0.010745518913353038}. Best is trial 7 with value: 0.417651448524994.
+[I 2025-12-10 10:26:55,308] Trial 8 finished with value: 0.4110882556933248 and parameters: {'C': 0.010050455009266572}. Best is trial 7 with value: 0.417651448524994.
+[I 2025-12-10 10:27:12,178] Trial 9 finished with value: 0.41173202085796445 and parameters: {'C': 0.010025282599442678}. Best is trial 7 with value: 0.417651448524994.
+[I 2025-12-10 10:36:43,544] Trial 15 finished with value: 0.3974921724089048 and parameters: {'C': 0.024256021441201446}. Best is trial 7 with value: 0.417651448524994.
+[I 2025-12-10 10:41:06,774] Trial 27 finished with value: 0.3976244399252487 and parameters: {'C': 0.025489139571931104}. Best is trial 7 with value: 0.417651448524994.
+[I 2025-12-10 10:45:59,149] Trial 3 finished with value: 0.3890326793749899 and parameters: {'C': 0.03624814259716308}. Best is trial 7 with value: 0.417651448524994.
+[I 2025-12-10 10:46:39,589] Trial 31 finished with value: 0.3892744137085231 and parameters: {'C': 0.03472293164201334}. Best is trial 7 with value: 0.417651448524994.
+[I 2025-12-10 10:47:19,484] Trial 26 finished with value: 0.38908784072992947 and parameters: {'C': 0.03521018695933839}. Best is trial 7 with value: 0.417651448524994.
+[I 2025-12-10 10:54:30,197] Trial 5 finished with value: 0.3371234077653937 and parameters: {'C': 8.479326261487047}. Best is trial 7 with value: 0.417651448524994.
+[I 2025-12-10 10:55:24,852] Trial 4 finished with value: 0.37485675628057147 and parameters: {'C': 0.10180388438402332}. Best is trial 7 with value: 0.417651448524994.
+[I 2025-12-10 11:03:03,615] Trial 17 finished with value: 0.3801990819070654 and parameters: {'C': 0.07926788656734628}. Best is trial 7 with value: 0.417651448524994.
+[I 2025-12-10 11:05:21,193] Trial 23 finished with value: 0.3751338234855652 and parameters: {'C': 0.09392451791554891}. Best is trial 7 with value: 0.417651448524994.
+[I 2025-12-10 11:11:42,746] Trial 18 finished with value: 0.3770607932804696 and parameters: {'C': 0.08343509730488904}. Best is trial 7 with value: 0.417651448524994.
+[I 2025-12-10 11:12:09,840] Trial 39 finished with value: 0.41710334628700385 and parameters: {'C': 0.0035153577942557235}. Best is trial 7 with value: 0.417651448524994.
+[I 2025-12-10 11:13:55,971] Trial 30 finished with value: 0.3652555060932754 and parameters: {'C': 0.2511170086212797}. Best is trial 7 with value: 0.417651448524994.
+[I 2025-12-10 11:16:05,639] Trial 21 finished with value: 0.3651057364807714 and parameters: {'C': 0.23796800049545963}. Best is trial 7 with value: 0.417651448524994.
+[I 2025-12-10 11:17:40,449] Trial 13 finished with value: 0.3397991860557491 and parameters: {'C': 4.341513020175401}. Best is trial 7 with value: 0.417651448524994.
+[I 2025-12-10 11:18:44,293] Trial 34 finished with value: 0.4070961954195419 and parameters: {'C': 0.01076939312326125}. Best is trial 7 with value: 0.417651448524994.
+[I 2025-12-10 11:18:47,805] Trial 2 finished with value: 0.34014630154438547 and parameters: {'C': 2.58108687116227}. Best is trial 7 with value: 0.417651448524994.
+[I 2025-12-10 11:19:48,401] Trial 14 finished with value: 0.34194065418828623 and parameters: {'C': 2.7580229422829454}. Best is trial 7 with value: 0.417651448524994.
+[I 2025-12-10 11:21:41,384] Trial 16 finished with value: 0.36414582748987046 and parameters: {'C': 0.38942170261055586}. Best is trial 7 with value: 0.417651448524994.
+[I 2025-12-10 11:24:18,865] Trial 10 finished with value: 0.36512682808371716 and parameters: {'C': 0.2789290588467872}. Best is trial 7 with value: 0.417651448524994.
+[I 2025-12-10 11:24:51,080] Trial 20 finished with value: 0.3504285123330536 and parameters: {'C': 1.046248991833295}. Best is trial 7 with value: 0.417651448524994.
+[I 2025-12-10 11:25:33,383] Trial 0 finished with value: 0.349927005003707 and parameters: {'C': 1.0696289703333683}. Best is trial 7 with value: 0.417651448524994.
+[I 2025-12-10 11:26:28,562] Trial 19 finished with value: 0.3656882264623818 and parameters: {'C': 0.23438087092664825}. Best is trial 7 with value: 0.417651448524994.
+[I 2025-12-10 11:27:44,248] Trial 12 finished with value: 0.35531807531399323 and parameters: {'C': 0.5725077487969268}. Best is trial 7 with value: 0.417651448524994.
+[I 2025-12-10 11:31:59,916] Trial 32 finished with value: 0.38604547246915477 and parameters: {'C': 0.04004817715490448}. Best is trial 7 with value: 0.417651448524994.
+[I 2025-12-10 11:36:25,074] Trial 33 finished with value: 0.3891772833671395 and parameters: {'C': 0.03683106266794886}. Best is trial 7 with value: 0.417651448524994.
+[I 2025-12-10 11:37:51,599] Trial 38 finished with value: 0.4029706842756915 and parameters: {'C': 0.017407967376970056}. Best is trial 7 with value: 0.417651448524994.
+[I 2025-12-10 12:07:04,831] Trial 54 finished with value: 0.4170831623607846 and parameters: {'C': 0.0035073748501109614}. Best is trial 7 with value: 0.417651448524994.
+[I 2025-12-10 12:09:04,525] Trial 55 finished with value: 0.41664240928816787 and parameters: {'C': 0.003030551075844768}. Best is trial 7 with value: 0.417651448524994.
+[I 2025-12-10 12:10:36,555] Trial 56 finished with value: 0.4138475025456657 and parameters: {'C': 0.002835640638184585}. Best is trial 7 with value: 0.417651448524994.
+[I 2025-12-10 12:10:54,514] Trial 57 finished with value: 0.4131400285446182 and parameters: {'C': 0.002639484852380511}. Best is trial 7 with value: 0.417651448524994.
+[I 2025-12-10 12:11:32,331] Trial 52 finished with value: 0.41829269980809425 and parameters: {'C': 0.0040248667722407655}. Best is trial 52 with value: 0.41829269980809425.
+[I 2025-12-10 12:12:20,494] Trial 58 finished with value: 0.4154283172024913 and parameters: {'C': 0.003244941446354616}. Best is trial 52 with value: 0.41829269980809425.
+[I 2025-12-10 12:13:09,831] Trial 59 finished with value: 0.41422952342748287 and parameters: {'C': 0.0028446344223606204}. Best is trial 52 with value: 0.41829269980809425.
+[I 2025-12-10 12:16:36,403] Trial 35 finished with value: 0.3593789731182252 and parameters: {'C': 0.47566247736303274}. Best is trial 52 with value: 0.41829269980809425.
+[I 2025-12-10 12:17:17,603] Trial 61 finished with value: 0.416844803161872 and parameters: {'C': 0.003047604613507247}. Best is trial 52 with value: 0.41829269980809425.
+[I 2025-12-10 12:17:38,137] Trial 36 finished with value: 0.3699896650008246 and parameters: {'C': 0.13586087551933798}. Best is trial 52 with value: 0.41829269980809425.
+[I 2025-12-10 12:17:44,855] Trial 60 finished with value: 0.41725035607483874 and parameters: {'C': 0.004312440904244842}. Best is trial 52 with value: 0.41829269980809425.
+[I 2025-12-10 12:20:00,597] Trial 65 finished with value: 0.41583824875359576 and parameters: {'C': 0.0032702811295310594}. Best is trial 52 with value: 0.41829269980809425.
+[I 2025-12-10 12:21:13,299] Trial 64 finished with value: 0.41689236100347954 and parameters: {'C': 0.0034773367230902584}. Best is trial 52 with value: 0.41829269980809425.
+[I 2025-12-10 12:22:42,853] Trial 63 finished with value: 0.4180801504442968 and parameters: {'C': 0.003918891856640556}. Best is trial 52 with value: 0.41829269980809425.
+[I 2025-12-10 12:25:05,145] Trial 62 finished with value: 0.41847481190940866 and parameters: {'C': 0.003954751123987105}. Best is trial 62 with value: 0.41847481190940866.
+[I 2025-12-10 12:27:47,547] Trial 66 finished with value: 0.41692586280649974 and parameters: {'C': 0.0035114853141523326}. Best is trial 62 with value: 0.41847481190940866.
+[I 2025-12-10 12:28:54,801] Trial 67 finished with value: 0.4177341893073865 and parameters: {'C': 0.0037189291762001328}. Best is trial 62 with value: 0.41847481190940866.
+[I 2025-12-10 12:29:40,200] Trial 68 finished with value: 0.41619732036508356 and parameters: {'C': 0.0034236428739032694}. Best is trial 62 with value: 0.41847481190940866.
+[I 2025-12-10 12:33:18,846] Trial 41 finished with value: 0.3451820919021857 and parameters: {'C': 2.0244033905245664}. Best is trial 62 with value: 0.41847481190940866.
+[I 2025-12-10 12:34:32,037] Trial 40 finished with value: 0.3532713709959335 and parameters: {'C': 0.6406906763022052}. Best is trial 62 with value: 0.41847481190940866.
+[I 2025-12-10 12:35:11,563] Trial 37 finished with value: 0.35370565562680045 and parameters: {'C': 0.7699153751742338}. Best is trial 62 with value: 0.41847481190940866.
+[I 2025-12-10 12:41:08,106] Trial 43 finished with value: 0.3540368214882001 and parameters: {'C': 0.5935564653302422}. Best is trial 62 with value: 0.41847481190940866.
+[I 2025-12-10 12:41:42,477] Trial 42 finished with value: 0.35598438327197046 and parameters: {'C': 0.7115533217841863}. Best is trial 62 with value: 0.41847481190940866.
+[I 2025-12-10 12:50:13,195] Trial 45 finished with value: 0.35895725776460485 and parameters: {'C': 0.5974976244799769}. Best is trial 62 with value: 0.41847481190940866.
+[I 2025-12-10 12:56:53,021] Trial 44 finished with value: 0.3557127533968168 and parameters: {'C': 0.6101660074049327}. Best is trial 62 with value: 0.41847481190940866.
+[I 2025-12-10 12:58:04,907] Trial 46 finished with value: 0.35653793430111674 and parameters: {'C': 0.5415454786064525}. Best is trial 62 with value: 0.41847481190940866.
+[I 2025-12-10 12:58:19,923] Trial 79 finished with value: 0.40096480700579173 and parameters: {'C': 0.0010574395103110498}. Best is trial 62 with value: 0.41847481190940866.
+[I 2025-12-10 12:59:29,716] Trial 47 finished with value: 0.3563952829222709 and parameters: {'C': 0.4620496379403042}. Best is trial 62 with value: 0.41847481190940866.
+[I 2025-12-10 13:00:07,683] Trial 69 finished with value: 0.417464756936851 and parameters: {'C': 0.003796395428886225}. Best is trial 62 with value: 0.41847481190940866.
+[I 2025-12-10 13:00:16,661] Trial 50 finished with value: 0.3545461058385934 and parameters: {'C': 0.5459538901061451}. Best is trial 62 with value: 0.41847481190940866.
+[I 2025-12-10 13:00:45,477] Trial 70 finished with value: 0.41594818153046936 and parameters: {'C': 0.0029496639184838037}. Best is trial 62 with value: 0.41847481190940866.
+[I 2025-12-10 13:02:33,769] Trial 49 finished with value: 0.3649740767013504 and parameters: {'C': 0.26702736225930407}. Best is trial 62 with value: 0.41847481190940866.
+[I 2025-12-10 13:05:49,608] Trial 48 finished with value: 0.36517216247027184 and parameters: {'C': 0.3380602034954218}. Best is trial 62 with value: 0.41847481190940866.
+[I 2025-12-10 13:06:06,357] Trial 73 finished with value: 0.41795636564807637 and parameters: {'C': 0.004306209451532626}. Best is trial 62 with value: 0.41847481190940866.
+[I 2025-12-10 13:08:38,683] Trial 82 finished with value: 0.40111895761178384 and parameters: {'C': 0.0010756866987680273}. Best is trial 62 with value: 0.41847481190940866.
+[I 2025-12-10 13:09:13,216] Trial 71 finished with value: 0.41651674340405076 and parameters: {'C': 0.0055206208538220005}. Best is trial 62 with value: 0.41847481190940866.
+[I 2025-12-10 13:09:54,916] Trial 72 finished with value: 0.41712004698715227 and parameters: {'C': 0.0045480815318769}. Best is trial 62 with value: 0.41847481190940866.
+[I 2025-12-10 13:10:44,295] Trial 51 finished with value: 0.3437262592072029 and parameters: {'C': 3.6081732924856746}. Best is trial 62 with value: 0.41847481190940866.
+[I 2025-12-10 13:12:49,401] Trial 75 finished with value: 0.4160791671680265 and parameters: {'C': 0.004973498017667012}. Best is trial 62 with value: 0.41847481190940866.
+[I 2025-12-10 13:13:01,694] Trial 87 finished with value: 0.40247348860246224 and parameters: {'C': 0.0011244372930641604}. Best is trial 62 with value: 0.41847481190940866.
+[I 2025-12-10 13:13:09,808] Trial 89 finished with value: 0.40106761919362793 and parameters: {'C': 0.0010710023272203363}. Best is trial 62 with value: 0.41847481190940866.
+[I 2025-12-10 13:13:23,427] Trial 80 finished with value: 0.4167120144433376 and parameters: {'C': 0.004702866857623925}. Best is trial 62 with value: 0.41847481190940866.
+[I 2025-12-10 13:14:15,606] Trial 74 finished with value: 0.416364490317655 and parameters: {'C': 0.005120365532357509}. Best is trial 62 with value: 0.41847481190940866.
+[I 2025-12-10 13:15:53,627] Trial 77 finished with value: 0.41602649103076106 and parameters: {'C': 0.005820263529379351}. Best is trial 62 with value: 0.41847481190940866.
+[I 2025-12-10 13:18:41,535] Trial 53 finished with value: 0.3631716174373155 and parameters: {'C': 0.43179600492560255}. Best is trial 62 with value: 0.41847481190940866.
+[I 2025-12-10 13:18:58,829] Trial 78 finished with value: 0.4161236260733168 and parameters: {'C': 0.006074972747147466}. Best is trial 62 with value: 0.41847481190940866.
+[I 2025-12-10 13:19:12,624] Trial 90 finished with value: 0.40044178173512013 and parameters: {'C': 0.0010430818454842785}. Best is trial 62 with value: 0.41847481190940866.
+[I 2025-12-10 13:19:28,823] Trial 91 finished with value: 0.4011840487412134 and parameters: {'C': 0.001070435629258861}. Best is trial 62 with value: 0.41847481190940866.
+[I 2025-12-10 13:19:32,043] Trial 76 finished with value: 0.41705059217990775 and parameters: {'C': 0.0053101258079029205}. Best is trial 62 with value: 0.41847481190940866.
+[I 2025-12-10 13:19:33,957] Trial 81 finished with value: 0.4162091611951427 and parameters: {'C': 0.005716888002821511}. Best is trial 62 with value: 0.41847481190940866.
+[I 2025-12-10 13:21:06,036] Trial 83 finished with value: 0.41502957892627057 and parameters: {'C': 0.006321697595976002}. Best is trial 62 with value: 0.41847481190940866.
+[I 2025-12-10 13:21:40,939] Trial 86 finished with value: 0.4154148633200491 and parameters: {'C': 0.006315363146070262}. Best is trial 62 with value: 0.41847481190940866.
+[I 2025-12-10 13:22:49,643] Trial 84 finished with value: 0.41620153694006473 and parameters: {'C': 0.005703305583741673}. Best is trial 62 with value: 0.41847481190940866.
+[I 2025-12-10 13:23:00,358] Trial 85 finished with value: 0.416157609738322 and parameters: {'C': 0.005627333926785388}. Best is trial 62 with value: 0.41847481190940866.
+[I 2025-12-10 13:24:13,181] Trial 93 finished with value: 0.4013295242821999 and parameters: {'C': 0.0011013920302546984}. Best is trial 62 with value: 0.41847481190940866.
+[I 2025-12-10 13:25:33,109] Trial 88 finished with value: 0.4162448910925615 and parameters: {'C': 0.005821827129846062}. Best is trial 62 with value: 0.41847481190940866.
+[I 2025-12-10 13:26:30,398] Trial 95 finished with value: 0.41705487039643135 and parameters: {'C': 0.0054061269425950175}. Best is trial 62 with value: 0.41847481190940866.
+[I 2025-12-10 13:27:31,698] Trial 92 finished with value: 0.4165355034575759 and parameters: {'C': 0.005573655687638685}. Best is trial 62 with value: 0.41847481190940866.
+[I 2025-12-10 13:28:45,500] Trial 94 finished with value: 0.4164924085232101 and parameters: {'C': 0.0058517702808561145}. Best is trial 62 with value: 0.41847481190940866.
+[I 2025-12-10 13:28:49,498] Trial 97 finished with value: 0.41617524561229075 and parameters: {'C': 0.005591855153017839}. Best is trial 62 with value: 0.41847481190940866.
+[I 2025-12-10 13:28:54,247] Trial 96 finished with value: 0.41707610415399027 and parameters: {'C': 0.005413291671591046}. Best is trial 62 with value: 0.41847481190940866.
+[I 2025-12-10 13:29:02,279] Trial 99 finished with value: 0.41708048591229974 and parameters: {'C': 0.005456263830428085}. Best is trial 62 with value: 0.41847481190940866.
+[I 2025-12-10 13:29:06,186] Trial 98 finished with value: 0.4161627981827599 and parameters: {'C': 0.005701941287322788}. Best is trial 62 with value: 0.41847481190940866.
+2025-12-10 13:29:06,191 - Best Trial: 0.41847481190940866 | Params: {'C': 0.003954751123987105}
+2025-12-10 13:29:06,192 - Refitting final model with best params on full training set...
+2025-12-10 13:29:18,069 - Predicting on Test Set...
+2025-12-10 13:29:33,463 - Saving artifacts to /media/volume/catch22/projects/aki_prediction_project/results/aeon/models/minirocket/minirocket_all_fused_any_aki...
+2025-12-10 13:29:33,468 - Saved predictions to /media/volume/catch22/projects/aki_prediction_project/results/aeon/models/minirocket/minirocket_all_fused_any_aki/predictions.csv
+2025-12-10 13:29:33,468 - Experiment Complete.
+  > Training Complete.
+----------------------------------------------------------------
+Running: Model=minirocket | Branch=Aeon | Channels=all | Type=waveonly | Outcome=any_aki
+----------------------------------------------------------------
+  > Starting Training...
+  Command: /home/exouser/.conda/envs/aki_prediction_project/bin/python -m model_creation_aeon.step_06_aeon_train --model minirocket --outcome any_aki --channels all 
+2025-12-10 13:29:38,343 - Starting Experiment: minirocket_all_waveonly_any_aki
+2025-12-10 13:29:38,343 - Loading data from outputs/aeon...
+2025-12-10 13:29:49,580 - Using ALL channels: ['SNUADC/PLETH' 'SNUADC/ECG_II' 'Primus/CO2' 'Primus/AWP']
+2025-12-10 13:29:50,598 - Preop features excluded.
+2025-12-10 13:29:51,207 - Train size: 2717, Test size: 682
+2025-12-10 13:29:51,207 - Starting HPO for minirocket...
+2025-12-10 13:29:51,207 - Transforming training data with minirocket...
+2025-12-10 13:30:58,088 - Transformer output shape: (2717, 9996)
+[I 2025-12-10 13:30:58,089] A new study created in memory with name: no-name-0603ccc1-5387-4a7c-a8a7-9ad2778c61bb
+[I 2025-12-10 13:34:59,222] Trial 29 finished with value: 0.15356669093920838 and parameters: {'C': 0.002945775165008221}. Best is trial 29 with value: 0.15356669093920838.
+[I 2025-12-10 13:35:31,558] Trial 6 finished with value: 0.15172050705048684 and parameters: {'C': 0.0035149045560849404}. Best is trial 29 with value: 0.15356669093920838.
+[I 2025-12-10 13:35:33,512] Trial 12 finished with value: 0.14461909531809 and parameters: {'C': 0.006156095688071648}. Best is trial 29 with value: 0.15356669093920838.
+[I 2025-12-10 13:35:54,800] Trial 28 finished with value: 0.1536759933435863 and parameters: {'C': 0.002645197428674047}. Best is trial 28 with value: 0.1536759933435863.
+[I 2025-12-10 13:36:47,306] Trial 31 finished with value: 0.15674898194531242 and parameters: {'C': 0.0011797269075094184}. Best is trial 31 with value: 0.15674898194531242.
+[I 2025-12-10 13:37:16,900] Trial 0 finished with value: 0.13607362939418202 and parameters: {'C': 0.008781149141364707}. Best is trial 31 with value: 0.15674898194531242.
+[I 2025-12-10 13:37:23,922] Trial 8 finished with value: 0.15101291543549608 and parameters: {'C': 0.003828852324527577}. Best is trial 31 with value: 0.15674898194531242.
+[I 2025-12-10 13:38:03,247] Trial 24 finished with value: 0.1292075279429957 and parameters: {'C': 0.015543710138656271}. Best is trial 31 with value: 0.15674898194531242.
+[I 2025-12-10 13:38:26,598] Trial 1 finished with value: 0.13614209790307524 and parameters: {'C': 0.008748581212908673}. Best is trial 31 with value: 0.15674898194531242.
+[I 2025-12-10 13:38:40,297] Trial 30 finished with value: 0.13642207479349291 and parameters: {'C': 0.008494886564011185}. Best is trial 31 with value: 0.15674898194531242.
+[I 2025-12-10 13:39:01,928] Trial 23 finished with value: 0.1357419007948482 and parameters: {'C': 0.009827025726907994}. Best is trial 31 with value: 0.15674898194531242.
+[I 2025-12-10 13:39:07,955] Trial 17 finished with value: 0.1280442570150531 and parameters: {'C': 0.018078217613486564}. Best is trial 31 with value: 0.15674898194531242.
+[I 2025-12-10 13:39:08,396] Trial 33 finished with value: 0.15752060817278257 and parameters: {'C': 0.0010759563462084405}. Best is trial 33 with value: 0.15752060817278257.
+[I 2025-12-10 13:39:23,911] Trial 15 finished with value: 0.13173177301570477 and parameters: {'C': 0.012769457309397964}. Best is trial 33 with value: 0.15752060817278257.
+[I 2025-12-10 13:39:24,840] Trial 25 finished with value: 0.11846997909258972 and parameters: {'C': 0.05415187464566503}. Best is trial 33 with value: 0.15752060817278257.
+[I 2025-12-10 13:41:00,279] Trial 16 finished with value: 0.11699426488602642 and parameters: {'C': 0.11199044533859288}. Best is trial 33 with value: 0.15752060817278257.
+[I 2025-12-10 13:41:21,571] Trial 3 finished with value: 0.11976386474108822 and parameters: {'C': 0.041174497745946045}. Best is trial 33 with value: 0.15752060817278257.
+[I 2025-12-10 13:41:48,398] Trial 10 finished with value: 0.11693457701062653 and parameters: {'C': 0.07252862997344582}. Best is trial 33 with value: 0.15752060817278257.
+[I 2025-12-10 13:43:02,814] Trial 5 finished with value: 0.12761683409469587 and parameters: {'C': 0.01621486231671106}. Best is trial 33 with value: 0.15752060817278257.
+[I 2025-12-10 13:43:21,028] Trial 20 finished with value: 0.11312871841975718 and parameters: {'C': 0.34560817344199235}. Best is trial 33 with value: 0.15752060817278257.
+[I 2025-12-10 13:44:19,962] Trial 13 finished with value: 0.11996571098978244 and parameters: {'C': 0.03806706856309904}. Best is trial 33 with value: 0.15752060817278257.
+[I 2025-12-10 13:44:52,827] Trial 26 finished with value: 0.11517760534147543 and parameters: {'C': 0.17736767305426948}. Best is trial 33 with value: 0.15752060817278257.
+[I 2025-12-10 13:45:17,980] Trial 39 finished with value: 0.1546056451673628 and parameters: {'C': 0.0016174148530988326}. Best is trial 33 with value: 0.15752060817278257.
+[I 2025-12-10 13:46:40,741] Trial 36 finished with value: 0.12348796114748942 and parameters: {'C': 0.02644303678114052}. Best is trial 33 with value: 0.15752060817278257.
+[I 2025-12-10 13:47:10,618] Trial 21 finished with value: 0.11082116649120861 and parameters: {'C': 0.6633276047998836}. Best is trial 33 with value: 0.15752060817278257.
+[I 2025-12-10 13:47:27,089] Trial 14 finished with value: 0.11133262016422203 and parameters: {'C': 0.47605017534746785}. Best is trial 33 with value: 0.15752060817278257.
+[I 2025-12-10 13:47:41,469] Trial 52 finished with value: 0.1548698823242684 and parameters: {'C': 0.0013199564056849864}. Best is trial 33 with value: 0.15752060817278257.
+[I 2025-12-10 13:47:43,268] Trial 18 finished with value: 0.11015413013989442 and parameters: {'C': 1.3693337286585598}. Best is trial 33 with value: 0.15752060817278257.
+[I 2025-12-10 13:47:59,134] Trial 22 finished with value: 0.11292416892559494 and parameters: {'C': 0.3815066424676424}. Best is trial 33 with value: 0.15752060817278257.
+[I 2025-12-10 13:48:22,826] Trial 4 finished with value: 0.11049980729191049 and parameters: {'C': 0.8738859797914827}. Best is trial 33 with value: 0.15752060817278257.
+[I 2025-12-10 13:48:49,682] Trial 54 finished with value: 0.15745657839280439 and parameters: {'C': 0.0010917568349324866}. Best is trial 33 with value: 0.15752060817278257.
+[I 2025-12-10 13:48:56,560] Trial 38 finished with value: 0.1158335239027457 and parameters: {'C': 0.15496262096001165}. Best is trial 33 with value: 0.15752060817278257.
+[I 2025-12-10 13:48:57,662] Trial 11 finished with value: 0.11013582386347909 and parameters: {'C': 1.1733412706806303}. Best is trial 33 with value: 0.15752060817278257.
+[I 2025-12-10 13:49:07,151] Trial 53 finished with value: 0.15529667301250263 and parameters: {'C': 0.0010166933779514283}. Best is trial 33 with value: 0.15752060817278257.
+[I 2025-12-10 13:49:10,863] Trial 2 finished with value: 0.11109169300784694 and parameters: {'C': 0.5242529242094168}. Best is trial 33 with value: 0.15752060817278257.
+[I 2025-12-10 13:49:19,432] Trial 9 finished with value: 0.11526166659202905 and parameters: {'C': 0.17362502352920298}. Best is trial 33 with value: 0.15752060817278257.
+[I 2025-12-10 13:49:53,686] Trial 55 finished with value: 0.15681668117494382 and parameters: {'C': 0.0011634230869705347}. Best is trial 33 with value: 0.15752060817278257.
+[I 2025-12-10 13:49:53,972] Trial 19 finished with value: 0.10972297507939432 and parameters: {'C': 1.907758848779409}. Best is trial 33 with value: 0.15752060817278257.
+[I 2025-12-10 13:49:57,093] Trial 27 finished with value: 0.11110983516713784 and parameters: {'C': 0.5351786663340492}. Best is trial 33 with value: 0.15752060817278257.
+[I 2025-12-10 13:50:00,770] Trial 59 finished with value: 0.15561673559950323 and parameters: {'C': 0.0010198986316023737}. Best is trial 33 with value: 0.15752060817278257.
+[I 2025-12-10 13:50:09,882] Trial 32 finished with value: 0.11416526340597458 and parameters: {'C': 0.22175015725704736}. Best is trial 33 with value: 0.15752060817278257.
+[I 2025-12-10 13:50:30,704] Trial 7 finished with value: 0.10721396967891864 and parameters: {'C': 4.965057268585264}. Best is trial 33 with value: 0.15752060817278257.
+[I 2025-12-10 13:50:31,599] Trial 34 finished with value: 0.11024223003314593 and parameters: {'C': 3.0792431457699285}. Best is trial 33 with value: 0.15752060817278257.
+[I 2025-12-10 13:51:07,551] Trial 60 finished with value: 0.15741859404353964 and parameters: {'C': 0.0011013675925677497}. Best is trial 33 with value: 0.15752060817278257.
+[I 2025-12-10 13:51:52,814] Trial 37 finished with value: 0.11047628756283227 and parameters: {'C': 0.9934637176460054}. Best is trial 33 with value: 0.15752060817278257.
+[I 2025-12-10 13:52:04,504] Trial 56 finished with value: 0.1575537271097923 and parameters: {'C': 0.0010659174953851975}. Best is trial 56 with value: 0.1575537271097923.
+[I 2025-12-10 13:52:16,377] Trial 63 finished with value: 0.15584295214581448 and parameters: {'C': 0.0010320478989793653}. Best is trial 56 with value: 0.1575537271097923.
+[I 2025-12-10 13:52:29,641] Trial 61 finished with value: 0.15542253726210206 and parameters: {'C': 0.0010010067178110485}. Best is trial 56 with value: 0.1575537271097923.
+[I 2025-12-10 13:52:43,954] Trial 65 finished with value: 0.15747182622640185 and parameters: {'C': 0.0010773734896360105}. Best is trial 56 with value: 0.1575537271097923.
+[I 2025-12-10 13:52:47,735] Trial 57 finished with value: 0.15752395252891577 and parameters: {'C': 0.0010600385554254369}. Best is trial 56 with value: 0.1575537271097923.
+[I 2025-12-10 13:52:52,984] Trial 69 finished with value: 0.15448231145013597 and parameters: {'C': 0.001637635468919322}. Best is trial 56 with value: 0.1575537271097923.
+[I 2025-12-10 13:52:57,541] Trial 66 finished with value: 0.15754218823337549 and parameters: {'C': 0.0010729037272954167}. Best is trial 56 with value: 0.1575537271097923.
+[I 2025-12-10 13:53:15,174] Trial 40 finished with value: 0.11076729217603323 and parameters: {'C': 0.5727555725400247}. Best is trial 56 with value: 0.1575537271097923.
+[I 2025-12-10 13:53:38,802] Trial 73 finished with value: 0.15464342762413735 and parameters: {'C': 0.0019004556874619772}. Best is trial 56 with value: 0.1575537271097923.
+[I 2025-12-10 13:53:43,256] Trial 71 finished with value: 0.15507179204591431 and parameters: {'C': 0.0017582323808853315}. Best is trial 56 with value: 0.1575537271097923.
+[I 2025-12-10 13:53:45,800] Trial 43 finished with value: 0.10921750708954203 and parameters: {'C': 3.274882145045382}. Best is trial 56 with value: 0.1575537271097923.
+[I 2025-12-10 13:53:47,531] Trial 67 finished with value: 0.15550935733054488 and parameters: {'C': 0.0010005063180464628}. Best is trial 56 with value: 0.1575537271097923.
+[I 2025-12-10 13:53:52,987] Trial 62 finished with value: 0.1575088506624363 and parameters: {'C': 0.0010705382293361566}. Best is trial 56 with value: 0.1575537271097923.
+[I 2025-12-10 13:54:20,596] Trial 72 finished with value: 0.1547103624621183 and parameters: {'C': 0.0019005680367248825}. Best is trial 56 with value: 0.1575537271097923.
+[I 2025-12-10 13:54:33,802] Trial 77 finished with value: 0.15424971071328564 and parameters: {'C': 0.0019900742099237135}. Best is trial 56 with value: 0.1575537271097923.
+[I 2025-12-10 13:54:42,879] Trial 44 finished with value: 0.11044437554992217 and parameters: {'C': 1.0849497572333375}. Best is trial 56 with value: 0.1575537271097923.
+[I 2025-12-10 13:55:32,395] Trial 41 finished with value: 0.10997443861479009 and parameters: {'C': 1.4862351548103803}. Best is trial 56 with value: 0.1575537271097923.
+[I 2025-12-10 13:55:34,145] Trial 75 finished with value: 0.1548279664623941 and parameters: {'C': 0.0018205634031833373}. Best is trial 56 with value: 0.1575537271097923.
+[I 2025-12-10 13:56:07,987] Trial 74 finished with value: 0.15368539281723909 and parameters: {'C': 0.002174836689256207}. Best is trial 56 with value: 0.1575537271097923.
+[I 2025-12-10 13:56:28,782] Trial 45 finished with value: 0.11029108828978913 and parameters: {'C': 1.3098908532307023}. Best is trial 56 with value: 0.1575537271097923.
+[I 2025-12-10 13:56:34,503] Trial 79 finished with value: 0.1540237610910301 and parameters: {'C': 0.002042116699447799}. Best is trial 56 with value: 0.1575537271097923.
+[I 2025-12-10 13:56:38,912] Trial 78 finished with value: 0.15427179223094264 and parameters: {'C': 0.0019823440584031374}. Best is trial 56 with value: 0.1575537271097923.
+[I 2025-12-10 13:56:49,372] Trial 49 finished with value: 0.10994614520083357 and parameters: {'C': 1.2109187856859678}. Best is trial 56 with value: 0.1575537271097923.
+[I 2025-12-10 13:57:11,109] Trial 35 finished with value: 0.10626128372306494 and parameters: {'C': 7.543603776130855}. Best is trial 56 with value: 0.1575537271097923.
+[I 2025-12-10 13:57:12,870] Trial 83 finished with value: 0.1544214687564487 and parameters: {'C': 0.0022363842884469275}. Best is trial 56 with value: 0.1575537271097923.
+[I 2025-12-10 13:57:19,315] Trial 84 finished with value: 0.1536858042077655 and parameters: {'C': 0.002148777905587775}. Best is trial 56 with value: 0.1575537271097923.
+[I 2025-12-10 13:57:27,483] Trial 76 finished with value: 0.15486287415814684 and parameters: {'C': 0.0018147988614211838}. Best is trial 56 with value: 0.1575537271097923.
+[I 2025-12-10 13:57:27,883] Trial 81 finished with value: 0.15452263302109115 and parameters: {'C': 0.0019547987420309625}. Best is trial 56 with value: 0.1575537271097923.
+[I 2025-12-10 13:57:41,197] Trial 46 finished with value: 0.11048615265851833 and parameters: {'C': 1.0661421408940137}. Best is trial 56 with value: 0.1575537271097923.
+[I 2025-12-10 13:57:42,839] Trial 80 finished with value: 0.15432330794021412 and parameters: {'C': 0.0019846800827728506}. Best is trial 56 with value: 0.1575537271097923.
+[I 2025-12-10 13:57:45,665] Trial 92 finished with value: 0.14975245612839064 and parameters: {'C': 0.004241333691950542}. Best is trial 56 with value: 0.1575537271097923.
+[I 2025-12-10 13:57:58,724] Trial 86 finished with value: 0.1468529703742955 and parameters: {'C': 0.005086067671869655}. Best is trial 56 with value: 0.1575537271097923.
+[I 2025-12-10 13:58:15,727] Trial 88 finished with value: 0.14840540061529373 and parameters: {'C': 0.004658299770333119}. Best is trial 56 with value: 0.1575537271097923.
+[I 2025-12-10 13:58:30,929] Trial 47 finished with value: 0.10989428528861889 and parameters: {'C': 1.320310279238479}. Best is trial 56 with value: 0.1575537271097923.
+[I 2025-12-10 13:58:31,650] Trial 87 finished with value: 0.14901181490257248 and parameters: {'C': 0.0043946501893291755}. Best is trial 56 with value: 0.1575537271097923.
+[I 2025-12-10 13:58:38,571] Trial 48 finished with value: 0.11021506087692871 and parameters: {'C': 1.1174117946798567}. Best is trial 56 with value: 0.1575537271097923.
+[I 2025-12-10 13:58:50,779] Trial 85 finished with value: 0.14810387290552868 and parameters: {'C': 0.004594174867466165}. Best is trial 56 with value: 0.1575537271097923.
+[I 2025-12-10 13:59:07,816] Trial 82 finished with value: 0.14724107367904113 and parameters: {'C': 0.004841830705377521}. Best is trial 56 with value: 0.1575537271097923.
+[I 2025-12-10 13:59:11,716] Trial 90 finished with value: 0.14935557943629188 and parameters: {'C': 0.0043624035693741545}. Best is trial 56 with value: 0.1575537271097923.
+[I 2025-12-10 13:59:17,520] Trial 89 finished with value: 0.14816967849987822 and parameters: {'C': 0.0046285662688616905}. Best is trial 56 with value: 0.1575537271097923.
+[I 2025-12-10 13:59:19,104] Trial 51 finished with value: 0.10705613260660392 and parameters: {'C': 6.422113807312865}. Best is trial 56 with value: 0.1575537271097923.
+[I 2025-12-10 13:59:24,922] Trial 94 finished with value: 0.14683960152479528 and parameters: {'C': 0.005225763767953148}. Best is trial 56 with value: 0.1575537271097923.
+[I 2025-12-10 13:59:25,037] Trial 95 finished with value: 0.14954471190197316 and parameters: {'C': 0.004374174200170452}. Best is trial 56 with value: 0.1575537271097923.
+[I 2025-12-10 13:59:40,487] Trial 91 finished with value: 0.1467975945808207 and parameters: {'C': 0.00531137839570618}. Best is trial 56 with value: 0.1575537271097923.
+[I 2025-12-10 13:59:43,519] Trial 42 finished with value: 0.1095552572786747 and parameters: {'C': 1.9848172680302059}. Best is trial 56 with value: 0.1575537271097923.
+[I 2025-12-10 13:59:46,566] Trial 50 finished with value: 0.1103115148629991 and parameters: {'C': 1.0717069797613972}. Best is trial 56 with value: 0.1575537271097923.
+[I 2025-12-10 13:59:55,323] Trial 93 finished with value: 0.14660324120871648 and parameters: {'C': 0.005071711058081799}. Best is trial 56 with value: 0.1575537271097923.
+[I 2025-12-10 14:00:06,526] Trial 96 finished with value: 0.14999605496312712 and parameters: {'C': 0.004267888881897842}. Best is trial 56 with value: 0.1575537271097923.
+[I 2025-12-10 14:00:07,385] Trial 98 finished with value: 0.14870005655497942 and parameters: {'C': 0.004447179988499743}. Best is trial 56 with value: 0.1575537271097923.
+[I 2025-12-10 14:00:17,088] Trial 99 finished with value: 0.1497129985037858 and parameters: {'C': 0.004235960077198411}. Best is trial 56 with value: 0.1575537271097923.
+[I 2025-12-10 14:00:23,756] Trial 97 finished with value: 0.14678445317692007 and parameters: {'C': 0.004979506754061749}. Best is trial 56 with value: 0.1575537271097923.
+[I 2025-12-10 14:00:52,284] Trial 58 finished with value: 0.10846815381142498 and parameters: {'C': 3.0822632965712913}. Best is trial 56 with value: 0.1575537271097923.
+[I 2025-12-10 14:01:04,674] Trial 68 finished with value: 0.10529139819548372 and parameters: {'C': 9.18295647106578}. Best is trial 56 with value: 0.1575537271097923.
+[I 2025-12-10 14:01:05,099] Trial 70 finished with value: 0.10590666413439845 and parameters: {'C': 9.68164359517578}. Best is trial 56 with value: 0.1575537271097923.
+[I 2025-12-10 14:01:05,897] Trial 64 finished with value: 0.10799551487338106 and parameters: {'C': 4.8629219913009925}. Best is trial 56 with value: 0.1575537271097923.
+2025-12-10 14:01:05,899 - Best Trial: 0.1575537271097923 | Params: {'C': 0.0010659174953851975}
+2025-12-10 14:01:05,899 - Refitting final model with best params on full training set...
+2025-12-10 14:01:15,073 - Predicting on Test Set...
+2025-12-10 14:01:29,796 - Saving artifacts to /media/volume/catch22/projects/aki_prediction_project/results/aeon/models/minirocket/minirocket_all_waveonly_any_aki...
+2025-12-10 14:01:29,802 - Saved predictions to /media/volume/catch22/projects/aki_prediction_project/results/aeon/models/minirocket/minirocket_all_waveonly_any_aki/predictions.csv
+2025-12-10 14:01:29,802 - Experiment Complete.
+  > Training Complete.
+----------------------------------------------------------------
+Running: Model=minirocket | Branch=Aeon | Channels=SNUADC_ECG_II | Type=fused | Outcome=any_aki
+----------------------------------------------------------------
+  > Starting Training...
+  Command: /home/exouser/.conda/envs/aki_prediction_project/bin/python -m model_creation_aeon.step_06_aeon_train --model minirocket --outcome any_aki --channels SNUADC_ECG_II --include_preop
+2025-12-10 14:01:35,000 - Starting Experiment: minirocket_SNUADC_ECG_II_fused_any_aki
+2025-12-10 14:01:35,000 - Loading data from outputs/aeon...
+2025-12-10 14:01:44,958 - Mapped SNUADC_ECG_II -> SNUADC/ECG_II
+2025-12-10 14:01:44,958 - Using subset channels: ['SNUADC_ECG_II']
+2025-12-10 14:01:45,162 - Using 115 preop features.
+2025-12-10 14:01:45,284 - Train size: 2717, Test size: 682
+2025-12-10 14:01:45,284 - Starting HPO for minirocket...
+2025-12-10 14:01:45,284 - Transforming training data with minirocket...
+2025-12-10 14:02:01,673 - Transformer output shape: (2717, 9996)
+[I 2025-12-10 14:02:01,673] A new study created in memory with name: no-name-2580b080-9e03-46a2-a813-7efd9d06c951
+[I 2025-12-10 14:48:17,683] Trial 31 finished with value: 0.433071062742863 and parameters: {'C': 0.0011078048219222852}. Best is trial 31 with value: 0.433071062742863.
+[I 2025-12-10 14:49:23,986] Trial 26 finished with value: 0.4327375372553293 and parameters: {'C': 0.001090340373196323}. Best is trial 31 with value: 0.433071062742863.
+[I 2025-12-10 14:57:58,251] Trial 25 finished with value: 0.4422175103535655 and parameters: {'C': 0.0018073531776668646}. Best is trial 25 with value: 0.4422175103535655.
+[I 2025-12-10 15:02:52,607] Trial 20 finished with value: 0.445762431738631 and parameters: {'C': 0.004076554987477914}. Best is trial 20 with value: 0.445762431738631.
+/home/exouser/.conda/envs/aki_prediction_project/lib/python3.9/site-packages/sklearn/linear_model/_logistic.py:465: ConvergenceWarning: lbfgs failed to converge (status=1):
+STOP: TOTAL NO. of ITERATIONS REACHED LIMIT.
+
+Increase the number of iterations (max_iter) or scale the data as shown in:
+    https://scikit-learn.org/stable/modules/preprocessing.html
+Please also refer to the documentation for alternative solver options:
+    https://scikit-learn.org/stable/modules/linear_model.html#logistic-regression
+  n_iter_i = _check_optimize_result(
+/home/exouser/.conda/envs/aki_prediction_project/lib/python3.9/site-packages/sklearn/linear_model/_logistic.py:465: ConvergenceWarning: lbfgs failed to converge (status=1):
+STOP: TOTAL NO. of ITERATIONS REACHED LIMIT.
+
+Increase the number of iterations (max_iter) or scale the data as shown in:
+    https://scikit-learn.org/stable/modules/preprocessing.html
+Please also refer to the documentation for alternative solver options:
+    https://scikit-learn.org/stable/modules/linear_model.html#logistic-regression
+  n_iter_i = _check_optimize_result(
+[I 2025-12-10 15:17:29,630] Trial 3 finished with value: 0.4457894984609624 and parameters: {'C': 0.007392394840271574}. Best is trial 3 with value: 0.4457894984609624.
+[I 2025-12-10 15:19:34,060] Trial 6 finished with value: 0.4467388136105006 and parameters: {'C': 0.007698941525192918}. Best is trial 6 with value: 0.4467388136105006.
+[I 2025-12-10 15:23:53,481] Trial 11 finished with value: 0.44822605954001143 and parameters: {'C': 0.011252049948905607}. Best is trial 11 with value: 0.44822605954001143.
+[I 2025-12-10 15:25:48,155] Trial 27 finished with value: 0.4470131580304423 and parameters: {'C': 0.010180210607514626}. Best is trial 11 with value: 0.44822605954001143.
+[I 2025-12-10 15:44:59,029] Trial 33 finished with value: 0.4455863897962732 and parameters: {'C': 0.0040987107156617}. Best is trial 11 with value: 0.44822605954001143.
+[I 2025-12-10 15:46:37,009] Trial 28 finished with value: 0.439625386409646 and parameters: {'C': 0.021125270954588223}. Best is trial 11 with value: 0.44822605954001143.
+[I 2025-12-10 15:55:58,007] Trial 14 finished with value: 0.438393107865269 and parameters: {'C': 0.027274110423780102}. Best is trial 11 with value: 0.44822605954001143.
+[I 2025-12-10 15:59:44,488] Trial 10 finished with value: 0.43576845438460377 and parameters: {'C': 0.031230523712164077}. Best is trial 11 with value: 0.44822605954001143.
+[I 2025-12-10 16:01:40,940] Trial 24 finished with value: 0.438429905547137 and parameters: {'C': 0.027304087591970193}. Best is trial 11 with value: 0.44822605954001143.
+[I 2025-12-10 16:06:32,246] Trial 29 finished with value: 0.4348971936957235 and parameters: {'C': 0.032811684782345335}. Best is trial 11 with value: 0.44822605954001143.
+[I 2025-12-10 16:07:25,864] Trial 17 finished with value: 0.436759417114797 and parameters: {'C': 0.029256884057473974}. Best is trial 11 with value: 0.44822605954001143.
+/home/exouser/.conda/envs/aki_prediction_project/lib/python3.9/site-packages/sklearn/linear_model/_logistic.py:465: ConvergenceWarning: lbfgs failed to converge (status=1):
+STOP: TOTAL NO. of ITERATIONS REACHED LIMIT.
+
+Increase the number of iterations (max_iter) or scale the data as shown in:
+    https://scikit-learn.org/stable/modules/preprocessing.html
+Please also refer to the documentation for alternative solver options:
+    https://scikit-learn.org/stable/modules/linear_model.html#logistic-regression
+  n_iter_i = _check_optimize_result(
+[I 2025-12-10 16:16:57,431] Trial 21 finished with value: 0.43008033159922554 and parameters: {'C': 0.043122672478853964}. Best is trial 11 with value: 0.44822605954001143.
+/home/exouser/.conda/envs/aki_prediction_project/lib/python3.9/site-packages/sklearn/linear_model/_logistic.py:465: ConvergenceWarning: lbfgs failed to converge (status=1):
+STOP: TOTAL NO. of ITERATIONS REACHED LIMIT.
+
+Increase the number of iterations (max_iter) or scale the data as shown in:
+    https://scikit-learn.org/stable/modules/preprocessing.html
+Please also refer to the documentation for alternative solver options:
+    https://scikit-learn.org/stable/modules/linear_model.html#logistic-regression
+  n_iter_i = _check_optimize_result(
+/home/exouser/.conda/envs/aki_prediction_project/lib/python3.9/site-packages/sklearn/linear_model/_logistic.py:465: ConvergenceWarning: lbfgs failed to converge (status=1):
+STOP: TOTAL NO. of ITERATIONS REACHED LIMIT.
+
+Increase the number of iterations (max_iter) or scale the data as shown in:
+    https://scikit-learn.org/stable/modules/preprocessing.html
+Please also refer to the documentation for alternative solver options:
+    https://scikit-learn.org/stable/modules/linear_model.html#logistic-regression
+  n_iter_i = _check_optimize_result(
+[I 2025-12-10 16:21:55,139] Trial 12 finished with value: 0.4285022240552638 and parameters: {'C': 0.05230576133277796}. Best is trial 11 with value: 0.44822605954001143.
+[I 2025-12-10 16:24:07,018] Trial 15 finished with value: 0.42691115556156206 and parameters: {'C': 0.05509849566004034}. Best is trial 11 with value: 0.44822605954001143.
+/home/exouser/.conda/envs/aki_prediction_project/lib/python3.9/site-packages/sklearn/linear_model/_logistic.py:465: ConvergenceWarning: lbfgs failed to converge (status=1):
+STOP: TOTAL NO. of ITERATIONS REACHED LIMIT.
+
+Increase the number of iterations (max_iter) or scale the data as shown in:
+    https://scikit-learn.org/stable/modules/preprocessing.html
+Please also refer to the documentation for alternative solver options:
+    https://scikit-learn.org/stable/modules/linear_model.html#logistic-regression
+  n_iter_i = _check_optimize_result(
+[I 2025-12-10 16:25:02,474] Trial 7 finished with value: 0.42477806154917425 and parameters: {'C': 0.05803409311581279}. Best is trial 11 with value: 0.44822605954001143.
+/home/exouser/.conda/envs/aki_prediction_project/lib/python3.9/site-packages/sklearn/linear_model/_logistic.py:465: ConvergenceWarning: lbfgs failed to converge (status=1):
+STOP: TOTAL NO. of ITERATIONS REACHED LIMIT.
+
+Increase the number of iterations (max_iter) or scale the data as shown in:
+    https://scikit-learn.org/stable/modules/preprocessing.html
+Please also refer to the documentation for alternative solver options:
+    https://scikit-learn.org/stable/modules/linear_model.html#logistic-regression
+  n_iter_i = _check_optimize_result(
+/home/exouser/.conda/envs/aki_prediction_project/lib/python3.9/site-packages/sklearn/linear_model/_logistic.py:465: ConvergenceWarning: lbfgs failed to converge (status=1):
+STOP: TOTAL NO. of ITERATIONS REACHED LIMIT.
+
+Increase the number of iterations (max_iter) or scale the data as shown in:
+    https://scikit-learn.org/stable/modules/preprocessing.html
+Please also refer to the documentation for alternative solver options:
+    https://scikit-learn.org/stable/modules/linear_model.html#logistic-regression
+  n_iter_i = _check_optimize_result(
+[I 2025-12-10 16:41:47,173] Trial 22 finished with value: 0.4174617287052165 and parameters: {'C': 0.08593786283836782}. Best is trial 11 with value: 0.44822605954001143.
+[I 2025-12-10 16:42:27,678] Trial 23 finished with value: 0.4214070121759764 and parameters: {'C': 0.07243985864145146}. Best is trial 11 with value: 0.44822605954001143.
+[I 2025-12-10 16:49:09,166] Trial 9 finished with value: 0.4175584369435866 and parameters: {'C': 0.08796835568676384}. Best is trial 11 with value: 0.44822605954001143.
+[I 2025-12-10 16:52:39,432] Trial 38 finished with value: 0.44886789327673615 and parameters: {'C': 0.012115790953699943}. Best is trial 38 with value: 0.44886789327673615.
+[I 2025-12-10 16:56:43,493] Trial 0 finished with value: 0.4149700926353693 and parameters: {'C': 0.09293555960749145}. Best is trial 38 with value: 0.44886789327673615.
+[I 2025-12-10 17:06:49,045] Trial 1 finished with value: 0.4023834608746575 and parameters: {'C': 0.13584133706375087}. Best is trial 38 with value: 0.44886789327673615.
+[I 2025-12-10 17:26:21,697] Trial 39 finished with value: 0.4366942168005713 and parameters: {'C': 0.02962506713910004}. Best is trial 38 with value: 0.44886789327673615.
+/home/exouser/.conda/envs/aki_prediction_project/lib/python3.9/site-packages/sklearn/linear_model/_logistic.py:465: ConvergenceWarning: lbfgs failed to converge (status=1):
+STOP: TOTAL NO. of ITERATIONS REACHED LIMIT.
+
+Increase the number of iterations (max_iter) or scale the data as shown in:
+    https://scikit-learn.org/stable/modules/preprocessing.html
+Please also refer to the documentation for alternative solver options:
+    https://scikit-learn.org/stable/modules/linear_model.html#logistic-regression
+  n_iter_i = _check_optimize_result(
+[I 2025-12-10 17:29:46,281] Trial 30 finished with value: 0.391502639735531 and parameters: {'C': 0.21847406850328563}. Best is trial 38 with value: 0.44886789327673615.
+/home/exouser/.conda/envs/aki_prediction_project/lib/python3.9/site-packages/sklearn/linear_model/_logistic.py:465: ConvergenceWarning: lbfgs failed to converge (status=1):
+STOP: TOTAL NO. of ITERATIONS REACHED LIMIT.
+
+Increase the number of iterations (max_iter) or scale the data as shown in:
+    https://scikit-learn.org/stable/modules/preprocessing.html
+Please also refer to the documentation for alternative solver options:
+    https://scikit-learn.org/stable/modules/linear_model.html#logistic-regression
+  n_iter_i = _check_optimize_result(
+/home/exouser/.conda/envs/aki_prediction_project/lib/python3.9/site-packages/sklearn/linear_model/_logistic.py:465: ConvergenceWarning: lbfgs failed to converge (status=1):
+STOP: TOTAL NO. of ITERATIONS REACHED LIMIT.
+
+Increase the number of iterations (max_iter) or scale the data as shown in:
+    https://scikit-learn.org/stable/modules/preprocessing.html
+Please also refer to the documentation for alternative solver options:
+    https://scikit-learn.org/stable/modules/linear_model.html#logistic-regression
+  n_iter_i = _check_optimize_result(
+[I 2025-12-10 17:35:56,425] Trial 36 finished with value: 0.4289899439479635 and parameters: {'C': 0.048301216335862034}. Best is trial 38 with value: 0.44886789327673615.
+/home/exouser/.conda/envs/aki_prediction_project/lib/python3.9/site-packages/sklearn/linear_model/_logistic.py:465: ConvergenceWarning: lbfgs failed to converge (status=1):
+STOP: TOTAL NO. of ITERATIONS REACHED LIMIT.
+
+Increase the number of iterations (max_iter) or scale the data as shown in:
+    https://scikit-learn.org/stable/modules/preprocessing.html
+Please also refer to the documentation for alternative solver options:
+    https://scikit-learn.org/stable/modules/linear_model.html#logistic-regression
+  n_iter_i = _check_optimize_result(
+[I 2025-12-10 17:38:17,464] Trial 19 finished with value: 0.39050620892467286 and parameters: {'C': 0.22567242560504316}. Best is trial 38 with value: 0.44886789327673615.
+/home/exouser/.conda/envs/aki_prediction_project/lib/python3.9/site-packages/sklearn/linear_model/_logistic.py:465: ConvergenceWarning: lbfgs failed to converge (status=1):
+STOP: TOTAL NO. of ITERATIONS REACHED LIMIT.
+
+Increase the number of iterations (max_iter) or scale the data as shown in:
+    https://scikit-learn.org/stable/modules/preprocessing.html
+Please also refer to the documentation for alternative solver options:
+    https://scikit-learn.org/stable/modules/linear_model.html#logistic-regression
+  n_iter_i = _check_optimize_result(
+/home/exouser/.conda/envs/aki_prediction_project/lib/python3.9/site-packages/sklearn/linear_model/_logistic.py:465: ConvergenceWarning: lbfgs failed to converge (status=1):
+STOP: TOTAL NO. of ITERATIONS REACHED LIMIT.
+
+Increase the number of iterations (max_iter) or scale the data as shown in:
+    https://scikit-learn.org/stable/modules/preprocessing.html
+Please also refer to the documentation for alternative solver options:
+    https://scikit-learn.org/stable/modules/linear_model.html#logistic-regression
+  n_iter_i = _check_optimize_result(
+[I 2025-12-10 17:53:12,248] Trial 34 finished with value: 0.4128779524224739 and parameters: {'C': 0.09897967399406038}. Best is trial 38 with value: 0.44886789327673615.
+/home/exouser/.conda/envs/aki_prediction_project/lib/python3.9/site-packages/sklearn/linear_model/_logistic.py:465: ConvergenceWarning: lbfgs failed to converge (status=1):
+STOP: TOTAL NO. of ITERATIONS REACHED LIMIT.
+
+Increase the number of iterations (max_iter) or scale the data as shown in:
+    https://scikit-learn.org/stable/modules/preprocessing.html
+Please also refer to the documentation for alternative solver options:
+    https://scikit-learn.org/stable/modules/linear_model.html#logistic-regression
+  n_iter_i = _check_optimize_result(
+/home/exouser/.conda/envs/aki_prediction_project/lib/python3.9/site-packages/sklearn/linear_model/_logistic.py:465: ConvergenceWarning: lbfgs failed to converge (status=1):
+STOP: TOTAL NO. of ITERATIONS REACHED LIMIT.
+
+Increase the number of iterations (max_iter) or scale the data as shown in:
+    https://scikit-learn.org/stable/modules/preprocessing.html
+Please also refer to the documentation for alternative solver options:
+    https://scikit-learn.org/stable/modules/linear_model.html#logistic-regression
+  n_iter_i = _check_optimize_result(
+[I 2025-12-10 18:25:39,604] Trial 37 finished with value: 0.40774521651889606 and parameters: {'C': 0.11709439254480257}. Best is trial 38 with value: 0.44886789327673615.
+/home/exouser/.conda/envs/aki_prediction_project/lib/python3.9/site-packages/sklearn/linear_model/_logistic.py:465: ConvergenceWarning: lbfgs failed to converge (status=1):
+STOP: TOTAL NO. of ITERATIONS REACHED LIMIT.
+
+Increase the number of iterations (max_iter) or scale the data as shown in:
+    https://scikit-learn.org/stable/modules/preprocessing.html
+Please also refer to the documentation for alternative solver options:
+    https://scikit-learn.org/stable/modules/linear_model.html#logistic-regression
+  n_iter_i = _check_optimize_result(
+/home/exouser/.conda/envs/aki_prediction_project/lib/python3.9/site-packages/sklearn/linear_model/_logistic.py:465: ConvergenceWarning: lbfgs failed to converge (status=1):
+STOP: TOTAL NO. of ITERATIONS REACHED LIMIT.
+
+Increase the number of iterations (max_iter) or scale the data as shown in:
+    https://scikit-learn.org/stable/modules/preprocessing.html
+Please also refer to the documentation for alternative solver options:
+    https://scikit-learn.org/stable/modules/linear_model.html#logistic-regression
+  n_iter_i = _check_optimize_result(
+[I 2025-12-10 18:41:48,815] Trial 18 finished with value: 0.361424922542239 and parameters: {'C': 0.6011723666774715}. Best is trial 38 with value: 0.44886789327673615.
+/home/exouser/.conda/envs/aki_prediction_project/lib/python3.9/site-packages/sklearn/linear_model/_logistic.py:465: ConvergenceWarning: lbfgs failed to converge (status=1):
+STOP: TOTAL NO. of ITERATIONS REACHED LIMIT.
+
+Increase the number of iterations (max_iter) or scale the data as shown in:
+    https://scikit-learn.org/stable/modules/preprocessing.html
+Please also refer to the documentation for alternative solver options:
+    https://scikit-learn.org/stable/modules/linear_model.html#logistic-regression
+  n_iter_i = _check_optimize_result(
+/home/exouser/.conda/envs/aki_prediction_project/lib/python3.9/site-packages/sklearn/linear_model/_logistic.py:465: ConvergenceWarning: lbfgs failed to converge (status=1):
+STOP: TOTAL NO. of ITERATIONS REACHED LIMIT.
+
+Increase the number of iterations (max_iter) or scale the data as shown in:
+    https://scikit-learn.org/stable/modules/preprocessing.html
+Please also refer to the documentation for alternative solver options:
+    https://scikit-learn.org/stable/modules/linear_model.html#logistic-regression
+  n_iter_i = _check_optimize_result(
+/home/exouser/.conda/envs/aki_prediction_project/lib/python3.9/site-packages/sklearn/linear_model/_logistic.py:465: ConvergenceWarning: lbfgs failed to converge (status=1):
+STOP: TOTAL NO. of ITERATIONS REACHED LIMIT.
+
+Increase the number of iterations (max_iter) or scale the data as shown in:
+    https://scikit-learn.org/stable/modules/preprocessing.html
+Please also refer to the documentation for alternative solver options:
+    https://scikit-learn.org/stable/modules/linear_model.html#logistic-regression
+  n_iter_i = _check_optimize_result(
+/home/exouser/.conda/envs/aki_prediction_project/lib/python3.9/site-packages/sklearn/linear_model/_logistic.py:465: ConvergenceWarning: lbfgs failed to converge (status=1):
+STOP: TOTAL NO. of ITERATIONS REACHED LIMIT.
+
+Increase the number of iterations (max_iter) or scale the data as shown in:
+    https://scikit-learn.org/stable/modules/preprocessing.html
+Please also refer to the documentation for alternative solver options:
+    https://scikit-learn.org/stable/modules/linear_model.html#logistic-regression
+  n_iter_i = _check_optimize_result(
+/home/exouser/.conda/envs/aki_prediction_project/lib/python3.9/site-packages/sklearn/linear_model/_logistic.py:465: ConvergenceWarning: lbfgs failed to converge (status=1):
+STOP: TOTAL NO. of ITERATIONS REACHED LIMIT.
+
+Increase the number of iterations (max_iter) or scale the data as shown in:
+    https://scikit-learn.org/stable/modules/preprocessing.html
+Please also refer to the documentation for alternative solver options:
+    https://scikit-learn.org/stable/modules/linear_model.html#logistic-regression
+  n_iter_i = _check_optimize_result(
+/home/exouser/.conda/envs/aki_prediction_project/lib/python3.9/site-packages/sklearn/linear_model/_logistic.py:465: ConvergenceWarning: lbfgs failed to converge (status=1):
+STOP: TOTAL NO. of ITERATIONS REACHED LIMIT.
+
+Increase the number of iterations (max_iter) or scale the data as shown in:
+    https://scikit-learn.org/stable/modules/preprocessing.html
+Please also refer to the documentation for alternative solver options:
+    https://scikit-learn.org/stable/modules/linear_model.html#logistic-regression
+  n_iter_i = _check_optimize_result(
+[I 2025-12-10 19:42:16,912] Trial 32 finished with value: 0.3581512651585882 and parameters: {'C': 0.6744236604136284}. Best is trial 38 with value: 0.44886789327673615.
+/home/exouser/.conda/envs/aki_prediction_project/lib/python3.9/site-packages/sklearn/linear_model/_logistic.py:465: ConvergenceWarning: lbfgs failed to converge (status=1):
+STOP: TOTAL NO. of ITERATIONS REACHED LIMIT.
+
+Increase the number of iterations (max_iter) or scale the data as shown in:
+    https://scikit-learn.org/stable/modules/preprocessing.html
+Please also refer to the documentation for alternative solver options:
+    https://scikit-learn.org/stable/modules/linear_model.html#logistic-regression
+  n_iter_i = _check_optimize_result(
+/home/exouser/.conda/envs/aki_prediction_project/lib/python3.9/site-packages/sklearn/linear_model/_logistic.py:465: ConvergenceWarning: lbfgs failed to converge (status=1):
+STOP: TOTAL NO. of ITERATIONS REACHED LIMIT.
+
+Increase the number of iterations (max_iter) or scale the data as shown in:
+    https://scikit-learn.org/stable/modules/preprocessing.html
+Please also refer to the documentation for alternative solver options:
+    https://scikit-learn.org/stable/modules/linear_model.html#logistic-regression
+  n_iter_i = _check_optimize_result(
+/home/exouser/.conda/envs/aki_prediction_project/lib/python3.9/site-packages/sklearn/linear_model/_logistic.py:465: ConvergenceWarning: lbfgs failed to converge (status=1):
+STOP: TOTAL NO. of ITERATIONS REACHED LIMIT.
+
+Increase the number of iterations (max_iter) or scale the data as shown in:
+    https://scikit-learn.org/stable/modules/preprocessing.html
+Please also refer to the documentation for alternative solver options:
+    https://scikit-learn.org/stable/modules/linear_model.html#logistic-regression
+  n_iter_i = _check_optimize_result(
+[I 2025-12-10 19:53:32,273] Trial 4 finished with value: 0.31721658050633333 and parameters: {'C': 3.2379534938611436}. Best is trial 38 with value: 0.44886789327673615.
+/home/exouser/.conda/envs/aki_prediction_project/lib/python3.9/site-packages/sklearn/linear_model/_logistic.py:465: ConvergenceWarning: lbfgs failed to converge (status=1):
+STOP: TOTAL NO. of ITERATIONS REACHED LIMIT.
+
+Increase the number of iterations (max_iter) or scale the data as shown in:
+    https://scikit-learn.org/stable/modules/preprocessing.html
+Please also refer to the documentation for alternative solver options:
+    https://scikit-learn.org/stable/modules/linear_model.html#logistic-regression
+  n_iter_i = _check_optimize_result(
+[I 2025-12-10 19:53:37,059] Trial 8 finished with value: 0.3104152275447395 and parameters: {'C': 4.648173025689874}. Best is trial 38 with value: 0.44886789327673615.
+/home/exouser/.conda/envs/aki_prediction_project/lib/python3.9/site-packages/sklearn/linear_model/_logistic.py:465: ConvergenceWarning: lbfgs failed to converge (status=1):
+STOP: TOTAL NO. of ITERATIONS REACHED LIMIT.
+
+Increase the number of iterations (max_iter) or scale the data as shown in:
+    https://scikit-learn.org/stable/modules/preprocessing.html
+Please also refer to the documentation for alternative solver options:
+    https://scikit-learn.org/stable/modules/linear_model.html#logistic-regression
+  n_iter_i = _check_optimize_result(
+[I 2025-12-10 19:59:43,862] Trial 16 finished with value: 0.3100520830520823 and parameters: {'C': 5.0347329399249485}. Best is trial 38 with value: 0.44886789327673615.
+/home/exouser/.conda/envs/aki_prediction_project/lib/python3.9/site-packages/sklearn/linear_model/_logistic.py:465: ConvergenceWarning: lbfgs failed to converge (status=1):
+STOP: TOTAL NO. of ITERATIONS REACHED LIMIT.
+
+Increase the number of iterations (max_iter) or scale the data as shown in:
+    https://scikit-learn.org/stable/modules/preprocessing.html
+Please also refer to the documentation for alternative solver options:
+    https://scikit-learn.org/stable/modules/linear_model.html#logistic-regression
+  n_iter_i = _check_optimize_result(
+[I 2025-12-10 20:02:51,502] Trial 13 finished with value: 0.3137175064405896 and parameters: {'C': 4.12801171372809}. Best is trial 38 with value: 0.44886789327673615.
+/home/exouser/.conda/envs/aki_prediction_project/lib/python3.9/site-packages/sklearn/linear_model/_logistic.py:465: ConvergenceWarning: lbfgs failed to converge (status=1):
+STOP: TOTAL NO. of ITERATIONS REACHED LIMIT.
+
+Increase the number of iterations (max_iter) or scale the data as shown in:
+    https://scikit-learn.org/stable/modules/preprocessing.html
+Please also refer to the documentation for alternative solver options:
+    https://scikit-learn.org/stable/modules/linear_model.html#logistic-regression
+  n_iter_i = _check_optimize_result(
+[I 2025-12-10 20:04:00,376] Trial 2 finished with value: 0.3022905685702101 and parameters: {'C': 9.832675816463315}. Best is trial 38 with value: 0.44886789327673615.
+[I 2025-12-10 20:05:06,869] Trial 63 finished with value: 0.4475660975033323 and parameters: {'C': 0.00937888564121639}. Best is trial 38 with value: 0.44886789327673615.
+/home/exouser/.conda/envs/aki_prediction_project/lib/python3.9/site-packages/sklearn/linear_model/_logistic.py:465: ConvergenceWarning: lbfgs failed to converge (status=1):
+STOP: TOTAL NO. of ITERATIONS REACHED LIMIT.
+
+Increase the number of iterations (max_iter) or scale the data as shown in:
+    https://scikit-learn.org/stable/modules/preprocessing.html
+Please also refer to the documentation for alternative solver options:
+    https://scikit-learn.org/stable/modules/linear_model.html#logistic-regression
+  n_iter_i = _check_optimize_result(
+[I 2025-12-10 20:05:51,568] Trial 5 finished with value: 0.31538212158641815 and parameters: {'C': 3.5317307422847946}. Best is trial 38 with value: 0.44886789327673615.
+[I 2025-12-10 20:16:20,650] Trial 47 finished with value: 0.38596942656628525 and parameters: {'C': 0.30491681252404323}. Best is trial 38 with value: 0.44886789327673615.
+[I 2025-12-10 20:19:48,603] Trial 46 finished with value: 0.38234982041865556 and parameters: {'C': 0.3324097914524208}. Best is trial 38 with value: 0.44886789327673615.
+[I 2025-12-10 20:34:32,781] Trial 51 finished with value: 0.3858637386355246 and parameters: {'C': 0.30006661495113074}. Best is trial 38 with value: 0.44886789327673615.
+/home/exouser/.conda/envs/aki_prediction_project/lib/python3.9/site-packages/sklearn/linear_model/_logistic.py:465: ConvergenceWarning: lbfgs failed to converge (status=1):
+STOP: TOTAL NO. of ITERATIONS REACHED LIMIT.
+
+Increase the number of iterations (max_iter) or scale the data as shown in:
+    https://scikit-learn.org/stable/modules/preprocessing.html
+Please also refer to the documentation for alternative solver options:
+    https://scikit-learn.org/stable/modules/linear_model.html#logistic-regression
+  n_iter_i = _check_optimize_result(
+[I 2025-12-10 20:36:03,913] Trial 41 finished with value: 0.35890813718320025 and parameters: {'C': 0.6619132448957514}. Best is trial 38 with value: 0.44886789327673615.
+[I 2025-12-10 20:37:35,005] Trial 48 finished with value: 0.37221008297983144 and parameters: {'C': 0.43095352474100823}. Best is trial 38 with value: 0.44886789327673615.
+[I 2025-12-10 20:40:04,221] Trial 45 finished with value: 0.3670557941929349 and parameters: {'C': 0.5142236158845774}. Best is trial 38 with value: 0.44886789327673615.
+[I 2025-12-10 20:41:09,274] Trial 42 finished with value: 0.36392396901066837 and parameters: {'C': 0.5650072669695738}. Best is trial 38 with value: 0.44886789327673615.
