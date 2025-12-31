@@ -121,7 +121,7 @@ CONTINUOUS_COLS = [
     'preop_lac',
 
     # Derived continuous features
-    'preop_egfr_ckdepi',
+    'preop_egfr_ckdepi_2021',
 ]
 
 # Categorical features for merging and one-hot encoding
@@ -165,6 +165,23 @@ PREOP_LABS_FROM_LABDATA = [
     'crp',   # C-reactive protein
     'lac',   # lactate
 ]
+
+def _convert_creatinine_to_mg_dl(scr_series: pd.Series) -> pd.Series:
+    """Return serum creatinine in mg/dL with basic unit validation.
+
+    Creatinine values may be stored in mg/dL or µmol/L. Values greater than
+    20 are assumed to be in µmol/L and converted using the factor
+    1 mg/dL = 88.4 µmol/L. Nonpositive values are treated as missing.
+    """
+    scr_numeric = pd.to_numeric(scr_series, errors='coerce')
+
+    # Treat nonpositive values as invalid before conversion/derivation
+    scr_numeric = scr_numeric.where(scr_numeric > 0)
+
+    needs_conversion = scr_numeric > 20
+    scr_numeric.loc[needs_conversion] = scr_numeric.loc[needs_conversion] / 88.4
+
+    return scr_numeric
 
 def build_preop_labs_from_labdata(lab_df: pd.DataFrame,
                                   lab_names=PREOP_LABS_FROM_LABDATA,
@@ -232,20 +249,19 @@ def add_derived_preop_features(df: pd.DataFrame) -> pd.DataFrame:
     # (we'll still keep it in PREOP_FEATURES_TO_SELECT so we can derive these)
     df.drop(columns=['adm'], inplace=True)
 
-    # --- Creatinine-based eGFR (CKD-EPI 2009, race-free) ---
-    # Uses sex, age, preop_cr. Units: Scr mg/dL, age years.
+    # --- Creatinine-based eGFR (CKD-EPI 2021, creatinine-only, race-free) ---
     sex = df['sex'].astype(str)
     age = pd.to_numeric(df['age'], errors='coerce')
-    scr = pd.to_numeric(df['preop_cr'], errors='coerce')
+    scr_mg_dl = _convert_creatinine_to_mg_dl(df['preop_cr'])
 
     kappa = np.where(sex == 'F', 0.7, 0.9)
-    alpha = np.where(sex == 'F', -0.329, -0.411)
+    alpha = np.where(sex == 'F', -0.241, -0.302)
 
-    scr_k = scr / kappa
-    egfr = 141 * np.minimum(scr_k, 1.0) ** alpha * np.maximum(scr_k, 1.0) ** (-1.209) * (0.993 ** age)
-    egfr *= np.where(sex == 'F', 1.018, 1.0)
+    scr_k = scr_mg_dl / kappa
+    egfr = 142 * np.minimum(scr_k, 1.0) ** alpha * np.maximum(scr_k, 1.0) ** (-1.200) * (0.9938 ** age)
+    egfr *= np.where(sex == 'F', 1.012, 1.0)
 
-    df['preop_egfr_ckdepi'] = egfr
+    df['preop_egfr_ckdepi_2021'] = egfr
 
     # --- Simple binary clinical flags (0/1) ---
     # BUN high
