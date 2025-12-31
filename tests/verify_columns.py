@@ -49,18 +49,18 @@ def verify_columns():
         'preop_wbc', 'preop_gfr', 'preop_crp', 'preop_lac',
         
         # Derived Continuous
-        'preop_los_days', 'preop_egfr_ckdepi'
+        'preop_egfr_ckdepi'
     ]
     
     # Categorical variables (Original names - expected to be One-Hot Encoded)
     categorical_vars = [
-        'sex', 'emop', 'department', 'approach', 'asa', 'optype', 
-        'ane_type', 'position', 'preop_htn', 'preop_dm', 'preop_ecg', 'preop_pft'
+        'sex', 'emop', 'department', 'approach', 'asa', 'optype',
+        'ane_type', 'preop_htn', 'preop_dm', 'preop_ecg', 'preop_pft'
     ]
     
     # Derived Binary Flags (Should exist as is)
     binary_flags = [
-        'inpatient_preop', 'bun_high', 'hypoalbuminemia', 'preop_anemia', 
+        'inpatient_preop', 'bun_high', 'hypoalbuminemia', 'preop_anemia',
         'hyponatremia', 'metabolic_acidosis', 'hypercapnia', 'hypoxemia'
     ]
     
