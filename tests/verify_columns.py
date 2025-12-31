@@ -9,17 +9,6 @@ sys.path.append(str(PROJECT_ROOT))
 
 from data_preparation.inputs import PREOP_PROCESSED_FILE
 
-import pandas as pd
-import numpy as np
-from pathlib import Path
-import sys
-
-# Add project root to path
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.append(str(PROJECT_ROOT))
-
-from data_preparation.inputs import PREOP_PROCESSED_FILE
-
 def verify_columns():
     print(f"Checking file: {PREOP_PROCESSED_FILE}")
     
@@ -60,8 +49,13 @@ def verify_columns():
     
     # Derived Binary Flags (Should exist as is)
     binary_flags = [
-        'inpatient_preop', 'bun_high', 'hypoalbuminemia', 'preop_anemia',
-        'hyponatremia', 'metabolic_acidosis', 'hypercapnia', 'hypoxemia'
+        'inpatient_preop'
+    ]
+
+    # Derived flags that should be computed for intermediate use but dropped from the final output
+    removed_flags = [
+        'bun_high', 'hypoalbuminemia', 'preop_anemia', 'hyponatremia',
+        'metabolic_acidosis', 'hypercapnia', 'hypoxemia'
     ]
     
     # --- Verification Logic ---
@@ -91,6 +85,11 @@ def verify_columns():
         else:
             if df[col].nunique() <= 1 and df[col].iloc[0] == -99:
                  empty_cols.append(f"{col} (All -99)")
+
+    print("\n--- 2b. Confirming Removed Derived Flags ---")
+    for col in removed_flags:
+        if col in df.columns:
+            missing_cols.append(f"{col} (expected removed)")
     
     print("\n--- 3. Checking Categorical Variables (One-Hot Encoded) ---")
     # For categorical, we check if there is at least one column starting with the prefix

@@ -140,6 +140,23 @@ CATEGORICAL_COLS = [
     'preop_pft',
 ]
 
+# Derived binary flags that should be computed but excluded from the final processed output
+DERIVED_FLAGS_TO_DROP = [
+    'bun_high',
+    'hypoalbuminemia',
+    'preop_anemia',
+    'hyponatremia',
+    'metabolic_acidosis',
+    'hypercapnia',
+    'hypoxemia',
+]
+
+# Sanity check: ensure derived flags earmarked for removal are not part of helper lists
+_helper_lists = [PREOP_FEATURES_TO_SELECT, CONTINUOUS_COLS, CATEGORICAL_COLS]
+for _flag in DERIVED_FLAGS_TO_DROP:
+    if any(_flag in helper for helper in _helper_lists):
+        raise ValueError(f"Derived flag {_flag} should not be present in helper lists")
+
 # Labs we want to derive preop values for.
 # Names are exactly as in VitalDB lab_data. 
 PREOP_LABS_FROM_LABDATA = [
@@ -333,7 +350,7 @@ def main():
         preop_df = add_derived_preop_features(preop_df)
 
         # Drop derived features not used for modeling
-        cols_to_drop = ['position']
+        cols_to_drop = ['position'] + DERIVED_FLAGS_TO_DROP
         existing_drop_cols = [col for col in cols_to_drop if col in preop_df.columns]
         if existing_drop_cols:
             preop_df = preop_df.drop(columns=existing_drop_cols)

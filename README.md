@@ -83,7 +83,7 @@ We extract a comprehensive set of preoperative variables from `clinical_data.csv
 *   **Derived Features**:
     *   `inpatient_preop`: Binary flag for inpatient admission prior to surgery.
     *   `preop_egfr_ckdepi`: eGFR calculated using CKD-EPI 2009 equation (race-free).
-    *   **Clinical Flags** (Binary): `bun_high` (>27), `hypoalbuminemia` (<3.5), `preop_anemia` (Sex-specific Hb thresholds), `hyponatremia` (<135), `metabolic_acidosis` (HCO3 < 22 or BE < -2), `hypercapnia` (PaCO2 > 45), `hypoxemia` (PaO2 < 80 or SaO2 < 95).
+    *   Clinical flag helpers (e.g., `bun_high`, `hypoalbuminemia`) are computed for intermediate use but removed before one-hot encoding/imputation in the saved `preop_processed.csv`.
 
 #### 2. Processing Steps
 *   **Splitting**: Performs an 80/20 stratified split based on the outcome. This `split_group` is saved and used downstream to prevent leakage.
