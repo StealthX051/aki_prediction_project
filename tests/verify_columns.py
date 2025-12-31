@@ -33,9 +33,9 @@ def verify_columns():
         
         # ABG
         'preop_ph', 'preop_be', 'preop_pao2', 'preop_paco2', 'preop_sao2',
-        
+
         # New Labs
-        'preop_wbc', 'preop_gfr', 'preop_crp', 'preop_lac',
+        'preop_wbc', 'preop_crp', 'preop_lac',
 
         # Derived Continuous
         'preop_egfr_ckdepi_2021'
@@ -50,6 +50,11 @@ def verify_columns():
     # Derived Binary Flags (Should exist as is)
     binary_flags = [
         'inpatient_preop'
+    ]
+
+    # Deprecated or removed columns that should no longer appear
+    removed_cols = [
+        'preop_gfr'
     ]
 
     # Derived flags that should be computed for intermediate use but dropped from the final output
@@ -90,6 +95,11 @@ def verify_columns():
     for col in removed_flags:
         if col in df.columns:
             missing_cols.append(f"{col} (expected removed)")
+
+    print("\n--- 2c. Confirming Deprecated Columns Removed ---")
+    for col in removed_cols:
+        if col in df.columns:
+            missing_cols.append(f"{col} (deprecated)")
     
     print("\n--- 3. Checking Categorical Variables (One-Hot Encoded) ---")
     # For categorical, we check if there is at least one column starting with the prefix
