@@ -16,8 +16,6 @@ PRIMARY_SETS=(
     "pleth_only" "ecg_only" "co2_only" "awp_only"
     "all_waveforms"
     "preop_and_all_waveforms"
-    "ventilator_only"
-    "monitors_only"
 )
 
 # 2. Ablation Models (Preop + Waveform A)
