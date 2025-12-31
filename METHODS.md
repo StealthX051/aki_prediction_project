@@ -60,9 +60,9 @@ A comprehensive set of preoperative variables was extracted from the VitalDB cli
 #### 2. Derived Features
 We computed several derived features to capture clinical status more effectively:
 *   **Inpatient Status (`inpatient_preop`)**: Binary indicator that the patient was admitted prior to surgery (admission time < 0 seconds relative to case start).
-*   **Estimated GFR (`preop_egfr_ckdepi`)**: Calculated using the **CKD-EPI 2009** creatinine equation (race-free version):
-    $$ eGFR = 141 \times \min(S_{cr}/\kappa, 1)^\alpha \times \max(S_{cr}/\kappa, 1)^{-1.209} \times 0.993^{Age} \times 1.018 [if Female] $$
-    Where $S_{cr}$ is serum creatinine, $\kappa$ is 0.7 (F) or 0.9 (M), and $\alpha$ is -0.329 (F) or -0.411 (M).
+*   **Estimated GFR (`preop_egfr_ckdepi_2021`)**: Calculated using the **CKD-EPI 2021** creatinine-only, race-free equation:
+    $$ eGFR = 142 \times \min(S_{cr}/\kappa, 1)^\alpha \times \max(S_{cr}/\kappa, 1)^{-1.200} \times 0.9938^{Age} \times 1.012 [if\ Female] $$
+    Where $S_{cr}$ (mg/dL) is serum creatinine, $\kappa$ is 0.7 (F) or 0.9 (M), and $\alpha$ is -0.241 (F) or -0.302 (M). Creatinine values documented in µmol/L were converted using 1 mg/dL = 88.4 µmol/L; nonpositive values were treated as missing before derivation.
 *   **Clinical Flags** (Binary indicators of abnormal physiology):
     *   **High BUN**: `preop_bun > 27` mg/dL.
     *   **Hypoalbuminemia**: `preop_alb < 3.5` g/dL.

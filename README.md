@@ -82,7 +82,7 @@ We extract a comprehensive set of preoperative variables from `clinical_data.csv
     *   `preop_lac`: Lactate.
 *   **Derived Features**:
     *   `inpatient_preop`: Binary flag for inpatient admission prior to surgery.
-    *   `preop_egfr_ckdepi`: eGFR calculated using CKD-EPI 2009 equation (race-free).
+    *   `preop_egfr_ckdepi_2021`: eGFR calculated using CKD-EPI 2021 creatinine-only equation (race-free).
     *   Clinical flag helpers (e.g., `bun_high`, `hypoalbuminemia`) are computed for intermediate use but removed before one-hot encoding/imputation in the saved `preop_processed.csv`.
 
 #### 2. Processing Steps

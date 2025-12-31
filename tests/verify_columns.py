@@ -36,9 +36,9 @@ def verify_columns():
         
         # New Labs
         'preop_wbc', 'preop_gfr', 'preop_crp', 'preop_lac',
-        
+
         # Derived Continuous
-        'preop_egfr_ckdepi'
+        'preop_egfr_ckdepi_2021'
     ]
     
     # Categorical variables (Original names - expected to be One-Hot Encoded)
