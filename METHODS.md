@@ -19,8 +19,8 @@ Patients were included in the study if they met the following criteria:
 
 **Outcome Definition**:
 *   **Primary Outcome**: Postoperative Acute Kidney Injury (AKI) was defined according to the **KDIGO** (Kidney Disease: Improving Global Outcomes) criteria. The outcome was binary, comparing patients who developed AKI against those who did not.
-    *   **AKI Positive**: Any increase in serum creatinine $\ge 0.3$ mg/dL within 48 hours of surgery OR $\ge 1.5$ times baseline within 7 days of surgery.
-    *   **AKI Negative**: Patients not meeting the above criteria.
+*   **AKI Positive**: Any increase in serum creatinine $\ge 0.3$ mg/dL within 48 hours of surgery OR $\ge 1.5$ times baseline within 3 days (72 hours) of surgery, emphasizing perioperative attribution for this anesthesiology-focused cohort.
+*   **AKI Negative**: Patients not meeting the above criteria.
 *   **Secondary Outcomes**:
     *   **Severe AKI**: Defined as KDIGO Stage 2 or 3 AKI (`y_severe_aki`).
         *   **Stage 2**: Serum creatinine $\ge 2.0$ times baseline.
