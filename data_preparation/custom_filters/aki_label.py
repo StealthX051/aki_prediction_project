@@ -16,7 +16,7 @@ def add_aki_label(cohort_df: pd.DataFrame) -> pd.DataFrame:
         """
         Applies KDIGO criteria to determine the AKI Stage (0-3) for a single patient row.
         
-        Stage 1: Increase >= 0.3 mg/dL (48h) OR Increase >= 1.5-1.9x baseline (7d)
+        Stage 1: Increase >= 0.3 mg/dL (48h) OR Increase >= 1.5-1.9x baseline within 3 days
         Stage 2: Increase >= 2.0-2.9x baseline
         Stage 3: Increase >= 3.0x baseline OR Cr >= 4.0 mg/dL
         """
@@ -37,9 +37,9 @@ def add_aki_label(cohort_df: pd.DataFrame) -> pd.DataFrame:
         labs_48h = postop_labs[postop_labs['dt'] <= row['opend'] + (48 * 3600)]
         max_cr_48h = labs_48h['result'].max() if not labs_48h.empty else 0
         
-        # 7 Day Window (for relative increase)
-        labs_7d = postop_labs[postop_labs['dt'] <= row['opend'] + (7 * 24 * 3600)]
-        max_cr_7d = labs_7d['result'].max() if not labs_7d.empty else 0
+        # 3 Day Window (for relative increase)
+        labs_3d = postop_labs[postop_labs['dt'] <= row['opend'] + (3 * 24 * 3600)]
+        max_cr_3d = labs_3d['result'].max() if not labs_3d.empty else 0
         
         # --- Determine Stage (Check highest stage first) ---
         
@@ -47,18 +47,18 @@ def add_aki_label(cohort_df: pd.DataFrame) -> pd.DataFrame:
         # - 3.0x baseline
         # - Increase to >= 4.0 mg/dL (Note: KDIGO also requires acute increase >= 0.3 if initiating RRT, 
         #   but we simplify to >= 4.0 as per common electronic definitions if RRT unknown)
-        if (max_cr_7d / baseline_cr >= 3.0) or (max_cr_7d >= 4.0):
+        if (max_cr_3d / baseline_cr >= 3.0) or (max_cr_3d >= 4.0):
             return 3
             
         # Stage 2
         # - 2.0-2.9x baseline
-        if (max_cr_7d / baseline_cr >= 2.0):
+        if (max_cr_3d / baseline_cr >= 2.0):
             return 2
             
         # Stage 1
         # - 1.5-1.9x baseline
         # - Increase >= 0.3 mg/dL within 48h
-        if (max_cr_7d / baseline_cr >= 1.5) or ((max_cr_48h - baseline_cr) >= 0.3):
+        if (max_cr_3d / baseline_cr >= 1.5) or ((max_cr_48h - baseline_cr) >= 0.3):
             return 1
             
         return 0
