@@ -76,7 +76,7 @@ We computed several derived features to capture clinical status more effectively
 #### 3. Data Preprocessing
 *   **Train/Test Split**: An 80/20 stratified split was performed based on the primary outcome (`aki_label`) *before* any further processing to ensure strict separation.
 *   **Outlier Handling**: Continuous variables were checked for outliers. Percentiles (0.5% and 99.5%) were calculated **using only the training set**. Values outside this range in both training and test sets were replaced with random values drawn from the [0.5%, 5%] range (for low outliers) or [95%, 99.5%] range (for high outliers) to preserve distribution shape while capping extremes.
-*   **Imputation**: Missing values in continuous and categorical features were imputed with a constant value (**-99**) to allow tree-based models (XGBoost) to learn missingness patterns explicitly.
+*   **Imputation**: By default, missing values in continuous and categorical features are left as `NaN` for downstream handling. An opt-in flag (`--impute-missing` or `IMPUTE_MISSING=True` in `data_preparation/inputs.py`) restores the previous constant-value imputation (**-99**) if needed for sentinel-based workflows.
 *   **Encoding**:
     *   Categorical variables (e.g., `department`, `approach`) were **One-Hot Encoded**.
     *   Binary variables (e.g., `sex`, `emop`, clinical flags) were encoded as 0/1.
@@ -140,7 +140,7 @@ To accommodate fixed-input classifiers (e.g., Rocket), a distinct preprocessing 
 *   **Anesthesia Duration**: To compensate for the loss of absolute time information due to resampling, `anesthesia_duration_minutes` was explicitly added as a tabular feature.
 *   **Imputation**:
     *   **Waveforms**: Cases with >5% missing data were dropped. Remaining gaps were linearly interpolated to prevent zero-padding artifacts which can distort convolution kernels.
-    *   **Tabular Data**: Unlike the tree-based pipeline (which uses -99), tabular features for linear heads (Ridge/Logistic) were imputed using **Median Imputation** and augmented with **Binary Missingness Indicators**.
+*   **Tabular Data**: Unlike the tree-based pipeline (which now preserves `NaN` by default), tabular features for linear heads (Ridge/Logistic) are imputed using **Median Imputation** and augmented with **Binary Missingness Indicators**.
 
 ### 2. Modeling Strategy (Early Fusion)
 We implemented an **Early Fusion** architecture where waveform features and preoperative tabular features are concatenated into a single vector before being passed to the final classifier.

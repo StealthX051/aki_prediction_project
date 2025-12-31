@@ -1,7 +1,10 @@
-import pandas as pd
-import numpy as np
+import argparse
 import sys
 from pathlib import Path
+from typing import Optional
+
+import numpy as np
+import pandas as pd
 from sklearn.model_selection import train_test_split
 
 # Add project root to path
@@ -12,7 +15,8 @@ from data_preparation.inputs import (
     COHORT_FILE,
     PREOP_PROCESSED_FILE,
     OUTCOME,
-    LAB_DATA_FILE
+    LAB_DATA_FILE,
+    IMPUTE_MISSING,
 )
 
 # --- Configuration ---
@@ -331,7 +335,27 @@ def handle_outliers(df, train_df, continuous_cols):
             df_processed.loc[high_outlier_indices, col] = high_replacements
     return df_processed
 
-def main():
+def main(impute_missing: Optional[bool] = None):
+    parser = argparse.ArgumentParser(
+        description="Prepare preoperative dataset and optional imputation."
+    )
+    parser.add_argument(
+        "--impute-missing",
+        action="store_true",
+        default=IMPUTE_MISSING,
+        help=(
+            "Fill missing values with -99 (previous behavior). By default, NaNs"
+            " are preserved for downstream handling."
+        ),
+    )
+
+    if impute_missing is None:
+        args = parser.parse_args()
+        impute_missing = args.impute_missing
+    else:
+        # Allow programmatic control while still parsing other CLI args if needed later
+        _ = parser.parse_args([])
+
     print("--- Step 03: Preoperative Data Preparation ---")
     print(f"Input: {COHORT_FILE}")
     print(f"Output: {PREOP_PROCESSED_FILE}")
@@ -445,8 +469,12 @@ def main():
     preop_df_cleaned = handle_outliers(preop_df_encoded, train_subset, CONTINUOUS_COLS)
 
     # 6. Imputation
-    print("Imputing missing values with -99...")
-    preop_df_final = preop_df_cleaned.fillna(-99)
+    if impute_missing:
+        print("Imputing missing values with -99...")
+        preop_df_final = preop_df_cleaned.fillna(-99)
+    else:
+        print("Leaving missing values as NaN (no imputation)")
+        preop_df_final = preop_df_cleaned
     
     # 7. Save
     print(f"Saving processed data to {PREOP_PROCESSED_FILE}...")

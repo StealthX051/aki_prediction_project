@@ -87,11 +87,13 @@ We extract a comprehensive set of preoperative variables from `clinical_data.csv
 #### 2. Processing Steps
 *   **Splitting**: Performs an 80/20 stratified split based on the outcome. This `split_group` is saved and used downstream to prevent leakage.
 *   **Outlier Handling**: Calculates percentiles (0.5%, 99.5%) **only on the training set** and applies them to clip/impute outliers in both train and test sets.
-*   **Imputation**: Fills missing values with -99.
+*   **Imputation**: **Disabled by default**; missing values remain as `NaN` for downstream handling. Pass `--impute-missing` (or set `IMPUTE_MISSING=True` in `data_preparation/inputs.py`) to restore the previous `-99` sentinel behavior.
 *   **Encoding**: Categorical variables are one-hot encoded. Rare categories (<30 occurrences) in `department` are merged into 'other'.
 
 ```bash
 python data_preparation/step_03_preop_prep.py
+# Optional: restore -99 imputation
+python data_preparation/step_03_preop_prep.py --impute-missing
 ```
 
 ### Step 5: Intraoperative Data Prep
@@ -111,9 +113,12 @@ Combines preop and intraop data into master datasets.
 *   **Technical Details**:
     *   Merges intraop features with processed preop data on `caseid`.
     *   **Integrity Check**: Ensures every row has a valid `split_group` from Step 3.
+    *   **Missing Data**: Leaves NaNs in place by default; pass `--impute-missing` (or set `IMPUTE_MISSING=True`) to fill merge-introduced NaNs with `-99`.
     *   Outputs final wide CSVs ready for training.
 ```bash
 python data_preparation/step_05_data_merge.py
+# Optional: restore -99 imputation during merge
+python data_preparation/step_05_data_merge.py --impute-missing
 ```
 
 ### Step 7: Model Training & Evaluation
@@ -241,7 +246,7 @@ This branch implements an end-to-end Deep Learning/State-of-the-Art Time Series 
 | Component | Script | Description |
 | :--- | :--- | :--- |
 | **Export** | `data_preparation/step_02_aeon_export.py` | Loads waveforms, resamples to `L=8000` (fixed length), exports to `.npz`. <br> **Args**: `--limit` (debug) |
-| **Preop Prep** | `data_preparation/step_04_aeon_prep.py` | Prepares tabular data: Median imputation + Missingness Indicators of preop features. |
+| **Preop Prep** | `data_preparation/step_04_aeon_prep.py` | Prepares tabular data: preserves `NaN` by default; add `--impute-missing` to apply median imputation with missingness indicators. |
 | **Training** | `model_creation_aeon/step_06_aeon_train.py` | Trains separate or fused models. <br> **Models**: `multirocket` (default `n_kernels=10000`), `minirocket`, `freshprince`. <br> **HPO**: Optuna optimization (100 trials) for linear head (`C`) maximizing AUPRC. Class weight is fixed to 'balanced'. <br> **Fusion**: Concatenates preop features with Rocket embeddings. <br> **Outputs**: Saves `predictions.csv` for unified analysis. |
 | **Reference** | `model_creation_aeon/classifiers.py` | Contains `RocketFused` and `FreshPrinceFused` class definitions. |
 | **Analysis** | `results_recreation/results_analysis.py` | Unified 1000-fold bootstrapping and report generation for both pipelines. |
