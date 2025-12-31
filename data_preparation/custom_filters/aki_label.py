@@ -15,8 +15,9 @@ def add_aki_label(cohort_df: pd.DataFrame) -> pd.DataFrame:
     def get_aki_stage(row, cr_labs_df):
         """
         Applies KDIGO criteria to determine the AKI Stage (0-3) for a single patient row.
-        
+
         Stage 1: Increase >= 0.3 mg/dL (48h) OR Increase >= 1.5-1.9x baseline within 3 days
+        (72h window to prioritize perioperative attribution for this anesthesiology-focused cohort)
         Stage 2: Increase >= 2.0-2.9x baseline
         Stage 3: Increase >= 3.0x baseline OR Cr >= 4.0 mg/dL
         """
@@ -37,7 +38,8 @@ def add_aki_label(cohort_df: pd.DataFrame) -> pd.DataFrame:
         labs_48h = postop_labs[postop_labs['dt'] <= row['opend'] + (48 * 3600)]
         max_cr_48h = labs_48h['result'].max() if not labs_48h.empty else 0
         
-        # 3 Day Window (for relative increase)
+        # 3 Day Window (for relative increase). Limiting to 72 hours helps focus on perioperative
+        # contributors rather than later postoperative events.
         labs_3d = postop_labs[postop_labs['dt'] <= row['opend'] + (3 * 24 * 3600)]
         max_cr_3d = labs_3d['result'].max() if not labs_3d.empty else 0
         
