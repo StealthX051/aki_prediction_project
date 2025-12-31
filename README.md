@@ -77,7 +77,6 @@ We extract a comprehensive set of preoperative variables from `clinical_data.csv
 *   **ABG (Clinical Table)**: pH, Base Excess (`preop_be`), PaO2, PaCO2, SaO2.
 *   **Labs (Lab Table)**: Last preoperative value (within 30 days) for:
     *   `preop_wbc`: White Blood Cell count.
-    *   `preop_gfr`: eGFR (from lab system).
     *   `preop_crp`: C-Reactive Protein.
     *   `preop_lac`: Lactate.
 *   **Derived Features**:

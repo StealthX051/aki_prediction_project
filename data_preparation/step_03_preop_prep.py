@@ -76,7 +76,6 @@ PREOP_FEATURES_TO_SELECT = [
 
     # Extra preop labs from lab_data
     'preop_wbc',
-    'preop_gfr',
     'preop_crp',
     'preop_lac',
 ]
@@ -116,7 +115,6 @@ CONTINUOUS_COLS = [
 
     # Labs from lab_data
     'preop_wbc',
-    'preop_gfr',
     'preop_crp',
     'preop_lac',
 
@@ -161,7 +159,6 @@ for _flag in DERIVED_FLAGS_TO_DROP:
 # Names are exactly as in VitalDB lab_data. 
 PREOP_LABS_FROM_LABDATA = [
     'wbc',   # white blood cells
-    'gfr',   # eGFR from lab table
     'crp',   # C-reactive protein
     'lac',   # lactate
 ]
