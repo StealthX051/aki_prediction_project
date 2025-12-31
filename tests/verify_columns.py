@@ -73,11 +73,10 @@ def verify_columns():
         if col not in df.columns:
             missing_cols.append(col)
         else:
-            # Check for content (not all NaN and not all -99 imputed)
-            # Note: -99 is the imputation value used in step_03
-            valid_data = df[col][(df[col].notna()) & (df[col] != -99)]
+            # Check for content (not all NaN)
+            valid_data = df[col].dropna()
             if valid_data.empty:
-                empty_cols.append(f"{col} (All NaN or -99)")
+                empty_cols.append(f"{col} (All NaN)")
             else:
                 # Optional: Print stats for confirmation
                 # print(f"  OK: {col} (Valid: {len(valid_data)}/{len(df)})")
@@ -88,8 +87,9 @@ def verify_columns():
         if col not in df.columns:
             missing_cols.append(col)
         else:
-            if df[col].nunique() <= 1 and df[col].iloc[0] == -99:
-                 empty_cols.append(f"{col} (All -99)")
+            non_null = df[col].dropna()
+            if non_null.empty:
+                empty_cols.append(f"{col} (All NaN)")
 
     print("\n--- 2b. Confirming Removed Derived Flags ---")
     for col in removed_flags:
@@ -129,7 +129,7 @@ def verify_columns():
         print("\nSUCCESS: All expected variables (continuous, binary, encoded categorical) are present.")
         
     if empty_cols:
-        print(f"\nWARNING: Columns with no valid information (All NaN or -99):\n" + "\n".join([f"  - {c}" for c in empty_cols]))
+        print(f"\nWARNING: Columns with no valid information (All NaN):\n" + "\n".join([f"  - {c}" for c in empty_cols]))
     else:
         print("\nSUCCESS: All present columns contain valid information (not just NaN/-99).")
 

@@ -1,10 +1,13 @@
-import pandas as pd
-import numpy as np
-import sys
+import argparse
 import logging
+import sys
 from pathlib import Path
-from sklearn.impute import SimpleImputer
+from typing import Optional
+
 import joblib
+import numpy as np
+import pandas as pd
+from sklearn.impute import SimpleImputer
 
 # Add project root to path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -14,10 +17,30 @@ from data_preparation.inputs import (
     PREOP_PROCESSED_FILE,
     AEON_OUT_DIR,
     OUTCOME,
-    COHORT_FILE
+    COHORT_FILE,
+    IMPUTE_MISSING,
 )
 
-def main():
+def main(impute_missing: Optional[bool] = None):
+    parser = argparse.ArgumentParser(
+        description="Prepare Aeon-ready preop dataset with optional imputation."
+    )
+    parser.add_argument(
+        "--impute-missing",
+        action="store_true",
+        default=IMPUTE_MISSING,
+        help=(
+            "Impute missing values using median strategy with indicators. By"
+            " default, NaNs are preserved in the output."
+        ),
+    )
+
+    if impute_missing is None:
+        args = parser.parse_args()
+        impute_missing = args.impute_missing
+    else:
+        _ = parser.parse_args([])
+
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
     logging.info("Starting Aeon Preop Preparation...")
 
@@ -67,51 +90,56 @@ def main():
     preop_df.drop(columns=['opstart', 'opend'], inplace=True)
 
     # 4. Imputation Strategy
-    # Step 03 fills missing with -99. We want NaN for linear models.
     # Exclude non-feature columns from imputation
     meta_cols = ['caseid', OUTCOME, 'split_group', 'y_severe_aki', 'y_inhosp_mortality', 'y_icu_admit', 'y_prolonged_los_postop']
     feature_cols = [c for c in preop_df.columns if c not in meta_cols]
-    
-    logging.info("Replacing -99 with NaN...")
-    preop_df[feature_cols] = preop_df[feature_cols].replace(-99, np.nan)
-    
-    # Split Train/Test for fitting imputer
-    train_mask = preop_df['split_group'] == 'train'
-    X_train = preop_df.loc[train_mask, feature_cols]
-    
-    if X_train.empty:
-        logging.error("No training data found! Check split_group column.")
-        return
 
-    logging.info("Fitting SimpleImputer(median, add_indicator=True) on training set feature columns...")
-    imputer = SimpleImputer(strategy='median', add_indicator=True)
-    imputer.fit(X_train)
-    
-    # Transform whole dataset
-    X_imputed = imputer.transform(preop_df[feature_cols])
-    
-    # Get new column names (features + indicators)
-    # get_feature_names_out available in sklearn > 1.0
-    try:
-        new_cols = imputer.get_feature_names_out(feature_cols)
-    except AttributeError:
-        # Fallback for older sklearn
-        new_cols = feature_cols + [f"{c}_missing" for c, idx in zip(feature_cols, imputer.indicator_.features_) if idx < len(feature_cols)] 
-        # Note: robust fallback usually requires checking indicator_.features_ indices corresponding to input
-        # But let's assume get_feature_names_out exists in modern env
-        pass
+    if impute_missing:
+        logging.info("Replacing -99 with NaN before imputation...")
+        preop_df[feature_cols] = preop_df[feature_cols].replace(-99, np.nan)
 
-    df_imputed = pd.DataFrame(X_imputed, columns=new_cols, index=preop_df.index)
-    
-    # Reassemble
-    final_df = pd.concat([preop_df[meta_cols], df_imputed], axis=1)
-    
+        # Split Train/Test for fitting imputer
+        train_mask = preop_df['split_group'] == 'train'
+        X_train = preop_df.loc[train_mask, feature_cols]
+
+        if X_train.empty:
+            logging.error("No training data found! Check split_group column.")
+            return
+
+        logging.info("Fitting SimpleImputer(median, add_indicator=True) on training set feature columns...")
+        imputer = SimpleImputer(strategy='median', add_indicator=True)
+        imputer.fit(X_train)
+
+        # Transform whole dataset
+        X_imputed = imputer.transform(preop_df[feature_cols])
+
+        # Get new column names (features + indicators)
+        # get_feature_names_out available in sklearn > 1.0
+        try:
+            new_cols = imputer.get_feature_names_out(feature_cols)
+        except AttributeError:
+            # Fallback for older sklearn
+            new_cols = feature_cols + [
+                f"{c}_missing" for c, idx in zip(feature_cols, imputer.indicator_.features_)
+                if idx < len(feature_cols)
+            ]
+            pass
+
+        df_imputed = pd.DataFrame(X_imputed, columns=new_cols, index=preop_df.index)
+
+        # Reassemble
+        final_df = pd.concat([preop_df[meta_cols], df_imputed], axis=1)
+
+        # Save imputer for inference reference
+        joblib.dump(imputer, Path(AEON_OUT_DIR) / 'preop_imputer.joblib')
+        logging.info("Saved imputer to outputs for reference.")
+    else:
+        logging.info("Skipping imputation; preserving NaNs in feature columns.")
+        final_df = preop_df
+
     # 5. Save
     logging.info(f"Saving Aeon-ready preop data to {out_file}...")
     final_df.to_csv(out_file, index=False)
-    
-    # Save imputer for inference reference
-    joblib.dump(imputer, Path(AEON_OUT_DIR) / 'preop_imputer.joblib')
     logging.info("Complete.")
 
 if __name__ == "__main__":

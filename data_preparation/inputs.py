@@ -62,6 +62,13 @@ AEON_COMMON_SR = 100.0  # Kept for reference
 AEON_WINDOW_POLICY = "intersection"
 AEON_FIXED_LENGTH = 57600  # Target length (16 hours @ 1 Hz)
 
+# --- Imputation Controls ---
+# Controls whether preprocessing steps should impute missing values.
+# By default, preprocessing will leave NaNs in place so downstream steps can
+# decide how to handle them. Set to True to restore the previous -99/imputed
+# behavior in step_03/step_04/step_05.
+IMPUTE_MISSING = False
+
 # --- Step 03 Output Paths ---
 PREOP_PROCESSED_FILE = PROCESSED_DIR / 'aki_preop_processed.csv'
 CATCH_22_WINDOWED_FILE = PROCESSED_DIR / 'aki_pleth_ecg_co2_awp_inf_windowed.csv'

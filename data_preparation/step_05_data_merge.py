@@ -1,6 +1,9 @@
-import pandas as pd
+import argparse
 import sys
 from pathlib import Path
+from typing import Optional
+
+import pandas as pd
 
 # Add project root to path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -12,10 +15,11 @@ from data_preparation.inputs import (
     INTRAOP_WIDE_WINDOWED_FILE,
     WIDE_FEATURES_FILE,
     WIDE_FEATURES_WINDOWED_FILE,
-    OUTCOME
+    OUTCOME,
+    IMPUTE_MISSING,
 )
 
-def merge_and_save(preop_df, intraop_path, output_path, mode_name):
+def merge_and_save(preop_df, intraop_path, output_path, mode_name, impute_missing: bool):
     print(f"\n--- Merging {mode_name} Data ---")
     print(f"Intraop Input: {intraop_path}")
     
@@ -49,8 +53,11 @@ def merge_and_save(preop_df, intraop_path, output_path, mode_name):
     merge_nan_count = master_df.isnull().sum().sum()
     if merge_nan_count > 0:
         print(f"WARNING: Merge introduced {merge_nan_count} NaN values.")
-        print("Imputing these with -99 (assuming they are missing preop features)...")
-        master_df.fillna(-99, inplace=True)
+        if impute_missing:
+            print("Imputing these with -99 (assuming they are missing preop features)...")
+            master_df.fillna(-99, inplace=True)
+        else:
+            print("Leaving NaNs in merged output (imputation disabled).")
 
     # 4. Verify Split Group
     if 'split_group' not in master_df.columns:
@@ -77,7 +84,24 @@ def merge_and_save(preop_df, intraop_path, output_path, mode_name):
     master_df.to_csv(output_path, index=False)
     print(f"Done with {mode_name}.")
 
-def main():
+def main(impute_missing: Optional[bool] = None):
+    parser = argparse.ArgumentParser(description="Merge preop and intraop datasets.")
+    parser.add_argument(
+        "--impute-missing",
+        action="store_true",
+        default=IMPUTE_MISSING,
+        help=(
+            "Fill merged NaNs with -99 (previous behavior). Default preserves NaNs"
+            " introduced during merging."
+        ),
+    )
+
+    if impute_missing is None:
+        args = parser.parse_args()
+        impute_missing = args.impute_missing
+    else:
+        _ = parser.parse_args([])
+
     print("--- Step 05: Data Merge ---")
     
     # 1. Load Preop Data
@@ -96,7 +120,7 @@ def main():
     ]
     
     for intraop_p, output_p, name in tasks:
-        merge_and_save(preop_df, intraop_p, output_p, name)
+        merge_and_save(preop_df, intraop_p, output_p, name, impute_missing)
 
 if __name__ == "__main__":
     main()
