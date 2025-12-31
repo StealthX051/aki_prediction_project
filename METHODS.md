@@ -59,6 +59,7 @@ A comprehensive set of preoperative variables was extracted from the VitalDB cli
 
 #### 2. Derived Features
 We computed several derived features to capture clinical status more effectively:
+*   **Inpatient Status (`inpatient_preop`)**: Binary indicator that the patient was admitted prior to surgery (admission time < 0 seconds relative to case start).
 *   **Estimated GFR (`preop_egfr_ckdepi`)**: Calculated using the **CKD-EPI 2009** creatinine equation (race-free version):
     $$ eGFR = 141 \times \min(S_{cr}/\kappa, 1)^\alpha \times \max(S_{cr}/\kappa, 1)^{-1.209} \times 0.993^{Age} \times 1.018 [if Female] $$
     Where $S_{cr}$ is serum creatinine, $\kappa$ is 0.7 (F) or 0.9 (M), and $\alpha$ is -0.329 (F) or -0.411 (M).

@@ -71,7 +71,7 @@ Processes clinical data and defines the **stratified train/test split**.
 We extract a comprehensive set of preoperative variables from `clinical_data.csv` and `lab_data.csv`:
 
 *   **Demographics**: Age, Sex, Height, Weight, BMI.
-*   **Surgical Context**: Emergency Operation (`emop`), Department, Approach, ASA Class, Operation Type (`optype`), Anesthesia Type (`ane_type`), Position.
+*   **Surgical Context**: Emergency Operation (`emop`), Department, Approach, ASA Class, Operation Type (`optype`), Anesthesia Type (`ane_type`).
 *   **Comorbidities**: Hypertension (`preop_htn`), Diabetes (`preop_dm`), ECG abnormalities (`preop_ecg`), Pulmonary Function Test (`preop_pft`).
 *   **Labs (Clinical Table)**: Hb, Platelets, PT (INR), aPTT, Na, K, Glucose, Albumin, AST, ALT, BUN, Creatinine, Bicarbonate.
 *   **ABG (Clinical Table)**: pH, Base Excess (`preop_be`), PaO2, PaCO2, SaO2.
@@ -81,7 +81,6 @@ We extract a comprehensive set of preoperative variables from `clinical_data.csv
     *   `preop_crp`: C-Reactive Protein.
     *   `preop_lac`: Lactate.
 *   **Derived Features**:
-    *   `preop_los_days`: Preoperative Length of Stay (days).
     *   `inpatient_preop`: Binary flag for inpatient admission prior to surgery.
     *   `preop_egfr_ckdepi`: eGFR calculated using CKD-EPI 2009 equation (race-free).
     *   **Clinical Flags** (Binary): `bun_high` (>27), `hypoalbuminemia` (<3.5), `preop_anemia` (Sex-specific Hb thresholds), `hyponatremia` (<135), `metabolic_acidosis` (HCO3 < 22 or BE < -2), `hypercapnia` (PaCO2 > 45), `hypoxemia` (PaO2 < 80 or SaO2 < 95).

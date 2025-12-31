@@ -121,7 +121,6 @@ CONTINUOUS_COLS = [
     'preop_lac',
 
     # Derived continuous features
-    'preop_los_days',
     'preop_egfr_ckdepi',
 ]
 
@@ -207,15 +206,9 @@ def add_derived_preop_features(df: pd.DataFrame) -> pd.DataFrame:
         preop_pao2, preop_paco2, preop_sao2, etc.
     """
 
-    # --- Preop hospital LOS in days and inpatient flag ---
+    # --- Preop inpatient flag ---
     # adm: admission time relative to casestart (sec); preop admissions have adm < 0.
     df['adm'] = pd.to_numeric(df['adm'], errors='coerce')
-
-    df['preop_los_days'] = 0.0
-    admitted_mask = df['adm'] < 0
-    df.loc[admitted_mask, 'preop_los_days'] = (
-        -df.loc[admitted_mask, 'adm'] / (24 * 3600.0)
-    )
     df['inpatient_preop'] = (df['adm'] < 0).astype(int)
 
     # Optionally drop raw adm if you don't want it as a feature
@@ -336,11 +329,11 @@ def main():
     try:
         preop_df = cohort_df[PREOP_FEATURES_TO_SELECT].copy()
 
-        # Add derived preop features (LOS, eGFR, binary flags)
+        # Add derived preop features (eGFR, binary flags)
         preop_df = add_derived_preop_features(preop_df)
 
         # Drop derived features not used for modeling
-        cols_to_drop = ['preop_los_days', 'inpatient_preop', 'position']
+        cols_to_drop = ['position']
         existing_drop_cols = [col for col in cols_to_drop if col in preop_df.columns]
         if existing_drop_cols:
             preop_df = preop_df.drop(columns=existing_drop_cols)
