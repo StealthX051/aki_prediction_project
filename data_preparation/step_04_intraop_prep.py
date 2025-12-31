@@ -61,15 +61,7 @@ def process_waveform_file(input_path, output_path, mode_name):
     waveform_wide_df = waveform_wide_df.reset_index()
     print(f"Column names flattened. Shape: {waveform_wide_df.shape}")
 
-    # 4. Impute Missing Values
-    # Missing values here mean a waveform was missing for a patient (or window).
-    # We impute with 0 as per the established logic.
-    print("Imputing missing values with 0...")
-    nan_count = waveform_wide_df.isna().sum().sum()
-    waveform_wide_df.fillna(0, inplace=True)
-    print(f"Filled {nan_count} NaN values.")
-
-    # 5. Save
+    # 4. Save
     print(f"Saving to {output_path}...")
     waveform_wide_df.to_csv(output_path, index=False)
     print(f"Done with {mode_name}.")

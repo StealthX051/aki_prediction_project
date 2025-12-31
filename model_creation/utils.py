@@ -120,11 +120,21 @@ def prepare_data(
     df: pd.DataFrame,
     outcome_name: str,
     feature_set_name: str,
-    random_state: int = 42
+    random_state: int = 42,
+    preserve_nan: bool = True
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series, float]:
     """
     Prepares data for training: selects features, handles leakage, splits data.
     Returns X_train, X_test, y_train, y_test, scale_pos_weight.
+
+    Args:
+        df: Input dataframe containing features and outcomes.
+        outcome_name: Key for the outcome to predict.
+        feature_set_name: Name of the feature set to use.
+        random_state: Seed for the train/test split when applicable.
+        preserve_nan: If True, leave NaN values in place for models that can
+            handle them; if False, apply legacy imputation (-99 for pre-op,
+            0 for waveform features).
     """
     target_col = OUTCOMES.get(outcome_name)
     if not target_col:
@@ -149,11 +159,13 @@ def prepare_data(
 
     # Handle missing values (simple imputation as per original notebook logic)
     # Preop features -> -99, Waveform features -> 0
-    for col in X.columns:
-        if col in CONTINUOUS_PREOP_COLS:
-            X[col] = X[col].fillna(-99)
-        else:
-            X[col] = X[col].fillna(0)
+    if not preserve_nan:
+        logger.info("Applying legacy imputation for missing values.")
+        for col in X.columns:
+            if col in CONTINUOUS_PREOP_COLS:
+                X[col] = X[col].fillna(-99)
+            else:
+                X[col] = X[col].fillna(0)
 
     # Split data
     # Use 'split_group' if available to respect the original split
