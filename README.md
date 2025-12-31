@@ -146,7 +146,7 @@ python model_creation/step_07_train_evaluate.py --outcome any_aki --branch windo
 ```
 
 #### Available Options
-*   **Outcomes**: `any_aki`, `severe_aki`, `mortality`, `icu_admission`, `extended_los`.
+*   **Outcomes**: `any_aki`, `icu_admission` (default experiment script focus; other outcomes can be run manually if needed).
 *   **Branches**: `non_windowed` (Full Case), `windowed` (Segmented).
 *   **Feature Sets**: `preop_only`, `all_waveforms`, `preop_and_all_waveforms`, `pleth_only`, `ecg_only`, etc.
 
