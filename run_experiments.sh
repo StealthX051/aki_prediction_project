@@ -4,7 +4,7 @@
 # source activate aki_prediction_project
 
 # Outcomes
-OUTCOMES=("any_aki" "severe_aki" "mortality" "extended_los" "icu_admission")
+OUTCOMES=("any_aki" "icu_admission")
 
 # Branches
 BRANCHES=("non_windowed" "windowed")
