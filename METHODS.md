@@ -71,6 +71,7 @@ We computed several derived features to capture clinical status more effectively
     *   **Metabolic Acidosis**: `preop_hco3 < 22` mmol/L OR `preop_be < -2` mEq/L.
     *   **Hypercapnia**: `preop_paco2 > 45` mmHg.
     *   **Hypoxemia**: `preop_pao2 < 80` mmHg OR `preop_sao2 < 95` %.
+    *   These clinical flag helpers are computed for intermediate quality checks but are **dropped before one-hot encoding and imputation** so they do not appear in the saved preoperative dataset (`preop_processed.csv`).
 
 #### 3. Data Preprocessing
 *   **Train/Test Split**: An 80/20 stratified split was performed based on the primary outcome (`aki_label`) *before* any further processing to ensure strict separation.
