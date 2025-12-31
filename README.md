@@ -147,6 +147,7 @@ python model_creation/step_07_train_evaluate.py --outcome any_aki --branch windo
 *   **Outcomes**: `any_aki`, `icu_admission` (default experiment script focus; other outcomes can be run manually if needed).
 *   **Branches**: `non_windowed` (Full Case), `windowed` (Segmented).
 *   **Feature Sets**: `preop_only`, `all_waveforms`, `preop_and_all_waveforms`, `pleth_only`, `ecg_only`, etc.
+*   **Default Grid (`run_experiments.sh`)**: Primary runs cover preop-only, single-waveform models (`pleth_only`, `ecg_only`, `co2_only`, `awp_only`), all waveforms, and fused preop + all waveforms. Ablations pair preop with each single waveform (`preop_and_<waveform>`) and with all waveforms minus one (`preop_and_all_minus_<waveform>`). Two-channel waveform-only combinations (e.g., **AWP+CO2** or **ECG+PLETH**) are intentionally excluded from default sweeps and should be launched manually if needed.
 
 ### Step 8: Post-hoc Analysis & Visualization
 **File**: `results_recreation/results_analysis.py`

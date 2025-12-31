@@ -113,6 +113,7 @@ Feature selection and hyperparameter optimization were performed using the train
 *   **Hyperparameter Optimization (HPO)**: Performed using Optuna with 5-fold stratified cross-validation on the training set to maximize the Area Under the Precision-Recall Curve (AUPRC).
 *   **Final Model Training**: The optimal hyperparameters identified were used to train the final model on the full training set.
 *   **Evaluation**: The final model was evaluated on the held-out test set. We generated 95% confidence intervals (CIs) for all performance metrics using 1000-fold bootstrapping of the test set predictions. Platt scaling was applied to calibrate predicted probabilities.
+*   **Feature-Set Grid**: Default study runs (triggered via `run_experiments.sh`) include preoperative-only models, single-waveform models (`pleth_only`, `ecg_only`, `co2_only`, `awp_only`), all-waveform models, and fused preoperative + all-waveform models. Ablations pair preoperative data with each single waveform (`preop_and_<waveform>`) and with all waveforms minus one (`preop_and_all_minus_<waveform>`). Two-channel waveform-only configurations such as **AWP+CO2** or **ECG+PLETH** are excluded from the default grid, except insofar as those channels appear together within the full all-waveform configuration.
 
 ## Statistical Analysis
 Model performance was evaluated on the independent hold-out test set.
