@@ -102,7 +102,8 @@ Processes waveform features (pivoting, imputation) for both full and windowed mo
 *   **Technical Details**:
     *   **Pivoting**: Converts long-format Catch22 results into a wide format (one row per case/window).
     *   **Flattening**: Renames columns to `{waveform}_{feature}` (e.g., `SNUADC_PLETH_DN_HistogramMode_5`).
-    *   **Imputation**: Fills missing waveform features with 0.
+    *   **Missing Data**: Keeps `NaN` values for wholly missing waveform segments instead of zero-filling. Partial gaps remain
+        linearly interpolated by upstream Catch22 extraction, and empty 10s windows are silently dropped as before.
 ```bash
 python data_preparation/step_04_intraop_prep.py
 ```
