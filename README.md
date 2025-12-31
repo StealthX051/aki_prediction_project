@@ -286,3 +286,4 @@ Or individual experiments:
 ```bash
 bash run_experiments_aeon.sh
 ```
+The Aeon experiment script currently evaluates the `any_aki` and `icu_admission` outcomes.

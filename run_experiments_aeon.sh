@@ -6,7 +6,7 @@
 PYTHON_EXEC="/home/exouser/.conda/envs/aki_prediction_project/bin/python"
 
 # Outcomes
-OUTCOMES=("any_aki" "severe_aki" "mortality" "icu_admission" "extended_los")
+OUTCOMES=("any_aki" "icu_admission")
 
 # Models
 # Start with fast ones for debugging, then heavy ones
