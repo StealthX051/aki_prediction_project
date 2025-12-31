@@ -42,7 +42,6 @@ PREOP_FEATURES_TO_SELECT = [
     'asa',
     'optype',
     'ane_type',
-    'position',
     'adm',              # used to derive LOS and inpatient_preop
 
     # Comorbidities / preop tests
@@ -136,7 +135,6 @@ CATEGORICAL_COLS = [
     'asa',
     'optype',
     'ane_type',
-    'position',
     'preop_htn',
     'preop_dm',
     'preop_ecg',
@@ -340,6 +338,12 @@ def main():
 
         # Add derived preop features (LOS, eGFR, binary flags)
         preop_df = add_derived_preop_features(preop_df)
+
+        # Drop derived features not used for modeling
+        cols_to_drop = ['preop_los_days', 'inpatient_preop', 'position']
+        existing_drop_cols = [col for col in cols_to_drop if col in preop_df.columns]
+        if existing_drop_cols:
+            preop_df = preop_df.drop(columns=existing_drop_cols)
     except KeyError as e:
         print(f"ERROR: Missing columns in cohort file: {e}")
         sys.exit(1)
