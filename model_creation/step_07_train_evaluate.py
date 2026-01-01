@@ -83,7 +83,7 @@ def train_evaluate(outcome, branch, feature_set, smoke_test=False):
         df = utils.load_data(branch)
         data_file = utils.FULL_FEATURES_FILE if branch == 'non_windowed' else utils.WINDOWED_FEATURES_FILE
         dataset_hash = compute_file_hash(data_file)
-        X_train, X_test, y_train, y_test, _ = utils.prepare_data(
+        X_train, X_test, y_train, y_test, scale_pos_weight = utils.prepare_data(
             df, outcome, feature_set, preserve_nan=False
         )
     except Exception as e:
@@ -101,7 +101,23 @@ def train_evaluate(outcome, branch, feature_set, smoke_test=False):
     # Set reproducibility controls
     random_state = params.get('random_state', 42)
     params['random_state'] = random_state
+    positive_count = int((y_train == 1).sum())
+    negative_count = int((y_train == 0).sum())
+    if positive_count == 0 or negative_count == 0:
+        raise ValueError("Training data must contain both classes for calibration and evaluation.")
+
     n_splits = params.get('n_splits', 5)
+    min_class = min(positive_count, negative_count)
+    if n_splits > min_class:
+        logger.warning(
+            "Reducing n_splits from %s to %s to match minority class count.",
+            n_splits,
+            min_class,
+        )
+        n_splits = min_class
+
+    if 'scale_pos_weight' not in params:
+        params['scale_pos_weight'] = scale_pos_weight
 
     logger.info("Generating out-of-fold predictions for calibration...")
     oof_model = xgb.XGBClassifier(**params, n_jobs=-1)
@@ -194,8 +210,8 @@ def train_evaluate(outcome, branch, feature_set, smoke_test=False):
         'counts': {
             'train': {
                 'total': int(len(y_train)),
-                'positive': int((y_train == 1).sum()),
-                'negative': int((y_train == 0).sum()),
+                'positive': positive_count,
+                'negative': negative_count,
             },
             'test': {
                 'total': int(len(y_test)),
