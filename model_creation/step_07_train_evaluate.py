@@ -1,27 +1,45 @@
 import argparse
+import hashlib
 import json
 import logging
 from pathlib import Path
 import sys
+from typing import Dict
+
 import matplotlib.pyplot as plt
 import pandas as pd
-import numpy as np
 import shap
 import xgboost as xgb
-from sklearn.metrics import (
-    roc_auc_score, average_precision_score, accuracy_score,
-    precision_score, recall_score, f1_score, confusion_matrix, brier_score_loss
-)
 
 # Add project root to path to import utils
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.append(str(PROJECT_ROOT))
 
 from model_creation import utils
+from model_creation.postprocessing import (
+    apply_logistic_recalibration,
+    fit_logistic_recalibration,
+    find_youden_j_threshold,
+    generate_stratified_oof_predictions,
+    write_json,
+)
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+PIPELINE_NAME = "step_07_train_evaluate"
+
+
+def compute_file_hash(path: Path) -> str:
+    """Compute the SHA256 hash of a file without loading it into memory."""
+
+    hasher = hashlib.sha256()
+    with path.open("rb") as fp:
+        for chunk in iter(lambda: fp.read(8192), b""):
+            hasher.update(chunk)
+    return hasher.hexdigest()
+
 
 def save_shap_plots(model, X_test, output_dir):
     """
@@ -47,6 +65,7 @@ def save_shap_plots(model, X_test, output_dir):
     
     logger.info("SHAP plots saved.")
 
+
 def train_evaluate(outcome, branch, feature_set, smoke_test=False):
     logger.info(f"Starting Training/Evaluation for Outcome: {outcome}, Branch: {branch}, Feature Set: {feature_set}")
 
@@ -62,9 +81,10 @@ def train_evaluate(outcome, branch, feature_set, smoke_test=False):
     # Load and prepare data
     try:
         df = utils.load_data(branch)
-        # We need to keep the original df to retrieve caseids later
-        X_train, X_test, y_train, y_test, _ = utils.prepare_data(
-            df, outcome, feature_set
+        data_file = utils.FULL_FEATURES_FILE if branch == 'non_windowed' else utils.WINDOWED_FEATURES_FILE
+        dataset_hash = compute_file_hash(data_file)
+        X_train, X_test, y_train, y_test, scale_pos_weight = utils.prepare_data(
+            df, outcome, feature_set, preserve_nan=False
         )
     except Exception as e:
         logger.error(f"Failed to prepare data: {e}")
@@ -78,56 +98,141 @@ def train_evaluate(outcome, branch, feature_set, smoke_test=False):
         y_test = y_test.head(50)
         params['n_estimators'] = 10
 
-    # Train model
-    logger.info("Training XGBoost model...")
-    # Ensure random state for reproducibility
-    if 'random_state' not in params:
-        params['random_state'] = 42
-        
-    model = xgb.XGBClassifier(**params, n_jobs=-1)
-    model.fit(X_train, y_train)
+    # Set reproducibility controls
+    random_state = params.get('random_state', 42)
+    params['random_state'] = random_state
+    positive_count = int((y_train == 1).sum())
+    negative_count = int((y_train == 0).sum())
+    if positive_count == 0 or negative_count == 0:
+        raise ValueError("Training data must contain both classes for calibration and evaluation.")
 
-    # Generate Predictions on Test Set
+    n_splits = params.get('n_splits', 5)
+    min_class = min(positive_count, negative_count)
+    if n_splits > min_class:
+        logger.warning(
+            "Reducing n_splits from %s to %s to match minority class count.",
+            n_splits,
+            min_class,
+        )
+        n_splits = min_class
+
+    if 'scale_pos_weight' not in params:
+        params['scale_pos_weight'] = scale_pos_weight
+
+    logger.info("Generating out-of-fold predictions for calibration...")
+    oof_model = xgb.XGBClassifier(**params, n_jobs=-1)
+    oof_predictions, fold_indices = generate_stratified_oof_predictions(
+        oof_model, X_train.values, y_train.values, n_splits=n_splits, random_state=random_state
+    )
+
+    if len(oof_predictions) != len(X_train):
+        raise ValueError("OOF predictions length mismatch with training data.")
+
+    recalibration_model = fit_logistic_recalibration(y_train.values, oof_predictions)
+    calibrated_oof = apply_logistic_recalibration(oof_predictions, recalibration_model)
+
+    threshold, youden_j, sensitivity, specificity = find_youden_j_threshold(
+        y_train.values, calibrated_oof
+    )
+
+    if set(X_train.index) & set(X_test.index):
+        raise AssertionError("Train and test indices overlap; calibration would leak test data.")
+
+    logger.info("Training final model on full training data...")
+    final_model = xgb.XGBClassifier(**params, n_jobs=-1)
+    final_model.fit(X_train, y_train)
+
     logger.info("Generating predictions on test set...")
-    y_pred_proba = model.predict_proba(X_test)[:, 1]
+    test_pred_proba = final_model.predict_proba(X_test)[:, 1]
+    test_pred_calibrated = apply_logistic_recalibration(test_pred_proba, recalibration_model)
 
-    # Construct Tidy Output DataFrame
-    # Critical: Retrieve caseids using the index of y_test which matches the original df
-    logger.info("Constructing predictions dataframe...")
-    try:
-        caseids = df.loc[y_test.index, 'caseid']
-        split_group = df.loc[y_test.index, 'split_group'] # Should be 'test' but good to be explicit
-            
-        predictions_df = pd.DataFrame({
-            'caseid': caseids,
-            'y_true': y_test,
-            'y_pred_proba': y_pred_proba,
-            'split_group': split_group,
-            'model_name': 'XGBoost',
-            'feature_set': feature_set,
-            'outcome': outcome,
-            'branch': branch
-        })
-    except KeyError as e:
-        logger.error(f"Failed to retrieve metadata (caseid/split_group): {e}")
-        return
-
-    # Define Output Directory
     output_dir = utils.RESULTS_DIR / 'models' / outcome / branch / feature_set
+    predictions_dir = output_dir / 'predictions'
+    artifacts_dir = output_dir / 'artifacts'
     output_dir.mkdir(parents=True, exist_ok=True)
+    predictions_dir.mkdir(parents=True, exist_ok=True)
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
 
-    # 1. Save Predictions
-    pred_path = output_dir / "predictions.csv"
-    predictions_df.to_csv(pred_path, index=False)
-    logger.info(f"Saved predictions to {pred_path}")
-    
-    # 2. Save Model
-    model.save_model(output_dir / "model.json")
+    train_predictions = pd.DataFrame({
+        'caseid': df.loc[X_train.index, 'caseid'],
+        'y_true': y_train.values,
+        'y_prob_raw': oof_predictions,
+        'y_prob_calibrated': calibrated_oof,
+        'threshold': threshold,
+        'y_pred_label': (calibrated_oof >= threshold).astype(int),
+        'fold': fold_indices,
+        'is_oof': True,
+        'outcome': outcome,
+        'branch': branch,
+        'feature_set': feature_set,
+        'model_name': 'XGBoost',
+        'pipeline': PIPELINE_NAME,
+    })
+
+    test_predictions = pd.DataFrame({
+        'caseid': df.loc[X_test.index, 'caseid'],
+        'y_true': y_test.values,
+        'y_prob_raw': test_pred_proba,
+        'y_prob_calibrated': test_pred_calibrated,
+        'threshold': threshold,
+        'y_pred_label': (test_pred_calibrated >= threshold).astype(int),
+        'fold': -1,
+        'is_oof': False,
+        'outcome': outcome,
+        'branch': branch,
+        'feature_set': feature_set,
+        'model_name': 'XGBoost',
+        'pipeline': PIPELINE_NAME,
+    })
+
+    train_pred_path = predictions_dir / 'train_oof.csv'
+    test_pred_path = predictions_dir / 'test.csv'
+    train_predictions.to_csv(train_pred_path, index=False)
+    test_predictions.to_csv(test_pred_path, index=False)
+    logger.info("Saved train OOF predictions to %s", train_pred_path)
+    logger.info("Saved test predictions to %s", test_pred_path)
+
+    calibration_payload: Dict[str, float] = {
+        'intercept': recalibration_model.intercept,
+        'slope': recalibration_model.slope,
+        'eps': recalibration_model.eps,
+    }
+    threshold_payload: Dict[str, float] = {
+        'threshold': threshold,
+        'youden_j': youden_j,
+        'sensitivity': sensitivity,
+        'specificity': specificity,
+    }
+    metadata_payload = {
+        'seed': random_state,
+        'folds': n_splits,
+        'dataset_hash': dataset_hash,
+        'counts': {
+            'train': {
+                'total': int(len(y_train)),
+                'positive': positive_count,
+                'negative': negative_count,
+            },
+            'test': {
+                'total': int(len(y_test)),
+                'positive': int((y_test == 1).sum()),
+                'negative': int((y_test == 0).sum()),
+            },
+        },
+    }
+
+    write_json(artifacts_dir / 'calibration.json', calibration_payload)
+    write_json(artifacts_dir / 'threshold.json', threshold_payload)
+    write_json(artifacts_dir / 'metadata.json', metadata_payload)
+    logger.info("Saved calibration and threshold artifacts to %s", artifacts_dir)
+
+    # Save model
+    final_model.save_model(output_dir / "model.json")
     logger.info(f"Saved model to {output_dir / 'model.json'}")
 
-    # 3. SHAP Feature Importance (Skip for smoke test/speed if needed, but usually good to have)
+    # SHAP Feature Importance (Skip for smoke test/speed if needed, but usually good to have)
     if not smoke_test:
-        save_shap_plots(model, X_test, output_dir)
+        save_shap_plots(final_model, X_test, output_dir)
         logger.info("Saved SHAP plots.")
 
     logger.info("Training and evaluation complete.")
