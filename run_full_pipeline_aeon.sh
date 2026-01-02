@@ -30,7 +30,12 @@ fi
 echo "--- Running Experiments ---" | tee -a "$LOG_FILE"
 bash run_experiments_aeon.sh
 
-# 4. Final Analysis
+# 4. Evaluation and Reporting
+echo "--- Evaluating Aeon models and generating reports ---" | tee -a "$LOG_FILE"
+${PYTHON_EXEC} -m evaluation.evaluate_models --results-dir results 2>&1 | tee -a "$LOG_FILE"
+${PYTHON_EXEC} -m reporting.make_report 2>&1 | tee -a "$LOG_FILE"
+
+# 5. Final Analysis
 echo "--- Final Analysis ---" | tee -a "$LOG_FILE"
 $PYTHON_EXEC -m results_recreation.results_analysis_aeon 2>&1 | tee -a "$LOG_FILE"
 
