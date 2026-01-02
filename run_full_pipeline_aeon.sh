@@ -35,8 +35,4 @@ echo "--- Evaluating Aeon models and generating reports ---" | tee -a "$LOG_FILE
 ${PYTHON_EXEC} -m results_recreation.metrics_summary --results-dir results 2>&1 | tee -a "$LOG_FILE"
 ${PYTHON_EXEC} -m reporting.make_report 2>&1 | tee -a "$LOG_FILE"
 
-# 5. Final Analysis
-echo "--- Final Analysis ---" | tee -a "$LOG_FILE"
-$PYTHON_EXEC -m results_recreation.results_analysis_aeon 2>&1 | tee -a "$LOG_FILE"
-
 echo "Full Pipeline Finished." | tee -a "$LOG_FILE"
