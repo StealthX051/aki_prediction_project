@@ -36,6 +36,7 @@ from model_creation.postprocessing import (
     fit_logistic_recalibration,
     find_youden_j_threshold,
 )
+from model_creation.prediction_io import write_prediction_files
 
 PIPELINE_NAME = "step_06_aeon_train"
 
@@ -512,10 +513,7 @@ def main():
         'pipeline': PIPELINE_NAME,
     })
 
-    train_predictions.to_csv(predictions_dir / 'train_oof.csv', index=False)
-    test_predictions.to_csv(predictions_dir / 'test.csv', index=False)
-    logging.info(f"Saved train OOF predictions to {predictions_dir / 'train_oof.csv'}")
-    logging.info(f"Saved test predictions to {predictions_dir / 'test.csv'}")
+    write_prediction_files(predictions_dir, train_predictions, test_predictions, logging.getLogger(__name__))
 
     calibration_payload = {
         'intercept': recalibration_model.intercept,

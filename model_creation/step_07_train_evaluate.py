@@ -23,6 +23,7 @@ from model_creation.postprocessing import (
     generate_stratified_oof_predictions,
     write_json,
 )
+from model_creation.prediction_io import write_prediction_files
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -185,12 +186,7 @@ def train_evaluate(outcome, branch, feature_set, smoke_test=False):
         'pipeline': PIPELINE_NAME,
     })
 
-    train_pred_path = predictions_dir / 'train_oof.csv'
-    test_pred_path = predictions_dir / 'test.csv'
-    train_predictions.to_csv(train_pred_path, index=False)
-    test_predictions.to_csv(test_pred_path, index=False)
-    logger.info("Saved train OOF predictions to %s", train_pred_path)
-    logger.info("Saved test predictions to %s", test_pred_path)
+    write_prediction_files(predictions_dir, train_predictions, test_predictions, logger)
 
     calibration_payload: Dict[str, float] = {
         'intercept': recalibration_model.intercept,
