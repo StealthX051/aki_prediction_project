@@ -125,29 +125,22 @@ python data_preparation/step_05_data_merge.py --impute-missing
 ### Step 7: Model Training & Evaluation
 **Directory**: `model_creation/`
 
-We have refactored the modeling pipeline into two robust scripts: `run_hpo.py` and `train_evaluate.py`.
+We have refactored the modeling pipeline into two robust scripts plus shared utilities:
 
-#### 1. Hyperparameter Optimization (HPO)
-**File**: `model_creation/run_hpo.py`
-### 6. Hyperparameter Optimization (HPO)
-Run the HPO script to find the best hyperparameters for a specific configuration.
-*   **Optimization Metric**: AUPRC (Area Under the Precision-Recall Curve).
-*   **Trials**: Defaults to 100 trials.
-*   **Output**: Saves best parameters to `results/params/{outcome}/{branch}/{feature_set}.json`.
+*   **Hyperparameter Optimization** — `model_creation/step_06_run_hpo.py`: Runs Optuna sweeps (default 100 trials) to maximize AUPRC and stores the best parameters at `results/params/{outcome}/{branch}/{feature_set}.json`.
+*   **Training & Evaluation** — `model_creation/step_07_train_evaluate.py`: Trains the final XGBoost model with the tuned hyperparameters, writes calibrated predictions, and exports artifacts.
+*   **Shared Utilities** — `model_creation/postprocessing.py` and `model_creation/prediction_io.py`: Implement stratified out-of-fold (OOF) prediction generation, logistic recalibration, Youden-J threshold search, prediction file validation, and JSON artifact persistence.
 
 ```bash
 python model_creation/step_06_run_hpo.py --outcome any_aki --branch windowed --feature_set all_waveforms
-```
-
-### 7. Model Training & Evaluation
-Train the final model using the best hyperparameters and evaluate it on the test set.
-*   **Evaluation**: Generates predictions on the test set (`predictions.csv`) for unified analysis.
-*   **Explainability**: Generates SHAP summary plots.
-*   **Output**: Saves model (`model.json`), predictions (`predictions.csv`), and plots to `results/models/{outcome}/{branch}/{feature_set}/`.
-
-```bash
 python model_creation/step_07_train_evaluate.py --outcome any_aki --branch windowed --feature_set all_waveforms
 ```
+
+**What happens during training & evaluation?**
+*   **OOF Calibration**: `step_07_train_evaluate.py` generates OOF predictions on the training set, fits a logistic recalibration model on those scores, and saves the calibrated OOF outputs.
+*   **Threshold Selection**: The calibrated OOF scores are searched for the **Youden-J** statistic to define a single decision threshold per (Outcome × Branch × Feature Set). That threshold is stored in `artifacts/threshold.json`.
+*   **Artifacted Outputs**: For each configuration, the script saves calibrated train/test predictions (`predictions/train.csv`, `predictions/test.csv`), the fitted recalibration parameters (`artifacts/calibration.json`), threshold metadata (`artifacts/threshold.json`), dataset/hash metadata (`artifacts/metadata.json`), and SHAP plots.
+*   **Fixed Application at Test Time**: The stored calibrator and threshold are applied **without further fitting** when evaluating the held-out test set; these same fixed values are later reused by the reporting scripts.
 
 #### Available Options
 *   **Outcomes**: `any_aki`, `icu_admission` (default experiment script focus; other outcomes can be run manually if needed).
@@ -156,21 +149,24 @@ python model_creation/step_07_train_evaluate.py --outcome any_aki --branch windo
 *   **Default Grid (`run_experiments.sh`)**: Primary runs cover preop-only, single-waveform models (`pleth_only`, `ecg_only`, `co2_only`, `awp_only`), all waveforms, and fused preop + all waveforms. Ablations pair preop with each single waveform (`preop_and_<waveform>`) and with all waveforms minus one (`preop_and_all_minus_<waveform>`). Two-channel waveform-only combinations (e.g., **AWP+CO2** or **ECG+PLETH**) are intentionally excluded from default sweeps and should be launched manually if needed.
 
 ### Step 8: Post-hoc Analysis & Visualization
-**File**: `results_recreation/results_analysis.py`
+**Primary Script**: `results_recreation/results_analysis.py`
+
 Generates publication-ready tables and figures for both the **Primary Pipeline** (Catch22/XGBoost) and the **Experimental Pipeline** (Aeon/Multirocket).
-*   **Unified Reporting**: Automatically detects and aggregates results from both pipelines into a single report.
-*   **Global Calibration**: Applies Logistic Regression calibration to raw probabilities to ensure accurate risk estimates while preserving ranking.
-*   **Constrained Thresholding**: Selects optimal thresholds maximizing F2-score with a minimum specificity constraint (0.6) to ensure balanced performance.
-*   **Bootstrapping**: Calculates 95% Confidence Intervals using 1000 bootstrap iterations (parallelized).
-*   **Output**:
+
+*   **Artifact Validation & Aggregation**: `results_recreation/metrics_summary.py` crawls `results/**/models/**/predictions/test.csv`, confirms that the paired `artifacts/calibration.json` and `artifacts/threshold.json` from Step 7 are present, and computes held-out metrics using the stored threshold for each configuration. A consolidated metrics table is written to `results/tables/metrics_summary.csv` (and optional bootstrap samples to Parquet).
+*   **Unified Reporting**: `results_analysis.py` consumes the consolidated metrics to generate Word, PDF, and HTML tables plus ROC/PR/Calibration figures across both pipelines.
+*   **Calibration & Thresholds**: No report-time refitting occurs. The recalibration parameters and thresholds learned from OOF training scores in Step 7 are **fixed** and reapplied to the test predictions when computing metrics and bootstraps.
+*   **Bootstrapping**: Uses non-parametric bootstrap resampling (default 1000 iterations, parallelized) on the held-out test predictions while holding the Step-7 thresholds constant.
+*   **Outputs**:
     *   **Reports**:
-        *   `results/report.docx`: A formatted Word document containing all results tables with selective bolding and background gradients.
-        *   `results/report.pdf`: An aggregated PDF report of all tables.
+        *   `results/report.docx`: Formatted Word document containing all results tables with selective bolding and background gradients.
+        *   `results/report.pdf`: Aggregated PDF report of all tables.
         *   `results/tables/*.html`: Individual HTML tables for each outcome/branch.
     *   **Figures**: High-quality ROC, PR, and Calibration curves saved in `results/figures/`.
-    *   **Data**: `results/tables/metrics_summary.csv` containing all calculated metrics and CIs.
+    *   **Data**: `results/tables/metrics_summary.csv` containing all calculated metrics and confidence intervals, plus optional bootstrap Parquet files for downstream analysis.
 ```bash
-python results_recreation/results_analysis.py
+python results_recreation/metrics_summary.py  # Precompute consolidated metrics
+python results_recreation/results_analysis.py  # Build figures and reports
 ```
 
 ---
@@ -217,8 +213,10 @@ jupyter notebook notebooks/04_hpo_xgboost.ipynb
     *   `waveform_processing.py`: Helper functions for signal processing.
 *   `model_creation/`: **(New)** Modular modeling pipeline.
     *   `utils.py`: Shared logic for data loading and preprocessing.
-    *   `run_hpo.py`: Hyperparameter optimization script.
-    *   `train_evaluate.py`: Model training and evaluation script (consolidated).
+    *   `step_06_run_hpo.py`: Hyperparameter optimization script (Optuna, AUPRC objective).
+    *   `step_07_train_evaluate.py`: Final training, OOF calibration, Youden-J threshold selection, and artifacted prediction export.
+    *   `postprocessing.py`: Logistic recalibration, stratified OOF prediction helpers, threshold search, and JSON persistence utilities.
+    *   `prediction_io.py`: Prediction file validation and standardized CSV writing for train/test splits.
 *   `model_creation_aeon/`: **(New)** Experimental Aeon pipeline.
     *   `classifiers.py`: Custom `FusedClassifier`, `RocketFused`, and `FreshPrinceFused` classes implementing early fusion.
     *   `step_06_aeon_train.py`: CLI-driven script for training Aeon models.

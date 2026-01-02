@@ -112,7 +112,7 @@ Feature selection and hyperparameter optimization were performed using the train
 *   **Algorithm**: XGBoost (Extreme Gradient Boosting).
 *   **Hyperparameter Optimization (HPO)**: Performed using Optuna with 5-fold stratified cross-validation on the training set to maximize the Area Under the Precision-Recall Curve (AUPRC).
 *   **Final Model Training**: The optimal hyperparameters identified were used to train the final model on the full training set.
-*   **Evaluation**: The final model was evaluated on the held-out test set. We generated 95% confidence intervals (CIs) for all performance metrics using 1000-fold bootstrapping of the test set predictions. Platt scaling was applied to calibrate predicted probabilities.
+*   **Evaluation**: The final model was evaluated on the held-out test set. We generated 95% confidence intervals (CIs) for all performance metrics using 1000-fold bootstrapping of the test set predictions, applying the fixed calibrators and thresholds learned during training.
 *   **Feature-Set Grid**: Default study runs (triggered via `run_experiments.sh`) include preoperative-only models, single-waveform models (`pleth_only`, `ecg_only`, `co2_only`, `awp_only`), all-waveform models, and fused preoperative + all-waveform models. Ablations pair preoperative data with each single waveform (`preop_and_<waveform>`) and with all waveforms minus one (`preop_and_all_minus_<waveform>`). Two-channel waveform-only configurations such as **AWP+CO2** or **ECG+PLETH** are excluded from the default grid, except insofar as those channels appear together within the full all-waveform configuration.
 
 ## Statistical Analysis
@@ -123,11 +123,11 @@ Model performance was evaluated on the independent hold-out test set.
 ## Post-hoc Analysis
 To ensure robust and clinically applicable performance estimates, a rigorous post-hoc analysis pipeline was implemented:
 
-1.  **Global Calibration**: Raw model probabilities were calibrated using **Logistic Regression (Platt Scaling)**. A single calibrator was fit for each model configuration (Outcome × Branch × Feature Set) on the entire prediction set. This approach ensures that the predicted probabilities reflect true risk levels while strictly preserving the global ranking of patients (monotone transformation), avoiding the rank distortions often caused by fold-wise calibration methods.
+1.  **Training-Only Logistic Recalibration**: Within `model_creation/step_07_train_evaluate.py`, stratified out-of-fold predictions are generated on the training set. A logistic recalibration model (fitted intercept and slope) is trained **only** on these OOF scores and serialized to `artifacts/calibration.json` per (Outcome × Branch × Feature Set). The same parameters are reapplied to both OOF and held-out test scores; no recalibration occurs on the test set or during reporting.
 
-2.  **Constrained Thresholding**: Optimal decision thresholds were selected to maximize the **F2-score** (which prioritizes recall over precision, reflecting the clinical importance of missing AKI cases). To prevent degenerate solutions in highly imbalanced scenarios (e.g., predicting all positives), we imposed a **minimum specificity constraint of 0.6**. If no threshold met this constraint, the unconstrained F2-optimal threshold was used as a fallback.
+2.  **Fixed Threshold Selection**: Using the calibrated OOF probabilities, a single decision threshold is selected via **Youden's J statistic** and written to `artifacts/threshold.json`, alongside its associated sensitivity and specificity. This threshold is fixed for all downstream evaluation, including bootstrap resampling.
 
-3.  **Statistical Inference**: We computed **95% Confidence Intervals (CIs)** for all reported metrics (AUROC, AUPRC, Brier Score, Sensitivity, Specificity, F1) using **non-parametric bootstrapping** with **1000 iterations**. This provides a reliable measure of the uncertainty associated with our performance estimates.
+3.  **Bootstrapped Statistical Inference**: All reported metrics (AUROC, AUPRC, Brier Score, Sensitivity, Specificity, F1, Precision, Accuracy) are computed on the held-out test predictions with the stored calibrator and threshold applied. **Non-parametric bootstrapping** (1000 iterations) resamples the test predictions with replacement while keeping the Step-7 threshold constant to derive 95% Confidence Intervals. Consolidated metrics and optional bootstrap samples are produced by `results_recreation/metrics_summary.py` and visualized in `results_recreation/results_analysis.py`.
 
 ## Experimental Pipeline: Time Series Classification (Aeon)
 
@@ -172,4 +172,4 @@ The Aeon pipeline mirrors the rigorous design of the primary pipeline:
     *   **Leave-One-Out**: Performance impact of removing a single waveform from the full set.
     *   **Fusion Impact**: Comparison of "Waveform Only" vs. "Early Fusion" (Waveform + Preop) performance.
 *   **Bootstrapping**: 1000-fold bootstrapped metrics (AUROC, AUPRC) with 95% Confidence Intervals.
-*   **Calibration**: Logistic calibration (Platt Scaling) applied to the decision function outputs.
+*   **Calibration**: Logistic calibration (Platt Scaling) is fitted on training folds and the learned parameters are **fixed** when applied to held-out validation/test scores; no recalibration is performed on the full prediction set.
