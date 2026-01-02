@@ -154,6 +154,7 @@ python model_creation/step_07_train_evaluate.py --outcome any_aki --branch windo
 *   **Feature Sets**: `preop_only`, `all_waveforms`, `preop_and_all_waveforms`, `pleth_only`, `ecg_only`, etc.
 *   **Model Types**: `xgboost` (default) or `ebm`.
 *   **Default Grid (`run_experiments.sh`)**: Primary runs cover preop-only, single-waveform models (`pleth_only`, `ecg_only`, `co2_only`, `awp_only`), all waveforms, and fused preop + all waveforms. Ablations pair preop with each single waveform (`preop_and_<waveform>`) and with all waveforms minus one (`preop_and_all_minus_<waveform>`). Two-channel waveform-only combinations (e.g., **AWP+CO2** or **ECG+PLETH**) are intentionally excluded from default sweeps and should be launched manually if needed.
+*   **Model Families**: `run_experiments.sh` iterates `MODEL_TYPES=(xgboost ebm)` and forwards `--model_type` to both Step 6 and Step 7 so outputs land under `results/models/{model_type}/…`, allowing reporting to ingest both branches side-by-side.
 
 ### Step 8: Post-hoc Analysis & Visualization
 **Primary Script**: `results_recreation/results_analysis.py`
