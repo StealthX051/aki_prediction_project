@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# Fail fast on errors within pipelines so tee preserves exit codes
+set -o pipefail
+
 # Activate environment (if running from outside)
 # source activate aki_prediction_project
 
@@ -8,6 +11,10 @@ OUTCOMES=("any_aki" "icu_admission")
 
 # Branches
 BRANCHES=("non_windowed" "windowed")
+
+# Model types to evaluate; default covers both supported branches so
+# reporting can harvest results from results/models/{model_type}/...
+MODEL_TYPES=("xgboost" "ebm")
 
 # Feature Sets
 # 1. Primary Models
@@ -37,36 +44,46 @@ ABLATION_SETS_2=(
 # Combine all feature sets
 ALL_FEATURE_SETS=("${PRIMARY_SETS[@]}" "${ABLATION_SETS_1[@]}" "${ABLATION_SETS_2[@]}")
 
+# Optional flags
+SMOKE_TEST_FLAG=${SMOKE_TEST_FLAG:-}
+
 # Log file
 LOG_FILE="experiment_log.txt"
 
 echo "Starting Experiments..." | tee -a "$LOG_FILE"
 
-for outcome in "${OUTCOMES[@]}"; do
-    for branch in "${BRANCHES[@]}"; do
-        for feature_set in "${ALL_FEATURE_SETS[@]}"; do
-            
-            echo "----------------------------------------------------------------" | tee -a "$LOG_FILE"
-            echo "Running: Outcome=$outcome | Branch=$branch | FeatureSet=$feature_set" | tee -a "$LOG_FILE"
-            echo "----------------------------------------------------------------" | tee -a "$LOG_FILE"
+for model_type in "${MODEL_TYPES[@]}"; do
+    for outcome in "${OUTCOMES[@]}"; do
+        for branch in "${BRANCHES[@]}"; do
+            for feature_set in "${ALL_FEATURE_SETS[@]}"; do
 
-            # 1. Run HPO
-            echo "  > Starting HPO..." | tee -a "$LOG_FILE"
-            if python model_creation/step_06_run_hpo.py --outcome "$outcome" --branch "$branch" --feature_set "$feature_set" 2>&1 | tee -a "$LOG_FILE"; then
-                echo "  > HPO Complete." | tee -a "$LOG_FILE"
-            else
-                echo "  > HPO FAILED. Skipping training." | tee -a "$LOG_FILE"
-                continue
-            fi
+                echo "----------------------------------------------------------------" | tee -a "$LOG_FILE"
+                echo "Running: Model=$model_type | Outcome=$outcome | Branch=$branch | FeatureSet=$feature_set" | tee -a "$LOG_FILE"
+                echo "----------------------------------------------------------------" | tee -a "$LOG_FILE"
 
-            # 2. Run Training & Evaluation
-            echo "  > Starting Training & Evaluation..."        # Step 7: Train and Evaluate (includes prediction generation)
-        python3 model_creation/step_07_train_evaluate.py \
-            --outcome "$outcome" \
-            --branch "$branch" \
-            --feature_set "$feature_set" \
-            $SMOKE_TEST_FLAG
-            
+                # 1. Run HPO
+                echo "  > Starting HPO for model_type=$model_type..." | tee -a "$LOG_FILE"
+                if python model_creation/step_06_run_hpo.py --outcome "$outcome" --branch "$branch" --feature_set "$feature_set" --model_type "$model_type" 2>&1 | tee -a "$LOG_FILE"; then
+                    echo "  > HPO Complete for model_type=$model_type." | tee -a "$LOG_FILE"
+                else
+                    echo "  > HPO FAILED for model_type=$model_type. Skipping training." | tee -a "$LOG_FILE"
+                    continue
+                fi
+
+                # 2. Run Training & Evaluation
+                echo "  > Starting Training & Evaluation for model_type=$model_type..." | tee -a "$LOG_FILE"
+                if python3 model_creation/step_07_train_evaluate.py \
+                    --outcome "$outcome" \
+                    --branch "$branch" \
+                    --feature_set "$feature_set" \
+                    --model_type "$model_type" \
+                    $SMOKE_TEST_FLAG 2>&1 | tee -a "$LOG_FILE"; then
+                    echo "  > Training & Evaluation Complete for model_type=$model_type." | tee -a "$LOG_FILE"
+                else
+                    echo "  > Training & Evaluation FAILED for model_type=$model_type." | tee -a "$LOG_FILE"
+                fi
+
+            done
         done
     done
 done
