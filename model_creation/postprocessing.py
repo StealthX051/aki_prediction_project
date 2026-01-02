@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
+import pandas as pd
 from numpy.typing import ArrayLike
 from sklearn.base import BaseEstimator, clone
 from sklearn.linear_model import LogisticRegression
