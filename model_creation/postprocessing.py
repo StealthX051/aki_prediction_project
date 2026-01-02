@@ -19,8 +19,8 @@ from sklearn.metrics import confusion_matrix
 from sklearn.model_selection import StratifiedKFold
 
 
-def _validate_array(name: str, array: ArrayLike) -> np.ndarray:
-    """Convert input to ``np.ndarray`` and validate it contains no NaNs.
+def _validate_array(name: str, array: ArrayLike, allow_nan: bool = False) -> np.ndarray:
+    """Convert input to ``np.ndarray`` and optionally validate it for NaNs.
 
     Args:
         name: Name of the array for error messages.
@@ -30,10 +30,10 @@ def _validate_array(name: str, array: ArrayLike) -> np.ndarray:
         The validated array as ``np.ndarray``.
 
     Raises:
-        ValueError: If the array contains NaN values.
+        ValueError: If the array contains NaN values and ``allow_nan`` is False.
     """
     arr = np.asarray(array)
-    if np.isnan(arr).any():
+    if not allow_nan and np.isnan(arr).any():
         raise ValueError(f"{name} contains NaN values.")
     return arr
 
@@ -56,6 +56,7 @@ def generate_stratified_oof_predictions(
     shuffle: bool = True,
     fit_params: Optional[Dict[str, Any]] = None,
     proba: bool = True,
+    sample_weight: Optional[ArrayLike] = None,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Generate stratified K-fold out-of-fold predictions.
 
@@ -69,19 +70,28 @@ def generate_stratified_oof_predictions(
         fit_params: Optional dictionary of parameters passed to ``fit``.
         proba: If True, use ``predict_proba`` and return positive class
             probabilities; otherwise, use ``predict``.
+        sample_weight: Optional sample weights aligned with ``X``/``y`` to use
+            during training folds.
 
     Returns:
         A tuple of ``(oof_predictions, fold_indices)`` where ``fold_indices``
         indicates the fold assignment for each sample.
 
     Raises:
-        ValueError: If inputs contain NaNs or if any fold is missing.
+        ValueError: If ``y`` or ``sample_weight`` contain NaNs or if any fold
+            is missing.
     """
-    X_validated = _validate_array("X", X)
+    X_validated = _validate_array("X", X, allow_nan=True)
     y_validated = _validate_array("y", y)
 
     if X_validated.shape[0] != y_validated.shape[0]:
         raise ValueError("X and y must have the same number of rows.")
+
+    sample_weight_arr: Optional[np.ndarray] = None
+    if sample_weight is not None:
+        sample_weight_arr = _validate_array("sample_weight", sample_weight)
+        if sample_weight_arr.shape[0] != y_validated.shape[0]:
+            raise ValueError("sample_weight must match number of rows in y.")
 
     cv = StratifiedKFold(n_splits=n_splits, shuffle=shuffle, random_state=random_state)
     oof_predictions = np.empty_like(y_validated, dtype=float)
@@ -89,7 +99,11 @@ def generate_stratified_oof_predictions(
 
     for fold, (train_idx, val_idx) in enumerate(cv.split(X_validated, y_validated)):
         model_clone = clone(model)
-        model_clone.fit(X_validated[train_idx], y_validated[train_idx], **(fit_params or {}))
+        fit_kwargs = dict(fit_params or {})
+        if sample_weight_arr is not None:
+            fit_kwargs["sample_weight"] = sample_weight_arr[train_idx]
+
+        model_clone.fit(X_validated[train_idx], y_validated[train_idx], **fit_kwargs)
 
         if proba:
             preds = model_clone.predict_proba(X_validated[val_idx])[:, 1]

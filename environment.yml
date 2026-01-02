@@ -35,6 +35,7 @@ dependencies:
       - matplotlib
       - scikit-learn
       - xgboost
+      - interpret
       - pycatch22
       - optuna
       - shap
