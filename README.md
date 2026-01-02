@@ -125,27 +125,34 @@ python data_preparation/step_05_data_merge.py --impute-missing
 ### Step 7: Model Training & Evaluation
 **Directory**: `model_creation/`
 
-We have refactored the modeling pipeline into two robust scripts plus shared utilities:
+We have refactored the modeling pipeline into two robust scripts plus shared utilities. Both scripts accept `--model_type {xgboost,ebm}`; the default `xgboost` path matches prior behavior, while `ebm` enables a fixed ExplainableBoostingClassifier configuration (0 interactions, `missing="gain"`, 20 inner bags, 14 outer bags, 1024 bins, deterministic seed, multi-core training) with Optuna-tuned leaves, smoothing, learning rate, validation size, and stopping tolerances. Inputs retain NaNs by default; pass `--legacy_imputation` if you need the previous `-99` sentinel fill during training.
 
-*   **Hyperparameter Optimization** — `model_creation/step_06_run_hpo.py`: Runs Optuna sweeps (default 100 trials) to maximize AUPRC and stores the best parameters at `results/params/{outcome}/{branch}/{feature_set}.json`.
-*   **Training & Evaluation** — `model_creation/step_07_train_evaluate.py`: Trains the final XGBoost model with the tuned hyperparameters, writes calibrated predictions, and exports artifacts.
+*   **Hyperparameter Optimization** — `model_creation/step_06_run_hpo.py`: Runs Optuna sweeps (default 100 trials) to maximize AUPRC and stores the best parameters at `results/params/{model_type}/{outcome}/{branch}/{feature_set}.json`.
+*   **Training & Evaluation** — `model_creation/step_07_train_evaluate.py`: Trains the final model with the tuned hyperparameters, writes calibrated predictions, and exports artifacts.
 *   **Shared Utilities** — `model_creation/postprocessing.py` and `model_creation/prediction_io.py`: Implement stratified out-of-fold (OOF) prediction generation, logistic recalibration, Youden-J threshold search, prediction file validation, and JSON artifact persistence.
 
 ```bash
-python model_creation/step_06_run_hpo.py --outcome any_aki --branch windowed --feature_set all_waveforms
-python model_creation/step_07_train_evaluate.py --outcome any_aki --branch windowed --feature_set all_waveforms
+# XGBoost example
+python model_creation/step_06_run_hpo.py --outcome any_aki --branch windowed --feature_set all_waveforms --model_type xgboost
+python model_creation/step_07_train_evaluate.py --outcome any_aki --branch windowed --feature_set all_waveforms --model_type xgboost
+
+# EBM example
+python model_creation/step_06_run_hpo.py --outcome any_aki --branch windowed --feature_set all_waveforms --model_type ebm
+python model_creation/step_07_train_evaluate.py --outcome any_aki --branch windowed --feature_set all_waveforms --model_type ebm
 ```
 
 **What happens during training & evaluation?**
 *   **OOF Calibration**: `step_07_train_evaluate.py` generates OOF predictions on the training set, fits a logistic recalibration model on those scores, and saves the calibrated OOF outputs.
 *   **Threshold Selection**: The calibrated OOF scores are searched for the **Youden-J** statistic to define a single decision threshold per (Outcome × Branch × Feature Set). That threshold is stored in `artifacts/threshold.json`.
-*   **Artifacted Outputs**: For each configuration, the script saves calibrated train/test predictions (`predictions/train.csv`, `predictions/test.csv`), the fitted recalibration parameters (`artifacts/calibration.json`), threshold metadata (`artifacts/threshold.json`), dataset/hash metadata (`artifacts/metadata.json`), and SHAP plots.
+*   **Artifacted Outputs**: For each configuration, the script saves calibrated train/test predictions (`predictions/train.csv`, `predictions/test.csv`), the fitted recalibration parameters (`artifacts/calibration.json`), threshold metadata (`artifacts/threshold.json`), dataset/hash metadata (`artifacts/metadata.json`), and SHAP plots (XGBoost only).
+*   **Model-Type Specific Artifacts**: XGBoost runs export `model.json` plus SHAP figures, while EBM runs export `model.ebm` and intentionally skip SHAP generation (logged as skipped).
 *   **Fixed Application at Test Time**: The stored calibrator and threshold are applied **without further fitting** when evaluating the held-out test set; these same fixed values are later reused by the reporting scripts.
 
 #### Available Options
 *   **Outcomes**: `any_aki`, `icu_admission` (default experiment script focus; other outcomes can be run manually if needed).
 *   **Branches**: `non_windowed` (Full Case), `windowed` (Segmented).
 *   **Feature Sets**: `preop_only`, `all_waveforms`, `preop_and_all_waveforms`, `pleth_only`, `ecg_only`, etc.
+*   **Model Types**: `xgboost` (default) or `ebm`.
 *   **Default Grid (`run_experiments.sh`)**: Primary runs cover preop-only, single-waveform models (`pleth_only`, `ecg_only`, `co2_only`, `awp_only`), all waveforms, and fused preop + all waveforms. Ablations pair preop with each single waveform (`preop_and_<waveform>`) and with all waveforms minus one (`preop_and_all_minus_<waveform>`). Two-channel waveform-only combinations (e.g., **AWP+CO2** or **ECG+PLETH**) are intentionally excluded from default sweeps and should be launched manually if needed.
 
 ### Step 8: Post-hoc Analysis & Visualization
@@ -154,7 +161,7 @@ python model_creation/step_07_train_evaluate.py --outcome any_aki --branch windo
 Generates publication-ready tables and figures for both the **Primary Pipeline** (Catch22/XGBoost) and the **Experimental Pipeline** (Aeon/Multirocket).
 
 *   **Artifact Validation & Aggregation**: `results_recreation/metrics_summary.py` crawls `results/**/models/**/predictions/test.csv`, confirms that the paired `artifacts/calibration.json` and `artifacts/threshold.json` from Step 7 are present, and computes held-out metrics using the stored threshold for each configuration. A consolidated metrics table is written to `results/tables/metrics_summary.csv` (and optional bootstrap samples to Parquet).
-*   **Unified Reporting**: `results_analysis.py` consumes the consolidated metrics to generate Word, PDF, and HTML tables plus ROC/PR/Calibration figures across both pipelines.
+*   **Unified Reporting**: `results_analysis.py` consumes the consolidated metrics to generate Word, PDF, and HTML tables plus ROC/PR/Calibration figures across both pipelines. Reports display distinct rows for each model type (`xgboost` vs. `ebm`) within every Outcome × Branch × Feature Set combination.
 *   **Calibration & Thresholds**: No report-time refitting occurs. The recalibration parameters and thresholds learned from OOF training scores in Step 7 are **fixed** and reapplied to the test predictions when computing metrics and bootstraps.
 *   **Bootstrapping**: Uses non-parametric bootstrap resampling (default 1000 iterations, parallelized) on the held-out test predictions while holding the Step-7 thresholds constant.
 *   **Outputs**:
