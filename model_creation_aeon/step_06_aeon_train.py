@@ -1,19 +1,21 @@
 import argparse
+import hashlib
+import json
+import logging
 import os
+from pathlib import Path
+import sys
+from typing import Tuple
 
-# Set thread limits BEFORE other imports to avoid BLAS contention
 os.environ["OMP_NUM_THREADS"] = "1"
 os.environ["MKL_NUM_THREADS"] = "1"
 os.environ["OPENBLAS_NUM_THREADS"] = "1"
 os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
 os.environ["NUMEXPR_NUM_THREADS"] = "1"
-import sys
-import logging
-import pandas as pd
-import numpy as np
+
 import joblib
-from pathlib import Path
-import json
+import numpy as np
+import pandas as pd
 
 # Add project root
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -29,6 +31,13 @@ from aeon.transformations.collection.convolution_based import MiniRocket, MultiR
 
 from data_preparation.inputs import AEON_OUT_DIR, OUTCOME
 from model_creation_aeon.classifiers import FreshPrinceFused # Keep FreshPrince as is
+from model_creation.postprocessing import (
+    apply_logistic_recalibration,
+    fit_logistic_recalibration,
+    find_youden_j_threshold,
+)
+
+PIPELINE_NAME = "step_06_aeon_train"
 
 # Outcome Mapping (Friendly Name -> Column Name)
 OUTCOME_MAPPING = {
@@ -45,10 +54,20 @@ OUTCOME_MAPPING = {
     'y_icu_admit': 'y_icu_admit'
 }
 
+def compute_file_hash(path: Path) -> str:
+    """Compute the SHA256 hash of a file without loading it fully into memory."""
+    hasher = hashlib.sha256()
+    with path.open("rb") as fp:
+        for chunk in iter(lambda: fp.read(8192), b""):
+            hasher.update(chunk)
+    return hasher.hexdigest()
+
+
 def load_aeon_data(outcome_name, channels, include_preop):
     """
     Loads waveform and preop data for the given configuration.
-    Returns: X_wave_train, X_preop_train, y_train, X_wave_test, X_preop_test, y_test
+    Returns: X_wave_train, X_preop_train, y_train, X_wave_test, X_preop_test, y_test,
+    caseids_train, caseids_test, train_df, test_df
     """
     logging.info(f"Loading data from {AEON_OUT_DIR}...")
     
@@ -136,21 +155,32 @@ def load_aeon_data(outcome_name, channels, include_preop):
     
     X_wave_train = X_wave_aligned[train_mask]
     X_wave_test = X_wave_aligned[test_mask]
-    
+
     if include_preop:
         X_preop_train = X_preop_aligned[train_mask]
         X_preop_test = X_preop_aligned[test_mask]
     else:
         X_preop_train = None
         X_preop_test = None
-        
+
     y_train = y_aligned[train_mask]
     y_test = y_aligned[test_mask]
-    
+
+    caseids_train = full_df.loc[train_mask, 'caseid'].values
     caseids_test = full_df.loc[test_mask, 'caseid'].values
 
-    return (X_wave_train, X_preop_train, y_train, 
-            X_wave_test, X_preop_test, y_test, caseids_test, full_df.loc[test_mask])
+    return (
+        X_wave_train,
+        X_preop_train,
+        y_train,
+        X_wave_test,
+        X_preop_test,
+        y_test,
+        caseids_train,
+        caseids_test,
+        full_df.loc[train_mask],
+        full_df.loc[test_mask],
+    )
 
 def optimize_aeon_model(X_wave_tr, X_preop_tr, y_tr, model_type, n_trials=100, n_jobs=-1):
     """
@@ -232,6 +262,75 @@ def optimize_aeon_model(X_wave_tr, X_preop_tr, y_tr, model_type, n_trials=100, n
     logging.info(f"Best Trial: {study.best_trial.value} | Params: {study.best_params}")
     return study.best_params, transformer, X_rocket_tr
 
+
+def _stack_features(rocket_features: np.ndarray, preop: np.ndarray) -> np.ndarray:
+    preop_np = np.array(preop, dtype=np.float32)
+    return np.hstack([rocket_features, preop_np])
+
+
+def generate_oof_predictions(
+    model_name: str,
+    best_params: dict,
+    X_wave: np.ndarray,
+    X_preop: np.ndarray,
+    y: np.ndarray,
+    n_splits: int,
+    random_state: int,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Generate out-of-fold predictions for Aeon models without test leakage."""
+
+    cv = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=random_state)
+    oof_predictions = np.empty_like(y, dtype=float)
+    fold_indices = np.empty_like(y, dtype=int)
+
+    for fold, (train_idx, val_idx) in enumerate(cv.split(X_wave, y)):
+        if model_name == 'freshprince':
+            fold_model = FreshPrinceFused(n_estimators=200, random_state=random_state, n_jobs=-1)
+            fold_model.fit(X_wave[train_idx], None if X_preop is None else X_preop[train_idx], y[train_idx])
+            probs = fold_model.predict_proba(
+                X_wave[val_idx], None if X_preop is None else X_preop[val_idx]
+            )[:, 1]
+        else:
+            if model_name == 'minirocket':
+                transformer = MiniRocket(n_kernels=10000, n_jobs=-1, random_state=random_state)
+            elif model_name == 'multirocket':
+                transformer = MultiRocket(n_kernels=10000, n_jobs=-1, random_state=random_state)
+            else:
+                raise ValueError(f"Unsupported model for OOF generation: {model_name}")
+
+            X_wave_train = transformer.fit_transform(X_wave[train_idx])
+            X_wave_val = transformer.transform(X_wave[val_idx])
+
+            if X_preop is not None:
+                X_train_combined = _stack_features(X_wave_train, X_preop[train_idx])
+                X_val_combined = _stack_features(X_wave_val, X_preop[val_idx])
+            else:
+                X_train_combined = X_wave_train
+                X_val_combined = X_wave_val
+
+            scaler = StandardScaler()
+            X_train_scaled = scaler.fit_transform(X_train_combined)
+            X_val_scaled = scaler.transform(X_val_combined)
+
+            clf = LogisticRegression(
+                C=best_params.get('C', 1.0),
+                class_weight='balanced',
+                solver='lbfgs',
+                max_iter=5000,
+                n_jobs=-1,
+            )
+            clf.fit(X_train_scaled, y[train_idx])
+            probs = clf.predict_proba(X_val_scaled)[:, 1]
+
+        oof_predictions[val_idx] = probs
+        fold_indices[val_idx] = fold
+
+    if np.isnan(oof_predictions).any():
+        raise ValueError("OOF predictions contain NaN values.")
+
+    return oof_predictions, fold_indices
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", type=str, required=True, choices=['multirocket', 'minirocket', 'freshprince'])
@@ -241,6 +340,8 @@ def main():
     parser.add_argument("--limit", type=int, help="Limit number of train/test samples for debugging")
     parser.add_argument("--n_trials", type=int, default=100, help="Number of HPO trials")
     parser.add_argument("--results_dir", type=str, default=str(PROJECT_ROOT / 'results' / 'aeon'), help="Base results directory")
+    parser.add_argument("--n_splits", type=int, default=5, help="Number of CV folds for OOF predictions")
+    parser.add_argument("--random_state", type=int, default=42, help="Random seed for CV")
     args = parser.parse_args()
     
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
@@ -249,27 +350,47 @@ def main():
     chan_str = "all" if args.channels == ['all'] else "_".join(args.channels)
     preop_str = "fused" if args.include_preop else "waveonly"
     exp_name = f"{args.model}_{chan_str}_{preop_str}_{args.outcome}"
-    
+
     out_dir = Path(args.results_dir) / 'models' / args.model / exp_name
+    predictions_dir = out_dir / 'predictions'
+    artifacts_dir = out_dir / 'artifacts'
     out_dir.mkdir(parents=True, exist_ok=True)
+    predictions_dir.mkdir(parents=True, exist_ok=True)
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
     
     logging.info(f"Starting Experiment: {exp_name}")
     
     # 1. Load Data
     data = load_aeon_data(args.outcome, args.channels, args.include_preop)
-    Xw_tr, Xp_tr, y_tr, Xw_te, Xp_te, y_te, caseids_te, df_te = data
-    
+    Xw_tr, Xp_tr, y_tr, Xw_te, Xp_te, y_te, caseids_tr, caseids_te, df_tr, df_te = data
+
     if args.limit:
         logging.info(f"Limiting usage to {args.limit} samples per split.")
         Xw_tr, Xp_tr = Xw_tr[:args.limit], (Xp_tr[:args.limit] if Xp_tr is not None else None)
         y_tr = y_tr[:args.limit]
-        
+        caseids_tr = caseids_tr[:args.limit]
+        df_tr = df_tr.iloc[:args.limit]
+
         Xw_te, Xp_te = Xw_te[:args.limit], (Xp_te[:args.limit] if Xp_te is not None else None)
         y_te = y_te[:args.limit]
         caseids_te = caseids_te[:args.limit]
-    
+        df_te = df_te.iloc[:args.limit]
+
     logging.info(f"Train size: {len(y_tr)}, Test size: {len(y_te)}")
-    
+
+    positive_count = int((y_tr == 1).sum())
+    negative_count = int((y_tr == 0).sum())
+    if positive_count == 0 or negative_count == 0:
+        raise ValueError("Training data must contain both classes for calibration and evaluation.")
+
+    n_splits = args.n_splits
+    min_class = min(positive_count, negative_count)
+    if n_splits > min_class:
+        logging.warning("Reducing n_splits from %s to %s to match minority class count.", n_splits, min_class)
+        n_splits = min_class
+
+    dataset_hash = compute_file_hash(Path(AEON_OUT_DIR) / 'aki_preop_aeon.csv')
+
     # 2. HPO & Training
     model = None
     best_params = {}
@@ -279,9 +400,8 @@ def main():
         logging.info("Using FreshPrinceFused (No HPO Loop)...")
         model = FreshPrinceFused(n_estimators=200, n_jobs=-1)
         model.fit(Xw_tr, Xp_tr, y_tr)
-        
-        # Predict
-        probs = model.predict_proba(Xw_te, Xp_te)[:, 1]
+
+        final_prob_raw = model.predict_proba(Xw_te, Xp_te)[:, 1]
         
     else:
         # MiniRocket / MultiRocket with Optuna HPO
@@ -325,10 +445,10 @@ def main():
              X_combined_te = np.hstack([X_rocket_te, np.array(Xp_te, dtype=np.float32)])
         else:
              X_combined_te = X_rocket_te
-             
+
         X_scaled_te = scaler.transform(X_combined_te)
-        probs = final_clf.predict_proba(X_scaled_te)[:, 1]
-        
+        final_prob_raw = final_clf.predict_proba(X_scaled_te)[:, 1]
+
         # Save Model Components manually since we aren't using the FusedClassifier wrapper
         # We can construct a pipeline or save simple dict
         joblib.dump(transformer, out_dir / 'transformer.pkl')
@@ -336,29 +456,111 @@ def main():
         joblib.dump(final_clf, out_dir / 'classifier.pkl')
         model = "Optuna_Pipeline" # Sentinel
 
-    # 3. Save Predictions
-    logging.info(f"Saving artifacts to {out_dir}...")
-    pred_df = pd.DataFrame({
+    logging.info("Generating out-of-fold predictions for calibration...")
+    oof_predictions, fold_indices = generate_oof_predictions(
+        args.model,
+        best_params,
+        Xw_tr,
+        Xp_tr,
+        y_tr,
+        n_splits=n_splits,
+        random_state=args.random_state,
+    )
+
+    if len(oof_predictions) != len(y_tr):
+        raise ValueError("OOF predictions length mismatch with training data.")
+
+    recalibration_model = fit_logistic_recalibration(y_tr, oof_predictions)
+    calibrated_oof = apply_logistic_recalibration(oof_predictions, recalibration_model)
+
+    threshold, youden_j, sensitivity, specificity = find_youden_j_threshold(y_tr, calibrated_oof)
+
+    if set(caseids_tr) & set(caseids_te):
+        raise AssertionError("Train and test caseids overlap; calibration would leak test data.")
+
+    calibrated_test = apply_logistic_recalibration(final_prob_raw, recalibration_model)
+
+    train_predictions = pd.DataFrame({
+        'caseid': caseids_tr,
+        'y_true': y_tr,
+        'y_prob_raw': oof_predictions,
+        'y_prob_calibrated': calibrated_oof,
+        'threshold': threshold,
+        'y_pred_label': (calibrated_oof >= threshold).astype(int),
+        'fold': fold_indices,
+        'is_oof': True,
+        'outcome': args.outcome,
+        'branch': 'aeon',
+        'feature_set': chan_str + ("_fused" if args.include_preop else "_waveonly"),
+        'model_name': args.model,
+        'pipeline': PIPELINE_NAME,
+    })
+
+    test_predictions = pd.DataFrame({
         'caseid': caseids_te,
         'y_true': y_te,
-        'y_pred_proba': probs,
-        'split_group': 'test',
-        'model_name': args.model,
-        'feature_set': chan_str + ("_fused" if args.include_preop else "_waveonly"),
+        'y_prob_raw': final_prob_raw,
+        'y_prob_calibrated': calibrated_test,
+        'threshold': threshold,
+        'y_pred_label': (calibrated_test >= threshold).astype(int),
+        'fold': -1,
+        'is_oof': False,
         'outcome': args.outcome,
-        'branch': 'aeon' 
+        'branch': 'aeon',
+        'feature_set': chan_str + ("_fused" if args.include_preop else "_waveonly"),
+        'model_name': args.model,
+        'pipeline': PIPELINE_NAME,
     })
-    
-    pred_path = out_dir / 'predictions.csv'
-    pred_df.to_csv(pred_path, index=False)
-    logging.info(f"Saved predictions to {pred_path}")
-    
+
+    train_predictions.to_csv(predictions_dir / 'train_oof.csv', index=False)
+    test_predictions.to_csv(predictions_dir / 'test.csv', index=False)
+    logging.info(f"Saved train OOF predictions to {predictions_dir / 'train_oof.csv'}")
+    logging.info(f"Saved test predictions to {predictions_dir / 'test.csv'}")
+
+    calibration_payload = {
+        'intercept': recalibration_model.intercept,
+        'slope': recalibration_model.slope,
+        'eps': recalibration_model.eps,
+    }
+    threshold_payload = {
+        'threshold': threshold,
+        'youden_j': youden_j,
+        'sensitivity': sensitivity,
+        'specificity': specificity,
+    }
+    metadata_payload = {
+        'seed': args.random_state,
+        'folds': n_splits,
+        'dataset_hash': dataset_hash,
+        'counts': {
+            'train': {
+                'total': int(len(y_tr)),
+                'positive': positive_count,
+                'negative': negative_count,
+            },
+            'test': {
+                'total': int(len(y_te)),
+                'positive': int((y_te == 1).sum()),
+                'negative': int((y_te == 0).sum()),
+            },
+        },
+    }
+
+    with open(artifacts_dir / 'calibration.json', 'w') as f:
+        json.dump(calibration_payload, f, indent=2)
+    with open(artifacts_dir / 'threshold.json', 'w') as f:
+        json.dump(threshold_payload, f, indent=2)
+    with open(artifacts_dir / 'metadata.json', 'w') as f:
+        json.dump(metadata_payload, f, indent=2)
+
+    logging.info(f"Saved calibration and threshold artifacts to {artifacts_dir}")
+
     # Save Config/Best Params
     config = vars(args)
     config.update(best_params)
     with open(out_dir / 'config.json', 'w') as f:
         json.dump(config, f, indent=4)
-        
+
     logging.info("Experiment Complete.")
 
 if __name__ == "__main__":
