@@ -394,11 +394,11 @@ def main():
     # 2. HPO & Training
     model = None
     best_params = {}
-    
+
     if args.model == 'freshprince':
         # FreshPrince HPO is too expensive; use default/existing wrapper
         logging.info("Using FreshPrinceFused (No HPO Loop)...")
-        model = FreshPrinceFused(n_estimators=200, n_jobs=-1)
+        model = FreshPrinceFused(n_estimators=200, random_state=args.random_state, n_jobs=-1)
         model.fit(Xw_tr, Xp_tr, y_tr)
 
         final_prob_raw = model.predict_proba(Xw_te, Xp_te)[:, 1]
