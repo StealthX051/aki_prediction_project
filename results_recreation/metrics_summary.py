@@ -87,8 +87,9 @@ def _validate_dataframe(df: pd.DataFrame, path: Path) -> float:
     if missing:
         raise ValidationError(f"{path} missing required columns: {sorted(missing)}")
 
-    if df["caseid"].isna().any():
-        raise ValidationError(f"{path} contains null caseid values")
+    for col in ("caseid", "y_true", "y_prob_calibrated", "y_pred_label"):
+        if df[col].isna().any():
+            raise ValidationError(f"{path} contains null values in column '{col}'")
     if df["caseid"].duplicated().any():
         dupes = df[df["caseid"].duplicated()]["caseid"].unique()
         raise ValidationError(f"{path} has duplicate caseids: {dupes}")
@@ -97,7 +98,22 @@ def _validate_dataframe(df: pd.DataFrame, path: Path) -> float:
     if len(thresholds) != 1:
         raise ValidationError(f"{path} must contain a single threshold; found {thresholds}")
 
-    return float(thresholds[0])
+    threshold = float(thresholds[0])
+
+    y_true_values = set(df["y_true"].dropna().unique())
+    if not y_true_values.issubset({0, 1}):
+        raise ValidationError(f"{path} has non-binary y_true values: {sorted(y_true_values)}")
+
+    if not ((0 <= df["y_prob_calibrated"]).all() and (df["y_prob_calibrated"] <= 1).all()):
+        raise ValidationError(f"{path} contains calibrated probabilities outside [0, 1]")
+
+    predicted = (df["y_prob_calibrated"] >= threshold).astype(int)
+    if not np.array_equal(predicted.values, df["y_pred_label"].astype(int).values):
+        raise ValidationError(
+            f"{path} predicted labels do not match applying threshold {threshold} to y_prob_calibrated"
+        )
+
+    return threshold
 
 
 def _assert_single_value(df: pd.DataFrame, col: str, path: Path) -> str:
@@ -116,7 +132,11 @@ def _load_predictions(pred_path: Path) -> PredictionSet:
     branch = _assert_single_value(df, "branch", pred_path)
     feature_set = _assert_single_value(df, "feature_set", pred_path)
     model_name = _assert_single_value(df, "model_name", pred_path)
-    pipeline = df["pipeline"].iloc[0] if "pipeline" in df.columns else None
+    pipeline = (
+        _assert_single_value(df, "pipeline", pred_path)
+        if "pipeline" in df.columns and not df["pipeline"].dropna().empty
+        else None
+    )
 
     return PredictionSet(
         path=pred_path,
