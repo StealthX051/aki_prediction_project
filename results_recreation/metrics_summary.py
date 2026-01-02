@@ -27,24 +27,13 @@ from sklearn.metrics import (
     roc_auc_score,
 )
 
+from model_creation.prediction_io import REQUIRED_PREDICTION_COLUMNS, validate_prediction_dataframe
+
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 RESULTS_DIR = Path("results")
 TABLES_DIR = RESULTS_DIR / "tables"
-
-REQUIRED_COLUMNS = {
-    "caseid",
-    "y_true",
-    "y_prob_raw",
-    "y_prob_calibrated",
-    "threshold",
-    "y_pred_label",
-    "outcome",
-    "branch",
-    "feature_set",
-    "model_name",
-}
 
 ARTIFACT_FILES = ("calibration.json", "threshold.json")
 
@@ -83,37 +72,10 @@ def _validate_artifacts(pred_path: Path) -> None:
 def _validate_dataframe(df: pd.DataFrame, path: Path) -> float:
     """Validate required columns and return the unique threshold value."""
 
-    missing = REQUIRED_COLUMNS - set(df.columns)
-    if missing:
-        raise ValidationError(f"{path} missing required columns: {sorted(missing)}")
-
-    for col in ("caseid", "y_true", "y_prob_calibrated", "y_pred_label"):
-        if df[col].isna().any():
-            raise ValidationError(f"{path} contains null values in column '{col}'")
-    if df["caseid"].duplicated().any():
-        dupes = df[df["caseid"].duplicated()]["caseid"].unique()
-        raise ValidationError(f"{path} has duplicate caseids: {dupes}")
-
-    thresholds = df["threshold"].dropna().unique()
-    if len(thresholds) != 1:
-        raise ValidationError(f"{path} must contain a single threshold; found {thresholds}")
-
-    threshold = float(thresholds[0])
-
-    y_true_values = set(df["y_true"].dropna().unique())
-    if not y_true_values.issubset({0, 1}):
-        raise ValidationError(f"{path} has non-binary y_true values: {sorted(y_true_values)}")
-
-    if not ((0 <= df["y_prob_calibrated"]).all() and (df["y_prob_calibrated"] <= 1).all()):
-        raise ValidationError(f"{path} contains calibrated probabilities outside [0, 1]")
-
-    predicted = (df["y_prob_calibrated"] >= threshold).astype(int)
-    if not np.array_equal(predicted.values, df["y_pred_label"].astype(int).values):
-        raise ValidationError(
-            f"{path} predicted labels do not match applying threshold {threshold} to y_prob_calibrated"
-        )
-
-    return threshold
+    try:
+        return validate_prediction_dataframe(df, path, REQUIRED_PREDICTION_COLUMNS)
+    except ValueError as exc:
+        raise ValidationError(str(exc)) from exc
 
 
 def _assert_single_value(df: pd.DataFrame, col: str, path: Path) -> str:
