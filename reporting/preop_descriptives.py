@@ -2,7 +2,9 @@
 
 This module loads the finalized preoperative dataset alongside the feature
 lists defined in ``data_preparation.step_03_preop_prep`` to generate a
-publication-ready table summarizing baseline characteristics. Continuous
+publication-ready table summarizing baseline characteristics. Provide a dataset
+that still contains the raw categorical columns (i.e., before one-hot
+encoding) so that baseline counts can be reported. Continuous
 features are tested for normality using the Shapiro–Wilk test to decide
 between mean/standard deviation or median/interquartile range summaries.
 Categorical features are summarized with counts and percentages. Outputs are
@@ -22,7 +24,7 @@ from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from scipy.stats import shapiro
 
-from data_preparation.inputs import PREOP_PROCESSED_FILE
+from data_preparation.inputs import COHORT_FILE
 from data_preparation.step_03_preop_prep import CATEGORICAL_COLS, CONTINUOUS_COLS
 from reporting.display_dictionary import DisplayDictionary, load_display_dictionary
 
@@ -116,6 +118,33 @@ def _format_category_counts(series: pd.Series) -> str:
     return "; ".join(parts)
 
 
+def _filter_and_validate_features(
+    df: pd.DataFrame,
+    *,
+    continuous_features: Sequence[str],
+    categorical_features: Sequence[str],
+    dataset_path: Path,
+) -> Tuple[List[str], List[str]]:
+    """Ensure required columns exist and prevent silent omission of categoricals."""
+
+    missing_continuous = [col for col in continuous_features if col not in df.columns]
+    missing_categorical = [col for col in categorical_features if col not in df.columns]
+
+    if missing_continuous:
+        logger.warning("Missing continuous features in %s: %s", dataset_path, ", ".join(missing_continuous))
+
+    if missing_categorical:
+        message = (
+            "Dataset %s is missing categorical features (%s). "
+            "The PREOP_PROCESSED_FILE produced by step_03_preop_prep.py drops raw categoricals during one-hot encoding. "
+            "Provide --dataset pointing to a pre-encoding dataset (e.g., COHORT_FILE) or retain categorical columns before encoding."
+            % (dataset_path, ", ".join(missing_categorical))
+        )
+        raise ValueError(message)
+
+    return [c for c in continuous_features if c in df.columns], [c for c in categorical_features if c in df.columns]
+
+
 def _build_descriptive_table(
     df: pd.DataFrame,
     *,
@@ -131,10 +160,6 @@ def _build_descriptive_table(
     rows: List[Tuple[str, str, str]] = []
 
     for feature in continuous_features:
-        if feature not in df.columns:
-            logger.warning("Continuous feature %s not found; skipping", feature)
-            continue
-
         summary, _ = _summarize_continuous(
             df[feature], alpha=alpha, max_sample=max_sample, random_state=random_state
         )
@@ -142,10 +167,6 @@ def _build_descriptive_table(
         rows.append((label, "Continuous", summary))
 
     for feature in categorical_features:
-        if feature not in df.columns:
-            logger.warning("Categorical feature %s not found; skipping", feature)
-            continue
-
         summary = _format_category_counts(df[feature])
         label = display_dictionary.feature_label(feature, use_short=True, include_unit=True)
         rows.append((label, "Categorical", summary))
@@ -197,8 +218,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--dataset",
         type=Path,
-        default=PREOP_PROCESSED_FILE,
-        help="Path to the finalized preoperative dataset (CSV).",
+        default=COHORT_FILE,
+        help=(
+            "Path to the preoperative dataset (CSV) that still contains the raw categorical columns. "
+            "If you pass PREOP_PROCESSED_FILE from step_03_preop_prep.py, reintroduce the categoricals before encoding."
+        ),
     )
     parser.add_argument(
         "--display-dictionary",
@@ -238,10 +262,17 @@ def main() -> None:
     df = _load_preop_data(args.dataset)
     display_dict = load_display_dictionary(args.display_dictionary)
 
-    descriptive_table = _build_descriptive_table(
+    continuous_features, categorical_features = _filter_and_validate_features(
         df,
         continuous_features=CONTINUOUS_COLS,
         categorical_features=CATEGORICAL_COLS,
+        dataset_path=args.dataset,
+    )
+
+    descriptive_table = _build_descriptive_table(
+        df,
+        continuous_features=continuous_features,
+        categorical_features=categorical_features,
         display_dictionary=display_dict,
         alpha=args.alpha,
         max_sample=args.max_normality_sample,
