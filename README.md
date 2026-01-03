@@ -157,7 +157,7 @@ python model_creation/step_07_train_evaluate.py --outcome any_aki --branch windo
 
 # EBM example
 python model_creation/step_06_run_hpo.py --outcome any_aki --branch windowed --feature_set all_waveforms --model_type ebm
-python model_creation/step_07_train_evaluate.py --outcome any_aki --branch windowed --feature_set all_waveforms --model_type ebm
+python model_creation/step_07_train_evaluate.py --outcome any_aki --branch windowed --feature_set all_waveforms --model_type ebm --export_ebm_explanations
 ```
 
 #### Full experiment grid (Catch22 + XGBoost/EBM)
@@ -172,7 +172,15 @@ Use the provided shell script to sweep the default grid of outcomes, branches, f
 *   **OOF Calibration**: `step_07_train_evaluate.py` generates OOF predictions on the training set, fits a logistic recalibration model on those scores, and saves the calibrated OOF outputs.
 *   **Threshold Selection**: The calibrated OOF scores are searched for the **Youden-J** statistic to define a single decision threshold per (Outcome × Branch × Feature Set). That threshold is stored in `artifacts/threshold.json`.
 *   **Artifacted Outputs**: For each configuration, the script saves calibrated train/test predictions (`predictions/train.csv`, `predictions/test.csv`), the fitted recalibration parameters (`artifacts/calibration.json`), threshold metadata (`artifacts/threshold.json`), dataset/hash metadata (`artifacts/metadata.json`), and SHAP plots (XGBoost only).
-*   **Model-Type Specific Artifacts**: XGBoost runs export `model.json` plus SHAP figures, while EBM runs export `model.ebm` and intentionally skip SHAP generation (logged as skipped).
+*   **Model-Type Specific Artifacts**: XGBoost runs export `model.json` plus SHAP figures, while EBM runs export `model.ebm` and can also emit calibrated explainability artifacts (`--export_ebm_explanations`).
+    *   **EBM Explainability outputs** live under `results/models/ebm/{outcome}/{branch}/{feature_set}/artifacts/ebm_xai/` and include:
+        * `global_explanation.json`: raw `interpret` global explanation payload for all learned terms.
+        * `global_importances.png` and `global_importances_plotly.(html|png)`: bar plots of term importances (Matplotlib + Plotly with Kaleido fallback).
+        * `interaction_importances.(json|png|html|png)`: ranked interaction terms derived from the model’s native `term_features_` and `term_importances_`.
+        * `local_explanations.json`: local `interpret` explanations augmented with case IDs, raw logits, raw/calibrated probabilities, predicted labels, and calibration parameters.
+        * `local_attributions.csv`: reconciliation table aligning each test case ID with raw logits, calibrated probabilities, predicted label, and per-term contributions where available.
+        * `README.md`: describes how calibrated probabilities were produced from raw logits (`p = sigmoid(intercept + slope * logit)`) and the threshold used for decisions.
+    *   The CLI flag is ignored during smoke tests to keep runs lightweight.
 *   **Fixed Application at Test Time**: The stored calibrator and threshold are applied **without further fitting** when evaluating the held-out test set; these same fixed values are later reused by the reporting scripts.
 
 #### Available Options
