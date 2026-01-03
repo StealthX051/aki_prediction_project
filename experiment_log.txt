@@ -6780,3 +6780,592 @@ Running: Outcome=icu_admission | Branch=windowed | FeatureSet=preop_and_all_minu
 2025-12-01 07:45:43,838 - INFO - Results saved to /media/volume/catch22/projects/aki_prediction_project/results/models/icu_admission/windowed/preop_and_all_minus_awp
   > Training Complete.
 All experiments finished.
+Starting Experiments...
+Prep mode: force | Models: xgboost | Results dir: /home/exouser/js2-volume/projects/aki_prediction_project/results
+--- Running data preparation (steps 01–05) ---
+Total cases in VitalDB: 6388
+All department cases: 6388
+Cases after removing missing essential data: 6016
+
+Initial Cohort DataFrame Head:
+   caseid  subjectid  casestart  ...  intraop_phe  intraop_epi  intraop_ca
+0       1       5955          0  ...            0            0           0
+1       2       2487          0  ...            0            0           0
+2       3       2861          0  ...            0            0           0
+3       4       1903          0  ...            0            0           0
+4       5       4416          0  ...          900            0        2100
+
+[5 rows x 74 columns]
+Missing value percentages for preoperative variables (>0%):
+cline2                 99.069149
+aline2                 98.420878
+lmasize                98.337766
+preop_be               91.356383
+preop_sao2             91.339761
+preop_hco3             91.339761
+preop_pao2             91.256649
+preop_paco2            91.256649
+preop_ph               91.123670
+dltubesize             86.768617
+iv2                    77.892287
+cline1                 76.861702
+aline1                 46.841755
+intraop_uo             42.021277
+intraop_ebl            37.333777
+tubesize               21.725399
+cormack                12.998670
+airway                  6.399601
+intraop_crystalloid     6.183511
+preop_na                4.421543
+preop_k                 4.388298
+position                3.075133
+preop_aptt              1.579122
+preop_pt                1.363032
+iv1                     1.146941
+preop_gluc              0.631649
+preop_plt               0.548537
+preop_hb                0.349069
+preop_ast               0.249335
+preop_alt               0.216090
+preop_alb               0.116356
+preop_bun               0.099734
+dtype: float64
+Using vitaldb.find_cases() to find all cases with the '['SNUADC/PLETH', 'SNUADC/ECG_II', 'Primus/CO2', 'Primus/AWP']' waveforms...
+Total cases in VitalDB with 'SNUADC/PLETH' or substitute 'None': 6157
+Found 5802 cases with 'SNUADC/PLETH' out of 6016 cases left in your cohort.
+Waveform Availability in Cohort: 96.44%
+Total cases in VitalDB with 'SNUADC/ECG_II' or substitute '['SNUADC/ECG_V5']': 6355
+Found 5801 cases with 'SNUADC/ECG_II' out of 6016 cases left in your cohort.
+Waveform Availability in Cohort: 96.43%
+Total cases in VitalDB with 'Primus/CO2' or substitute 'None': 6362
+Found 5778 cases with 'Primus/CO2' out of 6016 cases left in your cohort.
+Waveform Availability in Cohort: 96.04%
+Total cases in VitalDB with 'Primus/AWP' or substitute 'None': 6360
+Found 5776 cases with 'Primus/AWP' out of 6016 cases left in your cohort.
+Waveform Availability in Cohort: 96.01%
+
+Your final cohort with available waveform data now has 5776 cases.
+Cases after excluding severe kidney disease: 5584
+Cohort size after ensuring sample independence: 5343
+
+Filtering cohort to include only patients with postoperative creatinine labs...
+Final study cohort size after excluding patients without post-op labs: 3462
+Loading lab data...
+Lab data loaded and filtered for creatinine.
+Calculating AKI Stages:   0%|          | 0/3462 [00:00<?, ?it/s]Calculating AKI Stages:   3%|▎         | 97/3462 [00:00<00:03, 966.12it/s]Calculating AKI Stages:   6%|▌         | 200/3462 [00:00<00:03, 999.68it/s]Calculating AKI Stages:   9%|▉         | 305/3462 [00:00<00:03, 1020.70it/s]Calculating AKI Stages:  12%|█▏        | 410/3462 [00:00<00:02, 1031.66it/s]Calculating AKI Stages:  15%|█▍        | 514/3462 [00:00<00:02, 1034.61it/s]Calculating AKI Stages:  18%|█▊        | 620/3462 [00:00<00:02, 1040.50it/s]Calculating AKI Stages:  21%|██        | 725/3462 [00:00<00:02, 1043.27it/s]Calculating AKI Stages:  24%|██▍       | 832/3462 [00:00<00:02, 1050.58it/s]Calculating AKI Stages:  27%|██▋       | 938/3462 [00:00<00:02, 1045.93it/s]Calculating AKI Stages:  30%|███       | 1043/3462 [00:01<00:02, 1045.18it/s]Calculating AKI Stages:  33%|███▎      | 1149/3462 [00:01<00:02, 1046.89it/s]Calculating AKI Stages:  36%|███▋      | 1256/3462 [00:01<00:02, 1051.45it/s]Calculating AKI Stages:  39%|███▉      | 1362/3462 [00:01<00:01, 1052.61it/s]Calculating AKI Stages:  42%|████▏     | 1468/3462 [00:01<00:01, 1049.49it/s]Calculating AKI Stages:  45%|████▌     | 1574/3462 [00:01<00:01, 1051.14it/s]Calculating AKI Stages:  49%|████▊     | 1680/3462 [00:01<00:01, 1045.92it/s]Calculating AKI Stages:  52%|█████▏    | 1787/3462 [00:01<00:01, 1052.23it/s]Calculating AKI Stages:  55%|█████▍    | 1893/3462 [00:01<00:01, 1050.64it/s]Calculating AKI Stages:  58%|█████▊    | 2000/3462 [00:01<00:01, 1054.98it/s]Calculating AKI Stages:  61%|██████    | 2108/3462 [00:02<00:01, 1060.34it/s]Calculating AKI Stages:  64%|██████▍   | 2215/3462 [00:02<00:01, 1055.83it/s]Calculating AKI Stages:  67%|██████▋   | 2321/3462 [00:02<00:01, 1056.50it/s]Calculating AKI Stages:  70%|███████   | 2427/3462 [00:02<00:00, 1056.41it/s]Calculating AKI Stages:  73%|███████▎  | 2533/3462 [00:02<00:00, 1056.84it/s]Calculating AKI Stages:  76%|███████▌  | 2639/3462 [00:02<00:00, 1051.38it/s]Calculating AKI Stages:  79%|███████▉  | 2745/3462 [00:02<00:00, 1047.75it/s]Calculating AKI Stages:  82%|████████▏ | 2850/3462 [00:02<00:00, 1048.32it/s]Calculating AKI Stages:  85%|████████▌ | 2956/3462 [00:02<00:00, 1049.49it/s]Calculating AKI Stages:  88%|████████▊ | 3062/3462 [00:02<00:00, 1050.85it/s]Calculating AKI Stages:  92%|█████████▏| 3172/3462 [00:03<00:00, 1064.00it/s]Calculating AKI Stages:  95%|█████████▍| 3283/3462 [00:03<00:00, 1075.64it/s]Calculating AKI Stages:  98%|█████████▊| 3393/3462 [00:03<00:00, 1079.95it/s]Calculating AKI Stages: 100%|██████████| 3462/3462 [00:03<00:00, 1050.94it/s]
+
+AKI Labeling Complete.
+Distribution of AKI Stages:
+aki_stage
+0    3290
+1     128
+2      23
+3      21
+Name: count, dtype: int64
+
+Distribution of AKI Binary (Stage >= 1):
+aki_label
+0    3290
+1     172
+Name: count, dtype: int64
+
+Distribution of Severe AKI (Stage >= 2):
+y_severe_aki
+0    3418
+1      44
+Name: count, dtype: Int64
+
+Your final cohort after all custom filters has 3462 cases.
+      caseid  subjectid  casestart  ...  aki_stage  aki_label  y_severe_aki
+3593    3594          1          0  ...          0          0             0
+6197    6198          3          0  ...          0          0             0
+3416    3417          4          0  ...          0          0             0
+733      734          5          0  ...          0          0             0
+1579    1580          6          0  ...          0          0             0
+
+[5 rows x 77 columns]
+
+--- Deriving Additional Outcomes ---
+Mapping 'icu_days' to 'los_icu'...
+Calculating 'los_postop' from 'dis' and 'opend'...
+In-hospital mortality (y_inhosp_mortality) counts:
+y_inhosp_mortality
+0    3435
+1      27
+Name: count, dtype: Int64
+ICU admission (y_icu_admit) counts:
+y_icu_admit
+0    2669
+1     793
+Name: count, dtype: Int64
+Prolonged LOS Threshold (75th percentile): 7.57 days
+Prolonged LOS (y_prolonged_los_postop) counts:
+y_prolonged_los_postop
+0    2596
+1     866
+Name: count, dtype: Int64
+Severe AKI (y_severe_aki) counts:
+y_severe_aki
+0    3418
+1      44
+Name: count, dtype: Int64
+
+Final cohort saved to /home/exouser/js2-volume/projects/aki_prediction_project/data/processed/aki_pleth_ecg_co2_awp.csv
+2026-01-03 23:27:56,514 - INFO - Starting catch22 feature extraction...
+2026-01-03 23:27:56,514 - INFO - Mode 'full': Output=/home/exouser/js2-volume/projects/aki_prediction_project/data/processed/aki_pleth_ecg_co2_awp_inf.csv, Error=/home/exouser/js2-volume/projects/aki_prediction_project/data/processed/aki_pleth_ecg_co2_awp_inf_errors.csv
+2026-01-03 23:27:56,514 - INFO - Mode 'windowed': Output=/home/exouser/js2-volume/projects/aki_prediction_project/data/processed/aki_pleth_ecg_co2_awp_inf_windowed.csv, Error=/home/exouser/js2-volume/projects/aki_prediction_project/data/processed/aki_pleth_ecg_co2_awp_inf_errors_windowed.csv
+2026-01-03 23:27:56,548 - INFO - Loaded 3462 cases from /home/exouser/js2-volume/projects/aki_prediction_project/data/processed/aki_pleth_ecg_co2_awp.csv
+2026-01-03 23:27:56,596 - INFO - Mode 'full': Found 13715 previously processed pairs.
+2026-01-03 23:27:56,773 - INFO - Mode 'windowed': Found 13715 previously processed pairs.
+2026-01-03 23:27:56,867 - INFO - 133 pairs to process.
+2026-01-03 23:27:56,867 - INFO - Using 30 worker processes.
+Extracting Features:   0%|          | 0/133 [00:00<?, ?it/s]Extracting Features:   1%|          | 1/133 [00:02<06:12,  2.83s/it]Extracting Features:   2%|▏         | 3/133 [00:02<01:40,  1.29it/s]Extracting Features:   4%|▍         | 5/133 [00:03<00:55,  2.31it/s]Extracting Features:   5%|▌         | 7/133 [00:03<00:34,  3.69it/s]Extracting Features:   8%|▊         | 11/133 [00:03<00:17,  6.90it/s]Extracting Features:  10%|▉         | 13/133 [00:03<00:17,  6.98it/s]Extracting Features:  11%|█▏        | 15/133 [00:03<00:14,  8.32it/s]Extracting Features:  14%|█▎        | 18/133 [00:03<00:10, 10.76it/s]Extracting Features:  16%|█▌        | 21/133 [00:04<00:08, 13.89it/s]Extracting Features:  18%|█▊        | 24/133 [00:04<00:08, 12.36it/s]Extracting Features:  20%|█▉        | 26/133 [00:04<00:09, 10.92it/s]Extracting Features:  21%|██        | 28/133 [00:04<00:09, 11.38it/s]Extracting Features:  24%|██▍       | 32/133 [00:04<00:06, 14.72it/s]Extracting Features:  26%|██▌       | 34/133 [00:05<00:08, 12.18it/s]Extracting Features:  27%|██▋       | 36/133 [00:05<00:07, 12.85it/s]Extracting Features:  30%|███       | 40/133 [00:05<00:06, 13.99it/s]Extracting Features:  34%|███▍      | 45/133 [00:05<00:04, 18.64it/s]Extracting Features:  36%|███▌      | 48/133 [00:06<00:05, 14.56it/s]Extracting Features:  38%|███▊      | 50/133 [00:06<00:06, 13.19it/s]Extracting Features:  39%|███▉      | 52/133 [00:06<00:06, 13.13it/s]Extracting Features:  41%|████      | 54/133 [00:06<00:07, 10.37it/s]Extracting Features:  42%|████▏     | 56/133 [00:06<00:07,  9.74it/s]Extracting Features:  45%|████▌     | 60/133 [00:07<00:05, 12.55it/s]Extracting Features:  47%|████▋     | 62/133 [00:07<00:05, 13.70it/s]Extracting Features:  49%|████▉     | 65/133 [00:07<00:04, 16.11it/s]Extracting Features:  50%|█████     | 67/133 [00:07<00:05, 12.65it/s]Extracting Features:  52%|█████▏    | 69/133 [00:07<00:05, 12.53it/s]Extracting Features:  53%|█████▎    | 71/133 [00:08<00:05, 11.41it/s]Extracting Features:  56%|█████▋    | 75/133 [00:08<00:03, 15.38it/s]Extracting Features:  59%|█████▊    | 78/133 [00:08<00:03, 15.07it/s]Extracting Features:  62%|██████▏   | 82/133 [00:08<00:02, 18.90it/s]Extracting Features:  64%|██████▍   | 85/133 [00:08<00:02, 20.34it/s]Extracting Features:  66%|██████▌   | 88/133 [00:08<00:03, 14.17it/s]Extracting Features:  68%|██████▊   | 91/133 [00:09<00:02, 14.67it/s]Extracting Features:  70%|██████▉   | 93/133 [00:09<00:03, 11.32it/s]Extracting Features:  73%|███████▎  | 97/133 [00:09<00:02, 15.52it/s]Extracting Features:  75%|███████▌  | 100/133 [00:09<00:02, 14.72it/s]Extracting Features:  77%|███████▋  | 102/133 [00:10<00:02, 13.03it/s]Extracting Features:  78%|███████▊  | 104/133 [00:10<00:03,  8.72it/s]Extracting Features:  80%|███████▉  | 106/133 [00:10<00:02,  9.44it/s]Extracting Features:  81%|████████  | 108/133 [00:10<00:02,  8.92it/s]Extracting Features:  83%|████████▎ | 110/133 [00:11<00:02,  8.80it/s]Extracting Features:  85%|████████▍ | 113/133 [00:11<00:01, 11.54it/s]Extracting Features:  88%|████████▊ | 117/133 [00:11<00:01, 15.34it/s]Extracting Features:  89%|████████▉ | 119/133 [00:11<00:01, 11.43it/s]Extracting Features:  92%|█████████▏| 123/133 [00:11<00:00, 15.13it/s]Extracting Features:  94%|█████████▍| 125/133 [00:12<00:00, 10.83it/s]Extracting Features:  95%|█████████▌| 127/133 [00:12<00:00,  9.11it/s]Extracting Features:  98%|█████████▊| 130/133 [00:12<00:00,  9.23it/s]Extracting Features: 100%|██████████| 133/133 [00:13<00:00, 10.28it/s]Extracting Features: 100%|██████████| 133/133 [00:13<00:00, 10.12it/s]
+2026-01-03 23:28:10,356 - INFO - [full] Saved 133 errors.
+2026-01-03 23:28:10,357 - INFO - [full] No new features to save.
+2026-01-03 23:28:10,360 - INFO - [windowed] Saved 133 errors.
+2026-01-03 23:28:10,360 - INFO - [windowed] No new features to save.
+2026-01-03 23:28:10,360 - INFO - Processing complete.
+--- Step 03: Preoperative Data Preparation ---
+Input: /home/exouser/js2-volume/projects/aki_prediction_project/data/processed/aki_pleth_ecg_co2_awp.csv
+Output: /home/exouser/js2-volume/projects/aki_prediction_project/data/processed/aki_preop_processed.csv
+Loaded cohort data. Shape: (3462, 84)
+Merging preop labs from lab_data.csv. Shape: (2641, 4)
+Performing stratified train/test split (80/20)...
+Train set: 2769, Test set: 693
+Processing categorical variables...
+Applying one-hot encoding...
+Handling outliers...
+Leaving missing values as NaN (no imputation)
+Saving processed data to /home/exouser/js2-volume/projects/aki_prediction_project/data/processed/aki_preop_processed.csv...
+Done.
+--- Step 04: Intraoperative Data Preparation ---
+
+--- Processing Full Features Waveform Data ---
+Input: /home/exouser/js2-volume/projects/aki_prediction_project/data/processed/aki_pleth_ecg_co2_awp_inf.csv
+Loaded data. Shape: (13715, 27)
+Pivoting to wide format...
+Pivot complete. Shape before flattening: (3453, 96)
+Flattening column names...
+Column names flattened. Shape: (3453, 98)
+Saving to /home/exouser/js2-volume/projects/aki_prediction_project/data/processed/aki_intraop_wide.csv...
+Done with Full Features.
+
+--- Processing Windowed Features Waveform Data ---
+Input: /home/exouser/js2-volume/projects/aki_prediction_project/data/processed/aki_pleth_ecg_co2_awp_inf_windowed.csv
+Loaded data. Shape: (13715, 99)
+Pivoting to wide format...
+Pivot complete. Shape before flattening: (3453, 384)
+Flattening column names...
+Column names flattened. Shape: (3453, 386)
+Saving to /home/exouser/js2-volume/projects/aki_prediction_project/data/processed/aki_intraop_wide_windowed.csv...
+Done with Windowed Features.
+--- Step 05: Data Merge ---
+Loading Preop Data from /home/exouser/js2-volume/projects/aki_prediction_project/data/processed/aki_preop_processed.csv...
+Preop Data Shape: (3462, 84)
+
+--- Merging Full Features Data ---
+Intraop Input: /home/exouser/js2-volume/projects/aki_prediction_project/data/processed/aki_intraop_wide.csv
+Loaded intraop data. Shape: (3453, 98)
+Merging with preoperative data...
+WARNING: Merge introduced 28758 NaN values.
+Leaving NaNs in merged output (imputation disabled).
+WARNING: 14 rows have missing 'split_group'.
+Dropping rows with missing split_group/preop data...
+Final merged shape: (3439, 180)
+Saving to /home/exouser/js2-volume/projects/aki_prediction_project/data/processed/aki_features_master_wide.csv...
+Done with Full Features.
+
+--- Merging Windowed Features Data ---
+Intraop Input: /home/exouser/js2-volume/projects/aki_prediction_project/data/processed/aki_intraop_wide_windowed.csv
+Loaded intraop data. Shape: (3453, 386)
+Merging with preoperative data...
+WARNING: Merge introduced 35742 NaN values.
+Leaving NaNs in merged output (imputation disabled).
+WARNING: 14 rows have missing 'split_group'.
+Dropping rows with missing split_group/preop data...
+Final merged shape: (3439, 468)
+Saving to /home/exouser/js2-volume/projects/aki_prediction_project/data/processed/aki_features_master_wide_windowed.csv...
+Done with Windowed Features.
+----------------------------------------------------------------
+Running: Model=xgboost | Outcome=any_aki | Branch=non_windowed | FeatureSet=preop_only
+----------------------------------------------------------------
+  > Starting HPO for model_type=xgboost...
+2026-01-03 23:28:17,156 - INFO - Starting HPO for Outcome: any_aki, Branch: non_windowed, Feature Set: preop_only, Model: xgboost
+2026-01-03 23:28:17,157 - INFO - Loading data from /home/exouser/js2-volume/projects/aki_prediction_project/data/processed/aki_features_master_wide.csv...
+2026-01-03 23:28:17,243 - INFO - Data loaded. Shape: (3439, 180)
+2026-01-03 23:28:17,249 - INFO - Using existing 'split_group' column for train/test split.
+2026-01-03 23:28:17,251 - INFO - Data prepared. Train shape: (2752, 77), Test shape: (687, 77)
+2026-01-03 23:28:17,251 - INFO - Positive samples in train: 137, Negative: 2615, Scale Pos Weight: 19.0876
+  0%|          | 0/100 [00:00<?, ?it/s]Best trial: 0. Best value: 0.290849:   0%|          | 0/100 [00:01<?, ?it/s]Best trial: 0. Best value: 0.290849:   1%|          | 1/100 [00:01<02:17,  1.39s/it]Best trial: 1. Best value: 0.298026:   1%|          | 1/100 [00:02<02:17,  1.39s/it]Best trial: 1. Best value: 0.298026:   2%|▏         | 2/100 [00:02<02:13,  1.36s/it]Best trial: 2. Best value: 0.330551:   2%|▏         | 2/100 [00:04<02:13,  1.36s/it]Best trial: 2. Best value: 0.330551:   3%|▎         | 3/100 [00:04<02:26,  1.51s/it]Best trial: 2. Best value: 0.330551:   3%|▎         | 3/100 [00:05<02:26,  1.51s/it]Best trial: 2. Best value: 0.330551:   4%|▍         | 4/100 [00:05<02:13,  1.39s/it]Best trial: 2. Best value: 0.330551:   4%|▍         | 4/100 [00:08<02:13,  1.39s/it]Best trial: 2. Best value: 0.330551:   5%|▌         | 5/100 [00:08<03:00,  1.90s/it]Best trial: 2. Best value: 0.330551:   5%|▌         | 5/100 [00:10<03:00,  1.90s/it]Best trial: 2. Best value: 0.330551:   6%|▌         | 6/100 [00:10<02:58,  1.90s/it]Best trial: 2. Best value: 0.330551:   6%|▌         | 6/100 [00:11<02:58,  1.90s/it]Best trial: 2. Best value: 0.330551:   7%|▋         | 7/100 [00:11<02:44,  1.77s/it]  > HPO FAILED for model_type=xgboost. Skipping training.
+----------------------------------------------------------------
+Running: Model=xgboost | Outcome=any_aki | Branch=non_windowed | FeatureSet=pleth_only
+----------------------------------------------------------------
+  > Starting HPO for model_type=xgboost...
+2026-01-03 23:28:30,606 - INFO - Starting HPO for Outcome: any_aki, Branch: non_windowed, Feature Set: pleth_only, Model: xgboost
+2026-01-03 23:28:30,606 - INFO - Loading data from /home/exouser/js2-volume/projects/aki_prediction_project/data/processed/aki_features_master_wide.csv...
+2026-01-03 23:28:30,701 - INFO - Data loaded. Shape: (3439, 180)
+2026-01-03 23:28:30,705 - INFO - Using existing 'split_group' column for train/test split.
+2026-01-03 23:28:30,707 - INFO - Data prepared. Train shape: (2752, 24), Test shape: (687, 24)
+2026-01-03 23:28:30,707 - INFO - Positive samples in train: 137, Negative: 2615, Scale Pos Weight: 19.0876
+  0%|          | 0/100 [00:00<?, ?it/s]  > HPO FAILED for model_type=xgboost. Skipping training.
+----------------------------------------------------------------
+Running: Model=xgboost | Outcome=any_aki | Branch=non_windowed | FeatureSet=ecg_only
+----------------------------------------------------------------
+  > Starting HPO for model_type=xgboost...
+Starting Experiments...
+Prep mode: force | Models: xgboost | Results dir: /home/exouser/js2-volume/projects/aki_prediction_project/results
+--- Running data preparation (steps 01–05) ---
+Total cases in VitalDB: 6388
+All department cases: 6388
+Cases after removing missing essential data: 6016
+
+Initial Cohort DataFrame Head:
+   caseid  subjectid  casestart  ...  intraop_phe  intraop_epi  intraop_ca
+0       1       5955          0  ...            0            0           0
+1       2       2487          0  ...            0            0           0
+2       3       2861          0  ...            0            0           0
+3       4       1903          0  ...            0            0           0
+4       5       4416          0  ...          900            0        2100
+
+[5 rows x 74 columns]
+Missing value percentages for preoperative variables (>0%):
+cline2                 99.069149
+aline2                 98.420878
+lmasize                98.337766
+preop_be               91.356383
+preop_sao2             91.339761
+preop_hco3             91.339761
+preop_pao2             91.256649
+preop_paco2            91.256649
+preop_ph               91.123670
+dltubesize             86.768617
+iv2                    77.892287
+cline1                 76.861702
+aline1                 46.841755
+intraop_uo             42.021277
+intraop_ebl            37.333777
+tubesize               21.725399
+cormack                12.998670
+airway                  6.399601
+intraop_crystalloid     6.183511
+preop_na                4.421543
+preop_k                 4.388298
+position                3.075133
+preop_aptt              1.579122
+preop_pt                1.363032
+iv1                     1.146941
+preop_gluc              0.631649
+preop_plt               0.548537
+preop_hb                0.349069
+preop_ast               0.249335
+preop_alt               0.216090
+preop_alb               0.116356
+preop_bun               0.099734
+dtype: float64
+Using vitaldb.find_cases() to find all cases with the '['SNUADC/PLETH', 'SNUADC/ECG_II', 'Primus/CO2', 'Primus/AWP']' waveforms...
+Total cases in VitalDB with 'SNUADC/PLETH' or substitute 'None': 6157
+Found 5802 cases with 'SNUADC/PLETH' out of 6016 cases left in your cohort.
+Waveform Availability in Cohort: 96.44%
+Total cases in VitalDB with 'SNUADC/ECG_II' or substitute '['SNUADC/ECG_V5']': 6355
+Found 5801 cases with 'SNUADC/ECG_II' out of 6016 cases left in your cohort.
+Waveform Availability in Cohort: 96.43%
+Total cases in VitalDB with 'Primus/CO2' or substitute 'None': 6362
+Found 5778 cases with 'Primus/CO2' out of 6016 cases left in your cohort.
+Waveform Availability in Cohort: 96.04%
+Total cases in VitalDB with 'Primus/AWP' or substitute 'None': 6360
+Found 5776 cases with 'Primus/AWP' out of 6016 cases left in your cohort.
+Waveform Availability in Cohort: 96.01%
+
+Your final cohort with available waveform data now has 5776 cases.
+Cases after excluding severe kidney disease: 5584
+Cohort size after ensuring sample independence: 5343
+
+Filtering cohort to include only patients with postoperative creatinine labs...
+Final study cohort size after excluding patients without post-op labs: 3462
+Loading lab data...
+Lab data loaded and filtered for creatinine.
+Calculating AKI Stages:   0%|          | 0/3462 [00:00<?, ?it/s]Calculating AKI Stages:   3%|▎         | 98/3462 [00:00<00:03, 975.68it/s]Calculating AKI Stages:   6%|▌         | 200/3462 [00:00<00:03, 998.02it/s]Calculating AKI Stages:   9%|▉         | 306/3462 [00:00<00:03, 1022.53it/s]Calculating AKI Stages:  12%|█▏        | 413/3462 [00:00<00:02, 1038.37it/s]Calculating AKI Stages:  15%|█▍        | 519/3462 [00:00<00:02, 1044.91it/s]Calculating AKI Stages:  18%|█▊        | 627/3462 [00:00<00:02, 1054.90it/s]Calculating AKI Stages:  21%|██        | 734/3462 [00:00<00:02, 1059.49it/s]Calculating AKI Stages:  24%|██▍       | 841/3462 [00:00<00:02, 1061.52it/s]Calculating AKI Stages:  27%|██▋       | 948/3462 [00:00<00:02, 1062.66it/s]Calculating AKI Stages:  30%|███       | 1055/3462 [00:01<00:02, 1061.19it/s]Calculating AKI Stages:  34%|███▎      | 1162/3462 [00:01<00:02, 1063.25it/s]Calculating AKI Stages:  37%|███▋      | 1271/3462 [00:01<00:02, 1068.97it/s]Calculating AKI Stages:  40%|███▉      | 1378/3462 [00:01<00:01, 1068.48it/s]Calculating AKI Stages:  43%|████▎     | 1485/3462 [00:01<00:01, 1068.05it/s]Calculating AKI Stages:  46%|████▌     | 1592/3462 [00:01<00:01, 1067.21it/s]Calculating AKI Stages:  49%|████▉     | 1700/3462 [00:01<00:01, 1068.98it/s]Calculating AKI Stages:  52%|█████▏    | 1808/3462 [00:01<00:01, 1070.77it/s]Calculating AKI Stages:  55%|█████▌    | 1916/3462 [00:01<00:01, 1073.26it/s]Calculating AKI Stages:  58%|█████▊    | 2024/3462 [00:01<00:01, 1073.50it/s]Calculating AKI Stages:  62%|██████▏   | 2132/3462 [00:02<00:01, 1072.43it/s]Calculating AKI Stages:  65%|██████▍   | 2240/3462 [00:02<00:01, 1071.00it/s]Calculating AKI Stages:  68%|██████▊   | 2348/3462 [00:02<00:01, 1069.93it/s]Calculating AKI Stages:  71%|███████   | 2456/3462 [00:02<00:00, 1071.11it/s]Calculating AKI Stages:  74%|███████▍  | 2564/3462 [00:02<00:00, 1070.20it/s]Calculating AKI Stages:  77%|███████▋  | 2672/3462 [00:02<00:00, 1067.57it/s]Calculating AKI Stages:  80%|████████  | 2780/3462 [00:02<00:00, 1069.58it/s]Calculating AKI Stages:  83%|████████▎ | 2887/3462 [00:02<00:00, 1068.97it/s]Calculating AKI Stages:  87%|████████▋ | 2995/3462 [00:02<00:00, 1069.74it/s]Calculating AKI Stages:  90%|████████▉ | 3103/3462 [00:02<00:00, 1070.35it/s]Calculating AKI Stages:  93%|█████████▎| 3211/3462 [00:03<00:00, 1069.60it/s]Calculating AKI Stages:  96%|█████████▌| 3318/3462 [00:03<00:00, 1069.68it/s]Calculating AKI Stages:  99%|█████████▉| 3425/3462 [00:03<00:00, 1069.37it/s]Calculating AKI Stages: 100%|██████████| 3462/3462 [00:03<00:00, 1062.61it/s]
+
+AKI Labeling Complete.
+Distribution of AKI Stages:
+aki_stage
+0    3290
+1     128
+2      23
+3      21
+Name: count, dtype: int64
+
+Distribution of AKI Binary (Stage >= 1):
+aki_label
+0    3290
+1     172
+Name: count, dtype: int64
+
+Distribution of Severe AKI (Stage >= 2):
+y_severe_aki
+0    3418
+1      44
+Name: count, dtype: Int64
+
+Your final cohort after all custom filters has 3462 cases.
+      caseid  subjectid  casestart  ...  aki_stage  aki_label  y_severe_aki
+3593    3594          1          0  ...          0          0             0
+6197    6198          3          0  ...          0          0             0
+3416    3417          4          0  ...          0          0             0
+733      734          5          0  ...          0          0             0
+1579    1580          6          0  ...          0          0             0
+
+[5 rows x 77 columns]
+
+--- Deriving Additional Outcomes ---
+Mapping 'icu_days' to 'los_icu'...
+Calculating 'los_postop' from 'dis' and 'opend'...
+In-hospital mortality (y_inhosp_mortality) counts:
+y_inhosp_mortality
+0    3435
+1      27
+Name: count, dtype: Int64
+ICU admission (y_icu_admit) counts:
+y_icu_admit
+0    2669
+1     793
+Name: count, dtype: Int64
+Prolonged LOS Threshold (75th percentile): 7.57 days
+Prolonged LOS (y_prolonged_los_postop) counts:
+y_prolonged_los_postop
+0    2596
+1     866
+Name: count, dtype: Int64
+Severe AKI (y_severe_aki) counts:
+y_severe_aki
+0    3418
+1      44
+Name: count, dtype: Int64
+
+Final cohort saved to /home/exouser/js2-volume/projects/aki_prediction_project/data/processed/aki_pleth_ecg_co2_awp.csv
+2026-01-03 23:29:19,868 - INFO - Starting catch22 feature extraction...
+2026-01-03 23:29:19,868 - INFO - Mode 'full': Output=/home/exouser/js2-volume/projects/aki_prediction_project/data/processed/aki_pleth_ecg_co2_awp_inf.csv, Error=/home/exouser/js2-volume/projects/aki_prediction_project/data/processed/aki_pleth_ecg_co2_awp_inf_errors.csv
+2026-01-03 23:29:19,868 - INFO - Mode 'windowed': Output=/home/exouser/js2-volume/projects/aki_prediction_project/data/processed/aki_pleth_ecg_co2_awp_inf_windowed.csv, Error=/home/exouser/js2-volume/projects/aki_prediction_project/data/processed/aki_pleth_ecg_co2_awp_inf_errors_windowed.csv
+2026-01-03 23:29:19,901 - INFO - Loaded 3462 cases from /home/exouser/js2-volume/projects/aki_prediction_project/data/processed/aki_pleth_ecg_co2_awp.csv
+2026-01-03 23:29:19,939 - INFO - Mode 'full': Found 13715 previously processed pairs.
+2026-01-03 23:29:20,092 - INFO - Mode 'windowed': Found 13715 previously processed pairs.
+2026-01-03 23:29:20,190 - INFO - 133 pairs to process.
+2026-01-03 23:29:20,190 - INFO - Using 30 worker processes.
+Extracting Features:   0%|          | 0/133 [00:00<?, ?it/s]Extracting Features:   1%|          | 1/133 [00:01<04:14,  1.93s/it]Extracting Features:   2%|▏         | 2/133 [00:02<01:53,  1.15it/s]Extracting Features:   2%|▏         | 3/133 [00:02<01:08,  1.90it/s]Extracting Features:   3%|▎         | 4/133 [00:02<00:47,  2.72it/s]Extracting Features:   5%|▍         | 6/133 [00:02<00:26,  4.87it/s]Extracting Features:   6%|▌         | 8/133 [00:02<00:17,  7.21it/s]Extracting Features:  10%|▉         | 13/133 [00:02<00:08, 14.19it/s]Extracting Features:  16%|█▌        | 21/133 [00:02<00:04, 24.66it/s]Extracting Features:  19%|█▉        | 25/133 [00:03<00:04, 22.18it/s]Extracting Features:  22%|██▏       | 29/133 [00:03<00:04, 24.45it/s]Extracting Features:  24%|██▍       | 32/133 [00:03<00:04, 24.71it/s]Extracting Features:  26%|██▋       | 35/133 [00:03<00:05, 16.91it/s]Extracting Features:  29%|██▊       | 38/133 [00:03<00:07, 13.01it/s]Extracting Features:  32%|███▏      | 42/133 [00:04<00:06, 14.48it/s]Extracting Features:  33%|███▎      | 44/133 [00:04<00:08, 10.58it/s]Extracting Features:  35%|███▌      | 47/133 [00:04<00:06, 12.46it/s]Extracting Features:  38%|███▊      | 50/133 [00:04<00:05, 14.39it/s]Extracting Features:  39%|███▉      | 52/133 [00:05<00:06, 13.15it/s]Extracting Features:  41%|████▏     | 55/133 [00:05<00:05, 15.26it/s]Extracting Features:  44%|████▎     | 58/133 [00:05<00:04, 17.56it/s]Extracting Features:  47%|████▋     | 62/133 [00:05<00:03, 20.09it/s]Extracting Features:  49%|████▉     | 65/133 [00:05<00:03, 19.69it/s]Extracting Features:  55%|█████▍    | 73/133 [00:05<00:01, 30.40it/s]Extracting Features:  58%|█████▊    | 77/133 [00:05<00:01, 31.40it/s]Extracting Features:  62%|██████▏   | 82/133 [00:05<00:01, 34.08it/s]Extracting Features:  65%|██████▍   | 86/133 [00:06<00:01, 33.22it/s]Extracting Features:  68%|██████▊   | 90/133 [00:06<00:01, 30.06it/s]Extracting Features:  71%|███████   | 94/133 [00:06<00:01, 28.44it/s]Extracting Features:  73%|███████▎  | 97/133 [00:06<00:01, 26.78it/s]Extracting Features:  75%|███████▌  | 100/133 [00:06<00:01, 22.02it/s]Extracting Features:  77%|███████▋  | 103/133 [00:06<00:01, 20.66it/s]Extracting Features:  82%|████████▏ | 109/133 [00:07<00:01, 22.41it/s]Extracting Features:  84%|████████▍ | 112/133 [00:07<00:01, 18.82it/s]Extracting Features:  86%|████████▋ | 115/133 [00:07<00:00, 19.78it/s]Extracting Features:  89%|████████▊ | 118/133 [00:07<00:00, 15.94it/s]Extracting Features:  90%|█████████ | 120/133 [00:07<00:00, 15.81it/s]Extracting Features:  92%|█████████▏| 123/133 [00:08<00:00, 16.98it/s]Extracting Features:  94%|█████████▍| 125/133 [00:08<00:00, 17.25it/s]Extracting Features:  97%|█████████▋| 129/133 [00:08<00:00, 19.36it/s]Extracting Features:  99%|█████████▉| 132/133 [00:08<00:00, 19.12it/s]Extracting Features: 100%|██████████| 133/133 [00:08<00:00, 15.46it/s]
+2026-01-03 23:29:29,141 - INFO - [full] Saved 133 errors.
+2026-01-03 23:29:29,141 - INFO - [full] No new features to save.
+2026-01-03 23:29:29,143 - INFO - [windowed] Saved 133 errors.
+2026-01-03 23:29:29,143 - INFO - [windowed] No new features to save.
+2026-01-03 23:29:29,144 - INFO - Processing complete.
+--- Step 03: Preoperative Data Preparation ---
+Input: /home/exouser/js2-volume/projects/aki_prediction_project/data/processed/aki_pleth_ecg_co2_awp.csv
+Output: /home/exouser/js2-volume/projects/aki_prediction_project/data/processed/aki_preop_processed.csv
+Loaded cohort data. Shape: (3462, 84)
+Merging preop labs from lab_data.csv. Shape: (2641, 4)
+Performing stratified train/test split (80/20)...
+Train set: 2769, Test set: 693
+Processing categorical variables...
+Applying one-hot encoding...
+Handling outliers...
+Leaving missing values as NaN (no imputation)
+Saving processed data to /home/exouser/js2-volume/projects/aki_prediction_project/data/processed/aki_preop_processed.csv...
+Done.
+--- Step 04: Intraoperative Data Preparation ---
+
+--- Processing Full Features Waveform Data ---
+Input: /home/exouser/js2-volume/projects/aki_prediction_project/data/processed/aki_pleth_ecg_co2_awp_inf.csv
+Loaded data. Shape: (13715, 27)
+Pivoting to wide format...
+Pivot complete. Shape before flattening: (3453, 96)
+Flattening column names...
+Column names flattened. Shape: (3453, 98)
+Saving to /home/exouser/js2-volume/projects/aki_prediction_project/data/processed/aki_intraop_wide.csv...
+Done with Full Features.
+
+--- Processing Windowed Features Waveform Data ---
+Input: /home/exouser/js2-volume/projects/aki_prediction_project/data/processed/aki_pleth_ecg_co2_awp_inf_windowed.csv
+Loaded data. Shape: (13715, 99)
+Pivoting to wide format...
+Pivot complete. Shape before flattening: (3453, 384)
+Flattening column names...
+Column names flattened. Shape: (3453, 386)
+Saving to /home/exouser/js2-volume/projects/aki_prediction_project/data/processed/aki_intraop_wide_windowed.csv...
+Done with Windowed Features.
+--- Step 05: Data Merge ---
+Loading Preop Data from /home/exouser/js2-volume/projects/aki_prediction_project/data/processed/aki_preop_processed.csv...
+Preop Data Shape: (3462, 84)
+
+--- Merging Full Features Data ---
+Intraop Input: /home/exouser/js2-volume/projects/aki_prediction_project/data/processed/aki_intraop_wide.csv
+Loaded intraop data. Shape: (3453, 98)
+Merging with preoperative data...
+WARNING: Merge introduced 28758 NaN values.
+Leaving NaNs in merged output (imputation disabled).
+WARNING: 14 rows have missing 'split_group'.
+Dropping rows with missing split_group/preop data...
+Final merged shape: (3439, 180)
+Saving to /home/exouser/js2-volume/projects/aki_prediction_project/data/processed/aki_features_master_wide.csv...
+Done with Full Features.
+
+--- Merging Windowed Features Data ---
+Intraop Input: /home/exouser/js2-volume/projects/aki_prediction_project/data/processed/aki_intraop_wide_windowed.csv
+Loaded intraop data. Shape: (3453, 386)
+Merging with preoperative data...
+WARNING: Merge introduced 35742 NaN values.
+Leaving NaNs in merged output (imputation disabled).
+WARNING: 14 rows have missing 'split_group'.
+Dropping rows with missing split_group/preop data...
+Final merged shape: (3439, 468)
+Saving to /home/exouser/js2-volume/projects/aki_prediction_project/data/processed/aki_features_master_wide_windowed.csv...
+Done with Windowed Features.
+----------------------------------------------------------------
+Running: Model=xgboost | Outcome=any_aki | Branch=non_windowed | FeatureSet=preop_only
+----------------------------------------------------------------
+  > Starting HPO for model_type=xgboost...
+2026-01-03 23:29:35,855 - INFO - Starting HPO for Outcome: any_aki, Branch: non_windowed, Feature Set: preop_only, Model: xgboost
+2026-01-03 23:29:35,855 - INFO - Loading data from /home/exouser/js2-volume/projects/aki_prediction_project/data/processed/aki_features_master_wide.csv...
+2026-01-03 23:29:35,939 - INFO - Data loaded. Shape: (3439, 180)
+2026-01-03 23:29:35,944 - INFO - Using existing 'split_group' column for train/test split.
+2026-01-03 23:29:35,946 - INFO - Data prepared. Train shape: (2752, 77), Test shape: (687, 77)
+2026-01-03 23:29:35,946 - INFO - Positive samples in train: 137, Negative: 2615, Scale Pos Weight: 19.0876
+  0%|          | 0/100 [00:00<?, ?it/s]Best trial: 0. Best value: 0.307359:   0%|          | 0/100 [00:01<?, ?it/s]Best trial: 0. Best value: 0.307359:   1%|          | 1/100 [00:01<02:21,  1.43s/it]Best trial: 1. Best value: 0.30786:   1%|          | 1/100 [00:03<02:21,  1.43s/it] Best trial: 1. Best value: 0.30786:   2%|▏         | 2/100 [00:03<03:19,  2.03s/it]Best trial: 2. Best value: 0.350068:   2%|▏         | 2/100 [00:06<03:19,  2.03s/it]Best trial: 2. Best value: 0.350068:   3%|▎         | 3/100 [00:06<03:42,  2.30s/it]Best trial: 3. Best value: 0.374778:   3%|▎         | 3/100 [00:08<03:42,  2.30s/it]Best trial: 3. Best value: 0.374778:   4%|▍         | 4/100 [00:08<03:24,  2.13s/it]Best trial: 3. Best value: 0.374778:   4%|▍         | 4/100 [00:11<03:24,  2.13s/it]Best trial: 3. Best value: 0.374778:   5%|▌         | 5/100 [00:11<04:11,  2.65s/it]Best trial: 3. Best value: 0.374778:   5%|▌         | 5/100 [00:13<04:11,  2.65s/it]Best trial: 3. Best value: 0.374778:   6%|▌         | 6/100 [00:13<03:30,  2.23s/it]Best trial: 3. Best value: 0.374778:   6%|▌         | 6/100 [00:15<03:30,  2.23s/it]Best trial: 3. Best value: 0.374778:   7%|▋         | 7/100 [00:15<03:33,  2.29s/it]Best trial: 3. Best value: 0.374778:   7%|▋         | 7/100 [00:17<03:33,  2.29s/it]Best trial: 3. Best value: 0.374778:   8%|▊         | 8/100 [00:17<03:03,  1.99s/it]Best trial: 8. Best value: 0.377745:   8%|▊         | 8/100 [00:22<03:03,  1.99s/it]Best trial: 8. Best value: 0.377745:   9%|▉         | 9/100 [00:22<04:31,  2.98s/it]Best trial: 8. Best value: 0.377745:   9%|▉         | 9/100 [00:23<04:31,  2.98s/it]Best trial: 8. Best value: 0.377745:  10%|█         | 10/100 [00:23<03:46,  2.52s/it]Best trial: 8. Best value: 0.377745:  10%|█         | 10/100 [00:24<03:46,  2.52s/it]Best trial: 8. Best value: 0.377745:  11%|█         | 11/100 [00:24<03:07,  2.10s/it]Best trial: 11. Best value: 0.392114:  11%|█         | 11/100 [00:27<03:07,  2.10s/it]Best trial: 11. Best value: 0.392114:  12%|█▏        | 12/100 [00:27<03:08,  2.14s/it]Best trial: 11. Best value: 0.392114:  12%|█▏        | 12/100 [00:28<03:08,  2.14s/it]Best trial: 11. Best value: 0.392114:  13%|█▎        | 13/100 [00:28<02:37,  1.81s/it]Best trial: 11. Best value: 0.392114:  13%|█▎        | 13/100 [00:30<02:37,  1.81s/it]Best trial: 11. Best value: 0.392114:  14%|█▍        | 14/100 [00:30<02:51,  1.99s/it]Best trial: 11. Best value: 0.392114:  14%|█▍        | 14/100 [00:32<02:51,  1.99s/it]Best trial: 11. Best value: 0.392114:  15%|█▌        | 15/100 [00:32<02:49,  1.99s/it]Best trial: 11. Best value: 0.392114:  15%|█▌        | 15/100 [00:35<02:49,  1.99s/it]Best trial: 11. Best value: 0.392114:  16%|█▌        | 16/100 [00:35<03:02,  2.17s/it]Best trial: 11. Best value: 0.392114:  16%|█▌        | 16/100 [00:37<03:02,  2.17s/it]Best trial: 11. Best value: 0.392114:  17%|█▋        | 17/100 [00:37<03:03,  2.21s/it]Best trial: 11. Best value: 0.392114:  17%|█▋        | 17/100 [00:39<03:03,  2.21s/it]Best trial: 11. Best value: 0.392114:  18%|█▊        | 18/100 [00:39<02:47,  2.04s/it]Best trial: 11. Best value: 0.392114:  18%|█▊        | 18/100 [00:41<02:47,  2.04s/it]Best trial: 11. Best value: 0.392114:  19%|█▉        | 19/100 [00:41<02:42,  2.01s/it]Best trial: 19. Best value: 0.396192:  19%|█▉        | 19/100 [00:44<02:42,  2.01s/it]Best trial: 19. Best value: 0.396192:  20%|██        | 20/100 [00:44<03:20,  2.50s/it]Best trial: 19. Best value: 0.396192:  20%|██        | 20/100 [00:47<03:20,  2.50s/it]Best trial: 19. Best value: 0.396192:  21%|██        | 21/100 [00:47<03:19,  2.52s/it]Best trial: 19. Best value: 0.396192:  21%|██        | 21/100 [00:50<03:19,  2.52s/it]Best trial: 19. Best value: 0.396192:  22%|██▏       | 22/100 [00:50<03:29,  2.68s/it]Best trial: 19. Best value: 0.396192:  22%|██▏       | 22/100 [00:53<03:29,  2.68s/it]Best trial: 19. Best value: 0.396192:  23%|██▎       | 23/100 [00:53<03:26,  2.68s/it]Best trial: 19. Best value: 0.396192:  23%|██▎       | 23/100 [00:55<03:26,  2.68s/it]Best trial: 19. Best value: 0.396192:  24%|██▍       | 24/100 [00:55<03:17,  2.60s/it]Best trial: 19. Best value: 0.396192:  24%|██▍       | 24/100 [00:59<03:17,  2.60s/it]Best trial: 19. Best value: 0.396192:  25%|██▌       | 25/100 [00:59<03:43,  2.98s/it]Best trial: 19. Best value: 0.396192:  25%|██▌       | 25/100 [01:02<03:43,  2.98s/it]Best trial: 19. Best value: 0.396192:  26%|██▌       | 26/100 [01:02<03:36,  2.92s/it]Best trial: 19. Best value: 0.396192:  26%|██▌       | 26/100 [01:05<03:36,  2.92s/it]Best trial: 19. Best value: 0.396192:  27%|██▋       | 27/100 [01:05<03:44,  3.07s/it]Best trial: 19. Best value: 0.396192:  27%|██▋       | 27/100 [01:08<03:44,  3.07s/it]Best trial: 19. Best value: 0.396192:  28%|██▊       | 28/100 [01:08<03:30,  2.93s/it]Best trial: 19. Best value: 0.396192:  28%|██▊       | 28/100 [01:10<03:30,  2.93s/it]Best trial: 19. Best value: 0.396192:  29%|██▉       | 29/100 [01:10<03:11,  2.69s/it]Starting Experiments...
+Prep mode: force | Models: xgboost | Results dir: /home/exouser/js2-volume/projects/aki_prediction_project/results
+--- Running data preparation (steps 01–05) ---
+Forcing rebuild: removing existing processed directory at /home/exouser/js2-volume/projects/aki_prediction_project/data/processed
+Total cases in VitalDB: 6388
+All department cases: 6388
+Cases after removing missing essential data: 6016
+
+Initial Cohort DataFrame Head:
+   caseid  subjectid  casestart  ...  intraop_phe  intraop_epi  intraop_ca
+0       1       5955          0  ...            0            0           0
+1       2       2487          0  ...            0            0           0
+2       3       2861          0  ...            0            0           0
+3       4       1903          0  ...            0            0           0
+4       5       4416          0  ...          900            0        2100
+
+[5 rows x 74 columns]
+Missing value percentages for preoperative variables (>0%):
+cline2                 99.069149
+aline2                 98.420878
+lmasize                98.337766
+preop_be               91.356383
+preop_sao2             91.339761
+preop_hco3             91.339761
+preop_pao2             91.256649
+preop_paco2            91.256649
+preop_ph               91.123670
+dltubesize             86.768617
+iv2                    77.892287
+cline1                 76.861702
+aline1                 46.841755
+intraop_uo             42.021277
+intraop_ebl            37.333777
+tubesize               21.725399
+cormack                12.998670
+airway                  6.399601
+intraop_crystalloid     6.183511
+preop_na                4.421543
+preop_k                 4.388298
+position                3.075133
+preop_aptt              1.579122
+preop_pt                1.363032
+iv1                     1.146941
+preop_gluc              0.631649
+preop_plt               0.548537
+preop_hb                0.349069
+preop_ast               0.249335
+preop_alt               0.216090
+preop_alb               0.116356
+preop_bun               0.099734
+dtype: float64
+Using vitaldb.find_cases() to find all cases with the '['SNUADC/PLETH', 'SNUADC/ECG_II', 'Primus/CO2', 'Primus/AWP']' waveforms...
+Total cases in VitalDB with 'SNUADC/PLETH' or substitute 'None': 6157
+Found 5802 cases with 'SNUADC/PLETH' out of 6016 cases left in your cohort.
+Waveform Availability in Cohort: 96.44%
+Total cases in VitalDB with 'SNUADC/ECG_II' or substitute '['SNUADC/ECG_V5']': 6355
+Found 5801 cases with 'SNUADC/ECG_II' out of 6016 cases left in your cohort.
+Waveform Availability in Cohort: 96.43%
+Total cases in VitalDB with 'Primus/CO2' or substitute 'None': 6362
+Found 5778 cases with 'Primus/CO2' out of 6016 cases left in your cohort.
+Waveform Availability in Cohort: 96.04%
+Total cases in VitalDB with 'Primus/AWP' or substitute 'None': 6360
+Found 5776 cases with 'Primus/AWP' out of 6016 cases left in your cohort.
+Waveform Availability in Cohort: 96.01%
+
+Your final cohort with available waveform data now has 5776 cases.
+Cases after excluding severe kidney disease: 5584
+Cohort size after ensuring sample independence: 5343
+
+Filtering cohort to include only patients with postoperative creatinine labs...
+Final study cohort size after excluding patients without post-op labs: 3462
+Loading lab data...
+Lab data loaded and filtered for creatinine.
+Calculating AKI Stages:   0%|          | 0/3462 [00:00<?, ?it/s]Calculating AKI Stages:   3%|▎         | 96/3462 [00:00<00:03, 956.54it/s]Calculating AKI Stages:   6%|▌         | 199/3462 [00:00<00:03, 996.97it/s]Calculating AKI Stages:   9%|▉         | 305/3462 [00:00<00:03, 1022.24it/s]Calculating AKI Stages:  12%|█▏        | 412/3462 [00:00<00:02, 1039.66it/s]Calculating AKI Stages:  15%|█▍        | 518/3462 [00:00<00:02, 1046.05it/s]Calculating AKI Stages:  18%|█▊        | 623/3462 [00:00<00:02, 1047.36it/s]Calculating AKI Stages:  21%|██        | 730/3462 [00:00<00:02, 1052.85it/s]Calculating AKI Stages:  24%|██▍       | 836/3462 [00:00<00:02, 1054.49it/s]Calculating AKI Stages:  27%|██▋       | 943/3462 [00:00<00:02, 1058.52it/s]Calculating AKI Stages:  30%|███       | 1050/3462 [00:01<00:02, 1059.91it/s]Calculating AKI Stages:  33%|███▎      | 1156/3462 [00:01<00:02, 1055.44it/s]Calculating AKI Stages:  37%|███▋      | 1264/3462 [00:01<00:02, 1062.24it/s]Calculating AKI Stages:  40%|███▉      | 1372/3462 [00:01<00:01, 1065.88it/s]Calculating AKI Stages:  43%|████▎     | 1479/3462 [00:01<00:01, 1065.02it/s]Calculating AKI Stages:  46%|████▌     | 1586/3462 [00:01<00:01, 1064.41it/s]Calculating AKI Stages:  49%|████▉     | 1693/3462 [00:01<00:01, 1061.54it/s]Calculating AKI Stages:  52%|█████▏    | 1800/3462 [00:01<00:01, 1062.65it/s]Calculating AKI Stages:  55%|█████▌    | 1907/3462 [00:01<00:01, 1064.74it/s]Calculating AKI Stages:  58%|█████▊    | 2015/3462 [00:01<00:01, 1067.35it/s]Calculating AKI Stages:  61%|██████▏   | 2122/3462 [00:02<00:01, 1063.90it/s]Calculating AKI Stages:  64%|██████▍   | 2229/3462 [00:02<00:01, 1063.53it/s]Calculating AKI Stages:  67%|██████▋   | 2336/3462 [00:02<00:01, 1064.47it/s]Calculating AKI Stages:  71%|███████   | 2445/3462 [00:02<00:00, 1069.39it/s]Calculating AKI Stages:  74%|███████▍  | 2554/3462 [00:02<00:00, 1074.17it/s]Calculating AKI Stages:  77%|███████▋  | 2662/3462 [00:02<00:00, 1072.52it/s]Calculating AKI Stages:  80%|████████  | 2770/3462 [00:02<00:00, 1073.01it/s]Calculating AKI Stages:  83%|████████▎ | 2878/3462 [00:02<00:00, 1070.33it/s]Calculating AKI Stages:  86%|████████▋ | 2986/3462 [00:02<00:00, 1071.65it/s]Calculating AKI Stages:  89%|████████▉ | 3094/3462 [00:02<00:00, 1070.81it/s]Calculating AKI Stages:  93%|█████████▎| 3203/3462 [00:03<00:00, 1075.40it/s]Calculating AKI Stages:  96%|█████████▌| 3311/3462 [00:03<00:00, 1075.85it/s]Calculating AKI Stages:  99%|█████████▉| 3420/3462 [00:03<00:00, 1077.01it/s]Calculating AKI Stages: 100%|██████████| 3462/3462 [00:03<00:00, 1061.16it/s]
+
+AKI Labeling Complete.
+Distribution of AKI Stages:
+aki_stage
+0    3290
+1     128
+2      23
+3      21
+Name: count, dtype: int64
+
+Distribution of AKI Binary (Stage >= 1):
+aki_label
+0    3290
+1     172
+Name: count, dtype: int64
+
+Distribution of Severe AKI (Stage >= 2):
+y_severe_aki
+0    3418
+1      44
+Name: count, dtype: Int64
+
+Your final cohort after all custom filters has 3462 cases.
+      caseid  subjectid  casestart  ...  aki_stage  aki_label  y_severe_aki
+3593    3594          1          0  ...          0          0             0
+6197    6198          3          0  ...          0          0             0
+3416    3417          4          0  ...          0          0             0
+733      734          5          0  ...          0          0             0
+1579    1580          6          0  ...          0          0             0
+
+[5 rows x 77 columns]
+
+--- Deriving Additional Outcomes ---
+Mapping 'icu_days' to 'los_icu'...
+Calculating 'los_postop' from 'dis' and 'opend'...
+In-hospital mortality (y_inhosp_mortality) counts:
+y_inhosp_mortality
+0    3435
+1      27
+Name: count, dtype: Int64
+ICU admission (y_icu_admit) counts:
+y_icu_admit
+0    2669
+1     793
+Name: count, dtype: Int64
+Prolonged LOS Threshold (75th percentile): 7.57 days
+Prolonged LOS (y_prolonged_los_postop) counts:
+y_prolonged_los_postop
+0    2596
+1     866
+Name: count, dtype: Int64
+Severe AKI (y_severe_aki) counts:
+y_severe_aki
+0    3418
+1      44
+Name: count, dtype: Int64
+
+Final cohort saved to /home/exouser/js2-volume/projects/aki_prediction_project/data/processed/aki_pleth_ecg_co2_awp.csv
+2026-01-03 23:31:04,076 - INFO - Starting catch22 feature extraction...
+2026-01-03 23:31:04,076 - INFO - Mode 'full': Output=/home/exouser/js2-volume/projects/aki_prediction_project/data/processed/aki_pleth_ecg_co2_awp_inf.csv, Error=/home/exouser/js2-volume/projects/aki_prediction_project/data/processed/aki_pleth_ecg_co2_awp_inf_errors.csv
+2026-01-03 23:31:04,076 - INFO - Mode 'windowed': Output=/home/exouser/js2-volume/projects/aki_prediction_project/data/processed/aki_pleth_ecg_co2_awp_inf_windowed.csv, Error=/home/exouser/js2-volume/projects/aki_prediction_project/data/processed/aki_pleth_ecg_co2_awp_inf_errors_windowed.csv
+2026-01-03 23:31:04,110 - INFO - Loaded 3462 cases from /home/exouser/js2-volume/projects/aki_prediction_project/data/processed/aki_pleth_ecg_co2_awp.csv
+2026-01-03 23:31:04,110 - INFO - Mode 'full': Found 0 previously processed pairs.
+2026-01-03 23:31:04,110 - INFO - Mode 'windowed': Found 0 previously processed pairs.
+2026-01-03 23:31:04,152 - INFO - 13848 pairs to process.
+2026-01-03 23:31:04,152 - INFO - Using 30 worker processes.
+Extracting Features:   0%|          | 0/13848 [00:00<?, ?it/s]Extracting Features:   0%|          | 1/13848 [00:07<28:46:37,  7.48s/it]Extracting Features:   0%|          | 3/13848 [00:08<8:30:44,  2.21s/it] Extracting Features:   0%|          | 5/13848 [00:09<5:14:54,  1.36s/it]Extracting Features:   0%|          | 6/13848 [00:09<4:08:33,  1.08s/it]Extracting Features:   0%|          | 7/13848 [00:09<3:16:17,  1.18it/s]Extracting Features:   0%|          | 8/13848 [00:10<2:32:22,  1.51it/s]Extracting Features:   0%|          | 9/13848 [00:10<2:19:36,  1.65it/s]Extracting Features:   0%|          | 10/13848 [00:11<2:14:43,  1.71it/s]

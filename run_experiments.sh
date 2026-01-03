@@ -50,6 +50,10 @@ while [[ $# -gt 0 ]]; do
             IFS=',' read -r -a MODEL_TYPES <<< "$2"
             shift 2
             ;;
+        --model-types=*)
+            IFS=',' read -r -a MODEL_TYPES <<< "${1#*=}"
+            shift
+            ;;
         --only-xgboost)
             MODEL_TYPES=("xgboost")
             shift
@@ -61,6 +65,10 @@ while [[ $# -gt 0 ]]; do
         --prep)
             PREP_MODE="$2"
             shift 2
+            ;;
+        --prep=*)
+            PREP_MODE="${1#*=}"
+            shift
             ;;
         --smoke)
             SMOKE_TEST_FLAG="--smoke_test"
@@ -122,6 +130,11 @@ ensure_data_prepared() {
 
     echo "--- Running data preparation (steps 01–05) ---" | tee -a "$LOG_FILE"
     mkdir -p "$PROCESSED_DIR"
+    if [[ "$PREP_MODE" == "force" ]]; then
+        echo "Forcing rebuild: removing existing processed directory at ${PROCESSED_DIR}" | tee -a "$LOG_FILE"
+        rm -rf "$PROCESSED_DIR"
+        mkdir -p "$PROCESSED_DIR"
+    fi
     export GENERATE_WINDOWED_FEATURES="True"
 
     "$PYTHON_BIN" -m data_preparation.step_01_cohort_construction 2>&1 | tee -a "$LOG_FILE" || { echo "Step 01 failed"; exit 1; }
