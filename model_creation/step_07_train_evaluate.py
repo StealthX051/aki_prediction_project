@@ -22,6 +22,7 @@ from model_creation.postprocessing import (
     fit_logistic_recalibration,
     find_youden_j_threshold,
     generate_stratified_oof_predictions,
+    LogisticRecalibrationModel,
     write_json,
 )
 from model_creation.prediction_io import write_prediction_files
@@ -80,6 +81,11 @@ def _json_safe(data):
     return json.loads(json.dumps(data, default=_json_default))
 
 
+def _safe_logit(probabilities: np.ndarray, eps: float = 1e-15) -> np.ndarray:
+    clipped = np.clip(probabilities, eps, 1 - eps)
+    return np.log(clipped / (1 - clipped))
+
+
 def _plot_term_importances(
     term_names: Sequence[str],
     term_importances: Sequence[float],
@@ -136,11 +142,18 @@ def _plot_local_contributions(local_payload: Dict, destination: Path, max_featur
 
 def export_ebm_explanations(
     model,
-    X_train: pd.DataFrame,
-    y_train: pd.Series,
     artifacts_dir: Path,
     random_state: int,
     local_sample_size: int,
+    *,
+    X_local: pd.DataFrame,
+    y_local: pd.Series,
+    caseids: pd.Series,
+    raw_probabilities: np.ndarray,
+    raw_logits: np.ndarray,
+    calibrated_probabilities: np.ndarray,
+    threshold: float,
+    calibration_model: LogisticRecalibrationModel,
 ) -> None:
     try:
         from interpret.glassbox._ebm._explain import EBMExplanation
@@ -187,19 +200,79 @@ def export_ebm_explanations(
         title="EBM Interaction Importances",
     )
 
-    if local_sample_size <= 0:
-        logger.info("Skipping local explanations due to non-positive sample size: %s", local_sample_size)
-        return
+    if local_sample_size and local_sample_size != len(X_local):
+        logger.info(
+            "Ignoring local_sample_size=%s; exporting explanations for all %s test rows to match predictions.",
+            local_sample_size,
+            len(X_local),
+        )
 
-    local_n = min(local_sample_size, len(X_train))
-    local_sample = X_train.sample(n=local_n, random_state=random_state)
-    local_labels = y_train.loc[local_sample.index]
-
-    logger.info("Generating EBM local explanations for %s samples...", local_n)
-    local_explanation: EBMExplanation = model.explain_local(local_sample, local_labels)
+    logger.info("Generating EBM local explanations for %s test samples...", len(X_local))
+    local_explanation: EBMExplanation = model.explain_local(X_local, y_local)
     local_payload = _json_safe(local_explanation.data())
+    local_payload.update(
+        {
+            "caseid": _json_safe(caseids.tolist()),
+            "raw_logit": _json_safe(raw_logits.tolist()),
+            "raw_probability": _json_safe(raw_probabilities.tolist()),
+            "calibrated_probability": _json_safe(calibrated_probabilities.tolist()),
+            "threshold": float(threshold),
+            "predicted_label": _json_safe(
+                (calibrated_probabilities >= threshold).astype(int).tolist()
+            ),
+            "calibration_params": _json_safe(
+                {
+                    "intercept": calibration_model.intercept,
+                    "slope": calibration_model.slope,
+                    "eps": calibration_model.eps,
+                }
+            ),
+        }
+    )
+
+    names: Sequence[str] = local_payload.get("names") or []
+    scores: Sequence[Sequence[float]] = local_payload.get("scores") or []
+    contributions: List[Dict[str, float]] = []
+    if names and scores and len(scores) == len(caseids):
+        for row in scores:
+            contributions.append({name: float(value) for name, value in zip(names, row)})
+
+    reconciled = pd.DataFrame(
+        {
+            "caseid": list(caseids),
+            "raw_logit": list(raw_logits),
+            "raw_probability": list(raw_probabilities),
+            "calibrated_probability": list(calibrated_probabilities),
+            "threshold": threshold,
+            "predicted_label": (calibrated_probabilities >= threshold).astype(int),
+        }
+    )
+
+    if contributions:
+        reconciled = pd.concat([reconciled.reset_index(drop=True), pd.DataFrame(contributions)], axis=1)
+
     write_json(xai_dir / "local_explanations.json", local_payload)
+    reconciled.to_csv(xai_dir / "local_attributions.csv", index=False)
     _plot_local_contributions(local_payload, xai_dir / "local_contributions.png")
+
+    readme = xai_dir / "README.md"
+    readme.write_text(
+        "\n".join(
+            [
+                "# EBM XAI artifacts",
+                "",
+                "Local explanations in this directory are aligned with the test predictions.",
+                "Raw logits come from the model's decision_function and are mapped to probabilities",
+                "with the sigmoid link (p = 1 / (1 + exp(-logit))).",
+                "Calibrated probabilities use logistic recalibration fitted on out-of-fold predictions:",
+                f"p_calibrated = sigmoid({calibration_model.intercept:.6f} + {calibration_model.slope:.6f} * logit_raw)",
+                f"(probabilities are clipped to [{calibration_model.eps}, 1 - {calibration_model.eps}]).",
+                "Decisions in local_attributions.csv compare calibrated probabilities to the saved threshold",
+                f"(threshold = {threshold:.6f}).",
+            ]
+        ),
+        encoding="utf-8",
+    )
 
 
 def train_evaluate(
@@ -209,7 +282,7 @@ def train_evaluate(
     smoke_test=False,
     model_type="xgboost",
     legacy_imputation=False,
-    export_ebm_explanations: bool = False,
+    export_ebm_explanations_flag: bool = False,
     local_sample_size: int = 100,
 ):
     logger.info(
@@ -349,6 +422,13 @@ def train_evaluate(
     logger.info("Generating predictions on test set...")
     test_pred_proba = final_model.predict_proba(X_test)[:, 1]
     test_pred_calibrated = apply_logistic_recalibration(test_pred_proba, recalibration_model)
+    if hasattr(final_model, "decision_function"):
+        try:
+            test_pred_logit = final_model.decision_function(X_test)
+        except Exception:
+            test_pred_logit = _safe_logit(test_pred_proba)
+    else:
+        test_pred_logit = _safe_logit(test_pred_proba)
 
     output_dir = utils.RESULTS_DIR / 'models' / model_type / outcome / branch / feature_set
     predictions_dir = output_dir / 'predictions'
@@ -442,14 +522,20 @@ def train_evaluate(
     elif model_type != "xgboost":
         logger.info("Skipping SHAP generation for model type %s", model_type)
 
-    if not smoke_test and model_type == "ebm" and export_ebm_explanations:
+    if not smoke_test and model_type == "ebm" and export_ebm_explanations_flag:
         export_ebm_explanations(
             final_model,
-            X_train,
-            y_train,
             artifacts_dir,
             random_state,
             local_sample_size,
+            X_local=X_test,
+            y_local=y_test,
+            caseids=df.loc[X_test.index, "caseid"],
+            raw_probabilities=test_pred_proba,
+            raw_logits=test_pred_logit,
+            calibrated_probabilities=test_pred_calibrated,
+            threshold=threshold,
+            calibration_model=recalibration_model,
         )
     elif model_type == "ebm":
         logger.info("Skipping EBM explanation export (disabled or smoke test)")
