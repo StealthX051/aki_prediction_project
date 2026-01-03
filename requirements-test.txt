@@ -1,0 +1,8 @@
+# Minimal dependencies to run the test suite without the full Conda environment.
+numpy>=1.23,<2.0
+pandas>=1.5
+scipy>=1.10
+scikit-learn>=1.2
+matplotlib==3.8.4
+optuna>=3.0
+xgboost>=1.7

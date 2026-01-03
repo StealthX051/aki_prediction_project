@@ -21,6 +21,17 @@ conda env create -f environment.yml
 conda activate aki_prediction_project
 ```
 
+If you just want to run the Python test suite without provisioning the full
+Conda environment, install the lightweight test dependencies via pip:
+
+```bash
+pip install -r requirements-test.txt
+```
+
+Static Plotly exports rely on the bundled `kaleido` dependency. The environment
+also pins `matplotlib` to a Plotly-compatible version to keep visualization
+outputs reproducible across CLI runs.
+
 ### 2. VitalDB Access
 Ensure you have access to the VitalDB API. The `vitaldb` Python package is used to download waveforms on-demand.
 

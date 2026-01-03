@@ -32,10 +32,11 @@ dependencies:
       - pandas
       - numpy
       - scipy
-      - matplotlib
+      - matplotlib==3.8.4
       - scikit-learn
       - python-docx
       - xgboost
+      - kaleido
       - interpret
       - pycatch22
       - optuna
