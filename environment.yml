@@ -34,6 +34,7 @@ dependencies:
       - scipy
       - matplotlib
       - scikit-learn
+      - python-docx
       - xgboost
       - interpret
       - pycatch22
