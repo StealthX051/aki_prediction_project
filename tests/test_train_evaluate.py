@@ -45,14 +45,46 @@ class DummyModel:
 
 
 class DummyEbm(DummyModel):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.term_names_ = ["feature1", "feature2"]
+        self.term_importances_ = [0.6, 0.4]
+        self.term_features_ = [[0], [1]]
+
+    def decision_function(self, X):
+        return np.full(len(X), 0.5)
+
+    def predict_proba(self, X):
+        logits = self.decision_function(X)
+        probs = 1 / (1 + np.exp(-logits))
+        return np.column_stack([1 - probs, probs])
+
+    def explain_global(self, name=None):
+        return DummyExplanation({"names": self.term_names_, "scores": self.term_importances_})
+
+    def explain_local(self, X, y):
+        scores = [[0.2, 0.3] for _ in range(len(X))]
+        return DummyExplanation({"names": self.term_names_, "scores": scores})
+
     def save(self, path):
         Path(path).write_text("dummy")
 
 
+class DummyExplanation:
+    def __init__(self, payload):
+        self._payload = payload
+
+    def data(self):
+        return self._payload
+
+
 def _install_dummy_interpret(monkeypatch: pytest.MonkeyPatch) -> None:
-    glassbox = types.SimpleNamespace(ExplainableBoostingClassifier=DummyEbm)
+    dummy_explain = types.SimpleNamespace(EBMExplanation=DummyExplanation)
+    glassbox = types.SimpleNamespace(ExplainableBoostingClassifier=DummyEbm, _ebm=types.SimpleNamespace(_explain=dummy_explain))
     monkeypatch.setitem(sys.modules, "interpret", types.SimpleNamespace(glassbox=glassbox))
     monkeypatch.setitem(sys.modules, "interpret.glassbox", glassbox)
+    monkeypatch.setitem(sys.modules, "interpret.glassbox._ebm", glassbox._ebm)
+    monkeypatch.setitem(sys.modules, "interpret.glassbox._ebm._explain", dummy_explain)
 
 
 def _mock_dataframe() -> pd.DataFrame:
@@ -97,7 +129,11 @@ def test_train_evaluate_creates_artifacts(monkeypatch: pytest.MonkeyPatch, tmp_p
         return _prepare_data_stub(df_arg, preserve_nan)
 
     monkeypatch.setattr(train_module.utils, "prepare_data", _prepare)
-    monkeypatch.setattr(train_module, "generate_stratified_oof_predictions", lambda *args, **kwargs: _fake_generate_oof_predictions(args[1], args[2]))
+    monkeypatch.setattr(
+        train_module,
+        "generate_stratified_oof_predictions",
+        lambda *args, **kwargs: _fake_generate_oof_predictions(args[1], args[2]),
+    )
 
     monkeypatch.setattr(train_module.xgb, "XGBClassifier", DummyModel)
 
@@ -127,6 +163,61 @@ def test_train_evaluate_creates_artifacts(monkeypatch: pytest.MonkeyPatch, tmp_p
     assert (artifacts_dir / "calibration.json").is_file()
     assert (artifacts_dir / "threshold.json").is_file()
     assert (output_dir / model_filename).is_file()
+
+    shutil.rmtree(results_dir, ignore_errors=True)
+
+
+def test_export_ebm_local_attributions(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    results_dir = tmp_path / "results"
+    monkeypatch.setattr(train_module.utils, "RESULTS_DIR", results_dir)
+    monkeypatch.setattr(utils, "RESULTS_DIR", results_dir)
+    monkeypatch.setattr(train_module, "compute_file_hash", lambda path: "dummy-hash")
+
+    df = _mock_dataframe()
+    monkeypatch.setattr(train_module.utils, "load_data", lambda branch: df)
+    monkeypatch.setattr(train_module.utils, "prepare_data", lambda *args, **kwargs: _prepare_data_stub(df))
+    monkeypatch.setattr(
+        train_module,
+        "generate_stratified_oof_predictions",
+        lambda *args, **kwargs: _fake_generate_oof_predictions(args[1], args[2]),
+    )
+    _install_dummy_interpret(monkeypatch)
+
+    params_dir = results_dir / "params" / "ebm" / "any_aki" / "non_windowed"
+    params_dir.mkdir(parents=True)
+    params_path = params_dir / "preop_only.json"
+    params_path.write_text(json.dumps({"random_state": 0, "n_estimators": 5}))
+
+    train_module.train_evaluate(
+        outcome="any_aki",
+        branch="non_windowed",
+        feature_set="preop_only",
+        smoke_test=False,
+        model_type="ebm",
+        legacy_imputation=False,
+        export_ebm_explanations_flag=True,
+    )
+
+    xai_dir = (
+        results_dir
+        / "models"
+        / "ebm"
+        / "any_aki"
+        / "non_windowed"
+        / "preop_only"
+        / "artifacts"
+        / "ebm_xai"
+    )
+
+    attribution_path = xai_dir / "local_attributions.csv"
+    readme_path = xai_dir / "README.md"
+
+    assert attribution_path.is_file()
+    recon_df = pd.read_csv(attribution_path)
+    for required in ["caseid", "raw_logit", "calibrated_probability", "predicted_label"]:
+        assert required in recon_df.columns
+    assert not recon_df.empty
+    assert readme_path.is_file()
 
     shutil.rmtree(results_dir, ignore_errors=True)
 
