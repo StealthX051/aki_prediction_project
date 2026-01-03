@@ -1,3 +1,4 @@
+import os
 import pandas as pd
 import numpy as np
 from pathlib import Path
@@ -11,8 +12,8 @@ logger = logging.getLogger(__name__)
 
 # Constants
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-DATA_DIR = PROJECT_ROOT / 'data' / 'processed'
-RESULTS_DIR = PROJECT_ROOT / 'results'
+DATA_DIR = Path(os.getenv("PROCESSED_DIR", PROJECT_ROOT / 'data' / 'processed'))
+RESULTS_DIR = Path(os.getenv("RESULTS_DIR", PROJECT_ROOT / 'results'))
 
 # Input Files
 FULL_FEATURES_FILE = DATA_DIR / 'aki_features_master_wide.csv'

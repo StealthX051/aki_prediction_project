@@ -1,22 +1,24 @@
+import os
 from pathlib import Path
 
 # --- Project Paths ---
 # Resolve project root relative to this file (data_preparation/inputs.py)
 # This file is in <root>/data_preparation, so we go up two levels.
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-DATA_DIR = PROJECT_ROOT / 'data'
-RAW_DIR = DATA_DIR / 'raw'
-PROCESSED_DIR = DATA_DIR / 'processed'
+
+DATA_DIR = Path(os.getenv("DATA_DIR", PROJECT_ROOT / 'data'))
+RAW_DIR = Path(os.getenv("RAW_DIR", DATA_DIR / 'raw'))
+PROCESSED_DIR = Path(os.getenv("PROCESSED_DIR", DATA_DIR / 'processed'))
 
 # --- User Parameters ---
-INPUT_FILE = RAW_DIR / 'clinical_data.csv'
-LAB_DATA_FILE = RAW_DIR / 'lab_data.csv'
+INPUT_FILE = Path(os.getenv("INPUT_FILE", RAW_DIR / 'clinical_data.csv'))
+LAB_DATA_FILE = Path(os.getenv("LAB_DATA_FILE", RAW_DIR / 'lab_data.csv'))
 # {outcome}_{waveform1}_...{waveformN}_{dept1}---{dept_N}.csv
-COHORT_FILE = PROCESSED_DIR / 'aki_pleth_ecg_co2_awp.csv'
+COHORT_FILE = Path(os.getenv("COHORT_FILE", PROCESSED_DIR / 'aki_pleth_ecg_co2_awp.csv'))
 # {outcome}_{waveform1}_...{waveformN}_{dept1}---{dept_N}_{window_length}.csv
-CATCH_22_FILE = PROCESSED_DIR / 'aki_pleth_ecg_co2_awp_inf.csv'
+CATCH_22_FILE = Path(os.getenv("CATCH_22_FILE", PROCESSED_DIR / 'aki_pleth_ecg_co2_awp_inf.csv'))
 # {outcome}_{waveform1}_...{waveformN}_{dept1}---{dept_N}_{window_length}_errors.csv
-CATCH_22_ERROR_FILE = PROCESSED_DIR / 'aki_pleth_ecg_co2_awp_inf_errors.csv'
+CATCH_22_ERROR_FILE = Path(os.getenv("CATCH_22_ERROR_FILE", PROCESSED_DIR / 'aki_pleth_ecg_co2_awp_inf_errors.csv'))
 # List of departments you want to include (lowercase), or None to include all
 # list should look like: ['general surgery', 'thoracic surgery']
 DEPARTMENTS = None 
@@ -48,8 +50,6 @@ FULL_FEATURE_TARGET_SR = 10
 # name of column for outcome variable
 OUTCOME = 'aki_label'
 
-import os
-
 # === NEW: AEON export controls ===
 EXPORT_AEON = False
 AEON_OUT_DIR = os.getenv("AEON_OUT_DIR", "outputs/aeon")
@@ -70,15 +70,15 @@ AEON_FIXED_LENGTH = 57600  # Target length (16 hours @ 1 Hz)
 IMPUTE_MISSING = False
 
 # --- Step 03 Output Paths ---
-PREOP_PROCESSED_FILE = PROCESSED_DIR / 'aki_preop_processed.csv'
-CATCH_22_WINDOWED_FILE = PROCESSED_DIR / 'aki_pleth_ecg_co2_awp_inf_windowed.csv'
+PREOP_PROCESSED_FILE = Path(os.getenv("PREOP_PROCESSED_FILE", PROCESSED_DIR / 'aki_preop_processed.csv'))
+CATCH_22_WINDOWED_FILE = Path(os.getenv("CATCH_22_WINDOWED_FILE", PROCESSED_DIR / 'aki_pleth_ecg_co2_awp_inf_windowed.csv'))
 
 # --- Step 04 Output Paths ---
-INTRAOP_WIDE_FILE = PROCESSED_DIR / 'aki_intraop_wide.csv'
-INTRAOP_WIDE_WINDOWED_FILE = PROCESSED_DIR / 'aki_intraop_wide_windowed.csv'
+INTRAOP_WIDE_FILE = Path(os.getenv("INTRAOP_WIDE_FILE", PROCESSED_DIR / 'aki_intraop_wide.csv'))
+INTRAOP_WIDE_WINDOWED_FILE = Path(os.getenv("INTRAOP_WIDE_WINDOWED_FILE", PROCESSED_DIR / 'aki_intraop_wide_windowed.csv'))
 
 # --- Step 05 Output Paths ---
-WIDE_FEATURES_FILE = PROCESSED_DIR / 'aki_features_master_wide.csv'
-WIDE_FEATURES_WINDOWED_FILE = PROCESSED_DIR / 'aki_features_master_wide_windowed.csv'
+WIDE_FEATURES_FILE = Path(os.getenv("WIDE_FEATURES_FILE", PROCESSED_DIR / 'aki_features_master_wide.csv'))
+WIDE_FEATURES_WINDOWED_FILE = Path(os.getenv("WIDE_FEATURES_WINDOWED_FILE", PROCESSED_DIR / 'aki_features_master_wide_windowed.csv'))
 
-RESULTS_DIR = PROJECT_ROOT / 'results'
+RESULTS_DIR = Path(os.getenv("RESULTS_DIR", PROJECT_ROOT / 'results'))

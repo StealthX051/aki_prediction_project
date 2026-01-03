@@ -156,6 +156,22 @@ python model_creation/step_07_train_evaluate.py --outcome any_aki --branch windo
 *   **Default Grid (`run_experiments.sh`)**: Primary runs cover preop-only, single-waveform models (`pleth_only`, `ecg_only`, `co2_only`, `awp_only`), all waveforms, and fused preop + all waveforms. Ablations pair preop with each single waveform (`preop_and_<waveform>`) and with all waveforms minus one (`preop_and_all_minus_<waveform>`). Two-channel waveform-only combinations (e.g., **AWP+CO2** or **ECG+PLETH**) are intentionally excluded from default sweeps and should be launched manually if needed.
 *   **Model Families**: `run_experiments.sh` iterates `MODEL_TYPES=(xgboost ebm)` and forwards `--model_type` to both Step 6 and Step 7 so outputs land under `results/models/{model_type}/…`, allowing reporting to ingest both branches side-by-side.
 
+### Real-data smoke test (shell)
+Use `run_smoke_test.sh` to exercise the full pipeline on a handful of real cases before launching the full experiment grid. The script writes all intermediate data and results to an isolated directory (`smoke_test_outputs/` by default) so production artifacts remain untouched.
+
+```bash
+# Default: 10 cases, 2 Optuna trials, windowed all-waveform model
+./run_smoke_test.sh
+
+# Override knobs
+CASE_LIMIT=5 HPO_TRIALS=1 SMOKE_ROOT=/tmp/aki_smoke RAW_SOURCE_DIR=/data/raw ./run_smoke_test.sh
+```
+
+Key behaviors:
+* Activates environment variable overrides added to `data_preparation.inputs` and `model_creation.utils` so cohort, features, merged data, and results are written under `SMOKE_ROOT`.
+* Trims the generated cohort to `CASE_LIMIT` rows, then runs Steps 1–5, a minimal HPO (`--n_trials HPO_TRIALS` with `--smoke_test`), final training/evaluation (`--smoke_test`), and `results_recreation.metrics_summary` against the smoke results tree.
+* Logs progress to `$SMOKE_ROOT/smoke_test.log` and leaves artifacts under `$SMOKE_ROOT/data/processed` and `$SMOKE_ROOT/results` for inspection.
+
 ### Step 8: Post-hoc Analysis & Visualization
 **Primary Script**: `results_recreation/results_analysis.py`
 
