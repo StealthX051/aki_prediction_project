@@ -4,7 +4,7 @@ import json
 import logging
 from pathlib import Path
 import sys
-from typing import Dict
+from typing import Dict, Iterable, List, Sequence
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -68,7 +68,150 @@ def save_shap_plots(model, X_test, output_dir):
     logger.info("SHAP plots saved.")
 
 
-def train_evaluate(outcome, branch, feature_set, smoke_test=False, model_type="xgboost", legacy_imputation=False):
+def _json_default(obj):
+    if isinstance(obj, (np.integer, np.floating)):
+        return obj.item()
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    return str(obj)
+
+
+def _json_safe(data):
+    return json.loads(json.dumps(data, default=_json_default))
+
+
+def _plot_term_importances(
+    term_names: Sequence[str],
+    term_importances: Sequence[float],
+    destination: Path,
+    title: str,
+    max_terms: int = 20,
+):
+    sorted_terms = sorted(
+        zip(term_names, term_importances), key=lambda item: item[1], reverse=True
+    )
+
+    if not sorted_terms:
+        logger.warning("No terms available to plot for %s", title)
+        return
+
+    display_terms = sorted_terms[:max_terms]
+    labels, scores = zip(*display_terms)
+
+    plt.figure(figsize=(10, max(6, len(display_terms) * 0.4)))
+    plt.barh(labels[::-1], scores[::-1])
+    plt.xlabel("Importance")
+    plt.title(title)
+    plt.tight_layout()
+    plt.savefig(destination, bbox_inches="tight")
+    plt.close()
+
+
+def _plot_local_contributions(local_payload: Dict, destination: Path, max_features: int = 20) -> None:
+    names = local_payload.get("names")
+    scores = local_payload.get("scores")
+
+    if not names or not scores:
+        logger.warning("No local explanation data available to plot.")
+        return
+
+    first_scores = scores[0] if isinstance(scores, Iterable) else None
+    if not isinstance(first_scores, Iterable):
+        logger.warning("Unexpected structure for local scores; skipping plot.")
+        return
+
+    paired = list(zip(names, first_scores))
+    paired.sort(key=lambda item: abs(item[1]), reverse=True)
+    paired = paired[:max_features]
+
+    labels, contributions = zip(*paired)
+    plt.figure(figsize=(10, max(6, len(labels) * 0.4)))
+    plt.barh(labels[::-1], contributions[::-1])
+    plt.xlabel("Contribution")
+    plt.title("Top Local Contributions (first sample)")
+    plt.tight_layout()
+    plt.savefig(destination, bbox_inches="tight")
+    plt.close()
+
+
+def export_ebm_explanations(
+    model,
+    X_train: pd.DataFrame,
+    y_train: pd.Series,
+    artifacts_dir: Path,
+    random_state: int,
+    local_sample_size: int,
+) -> None:
+    try:
+        from interpret.glassbox._ebm._explain import EBMExplanation
+    except ImportError as exc:
+        logger.error("interpret is required to export EBM explanations: %s", exc)
+        return
+
+    xai_dir = artifacts_dir / "ebm_xai"
+    xai_dir.mkdir(parents=True, exist_ok=True)
+
+    logger.info("Generating EBM global explanations...")
+    global_explanation: EBMExplanation = model.explain_global(name="EBM Global")
+    global_payload = _json_safe(global_explanation.data())
+    write_json(xai_dir / "global_explanation.json", global_payload)
+
+    term_names: List[str] = getattr(model, "term_names_", [])
+    term_importances: List[float] = getattr(model, "term_importances_", [])
+    _plot_term_importances(
+        term_names,
+        term_importances,
+        xai_dir / "global_importances.png",
+        title="EBM Term Importances",
+    )
+
+    interactions = []
+    term_features: Sequence[Sequence[int]] = getattr(model, "term_features_", [])
+    for name, importance, features in zip(term_names, term_importances, term_features):
+        if len(features) <= 1:
+            continue
+        interactions.append(
+            {
+                "name": name,
+                "importance": float(importance),
+                "features": list(features),
+            }
+        )
+
+    interactions.sort(key=lambda item: item["importance"], reverse=True)
+    write_json(xai_dir / "interaction_importances.json", {"interactions": interactions})
+    _plot_term_importances(
+        [item["name"] for item in interactions],
+        [item["importance"] for item in interactions],
+        xai_dir / "interaction_importances.png",
+        title="EBM Interaction Importances",
+    )
+
+    if local_sample_size <= 0:
+        logger.info("Skipping local explanations due to non-positive sample size: %s", local_sample_size)
+        return
+
+    local_n = min(local_sample_size, len(X_train))
+    local_sample = X_train.sample(n=local_n, random_state=random_state)
+    local_labels = y_train.loc[local_sample.index]
+
+    logger.info("Generating EBM local explanations for %s samples...", local_n)
+    local_explanation: EBMExplanation = model.explain_local(local_sample, local_labels)
+    local_payload = _json_safe(local_explanation.data())
+    write_json(xai_dir / "local_explanations.json", local_payload)
+    _plot_local_contributions(local_payload, xai_dir / "local_contributions.png")
+
+
+def train_evaluate(
+    outcome,
+    branch,
+    feature_set,
+    smoke_test=False,
+    model_type="xgboost",
+    legacy_imputation=False,
+    export_ebm_explanations: bool = False,
+    local_sample_size: int = 100,
+):
     logger.info(
         "Starting Training/Evaluation for Outcome: %s, Branch: %s, Feature Set: %s, Model: %s",
         outcome,
@@ -299,6 +442,18 @@ def train_evaluate(outcome, branch, feature_set, smoke_test=False, model_type="x
     elif model_type != "xgboost":
         logger.info("Skipping SHAP generation for model type %s", model_type)
 
+    if not smoke_test and model_type == "ebm" and export_ebm_explanations:
+        export_ebm_explanations(
+            final_model,
+            X_train,
+            y_train,
+            artifacts_dir,
+            random_state,
+            local_sample_size,
+        )
+    elif model_type == "ebm":
+        logger.info("Skipping EBM explanation export (disabled or smoke test)")
+
     logger.info("Training and evaluation complete.")
 
 if __name__ == "__main__":
@@ -319,6 +474,17 @@ if __name__ == "__main__":
         action="store_true",
         help="Apply legacy imputation instead of preserving NaNs",
     )
+    parser.add_argument(
+        "--export_ebm_explanations",
+        action="store_true",
+        help="Export EBM global and local explanations after training",
+    )
+    parser.add_argument(
+        "--local_sample_size",
+        type=int,
+        default=100,
+        help="Number of training samples to include in local EBM explanations",
+    )
 
     args = parser.parse_args()
 
@@ -329,4 +495,6 @@ if __name__ == "__main__":
         args.smoke_test,
         args.model_type,
         args.legacy_imputation,
+        args.export_ebm_explanations,
+        args.local_sample_size,
     )
