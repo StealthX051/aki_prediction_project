@@ -4,6 +4,8 @@ This repository saves publication-ready outputs under `results/` so writers and
 analysts can reuse them without rerunning the full pipeline. All reporting
 scripts respect `RESULTS_DIR` environment overrides and share the display
 dictionary at `metadata/display_dictionary.json` to keep labels synchronized.
+Artifacts from the Catch22 + XGBoost/EBM pipeline are considered the primary
+source of truth; Aeon artifacts are optional and experimental.
 
 ## Core model evaluation outputs
 The consolidated metrics table and plots are generated from previously trained

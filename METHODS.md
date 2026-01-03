@@ -21,13 +21,8 @@ Patients were included in the study if they met the following criteria:
 *   **Primary Outcome**: Postoperative Acute Kidney Injury (AKI) was defined according to the **KDIGO** (Kidney Disease: Improving Global Outcomes) criteria. The outcome was binary, comparing patients who developed AKI against those who did not.
 *   **AKI Positive**: Any increase in serum creatinine $\ge 0.3$ mg/dL within 48 hours of surgery OR $\ge 1.5$ times baseline within 3 days (72 hours) of surgery, emphasizing perioperative attribution for this anesthesiology-focused cohort.
 *   **AKI Negative**: Patients not meeting the above criteria.
-*   **Secondary Outcomes**:
-    *   **Severe AKI**: Defined as KDIGO Stage 2 or 3 AKI (`y_severe_aki`).
-        *   **Stage 2**: Serum creatinine $\ge 2.0$ times baseline.
-        *   **Stage 3**: Serum creatinine $\ge 3.0$ times baseline OR $\ge 4.0$ mg/dL.
-    *   **In-hospital Mortality**: Defined as death occurring before discharge from the index hospitalization (`y_inhosp_mortality`).
-    *   **ICU Admission**: Defined as any postoperative ICU stay > 0 days (`y_icu_admit`).
-    *   **Prolonged Postoperative Length of Stay (LOS)**: Defined as postoperative hospital stay $\ge$ 75th percentile of the cohort (`y_prolonged_los_postop`).
+*   **Secondary Outcome (current experiments)**: **ICU Admission** — any postoperative ICU stay > 0 days (`y_icu_admit`).
+*   **Additional Derived Labels (archival only)**: The cohort retains severe AKI (`y_severe_aki`), in-hospital mortality (`y_inhosp_mortality`), and prolonged postoperative length of stay (`y_prolonged_los_postop`) for historical analyses, but these are not used in the active experiment grid.
 
 ## Data Preprocessing
 
@@ -85,19 +80,19 @@ We computed several derived features to capture clinical status more effectively
 ### Waveform Signal Processing
 Raw waveforms were processed to remove artifacts and standardize sampling rates using the following specifications:
 *   **Photoplethysmography (PPG)**:
-    *   Downsampled from 500 Hz to **100 Hz**.
+    *   Downsampled from 500 Hz to **10 Hz** for Catch22 extraction.
     *   Band-pass filtered (**0.1–10 Hz**, Butterworth 4th order) to preserve pulse wave morphology while removing baseline wander and high-frequency noise (Lapitan 2024, Sci Rep; Park 2022, Front Physiol).
 *   **Electrocardiogram (ECG)**:
-    *   Downsampled from 500 Hz to **100 Hz**.
+    *   Downsampled from 500 Hz to **10 Hz** for Catch22 extraction.
     *   Band-pass filtered (**0.5–40 Hz**, Butterworth 4th order) (Kligfield 2007, Circulation; Pan & Tompkins 1985, IEEE TBME).
 *   **Capnography (CO2)**:
-    *   Maintained at native **62.5 Hz**.
+    *   Resampled to **10 Hz** to align with other channels before feature extraction.
     *   Low-pass filtered (**8 Hz**, Butterworth 4th order) (Gutiérrez 2018, PLoS One; Leturiondo 2017, CinC).
 *   **Airway Pressure (AWP)**:
-    *   Maintained at native **62.5 Hz**.
+    *   Resampled to **10 Hz** to align with other channels before feature extraction.
     *   Low-pass filtered (**12 Hz**, Butterworth 4th order) (de Haro 2024, Crit Care; Thome 1998, J Appl Physiol).
 
-**Quality Control**: Segments with >5% missing values were excluded. Shorter gaps were filled using linear interpolation.
+**Quality Control**: Segments with >5% missing values were excluded. Shorter gaps were filled using linear interpolation. All Catch22 feature extraction therefore operates on uniformly resampled 10 Hz signals.
 
 ## Feature Engineering
 We utilized the **Catch24** feature set, which consists of the standard 22 **Catch22** (CAnonical Time-series CHaracteristics) features plus the **Mean** and **Standard Deviation** of the signal. This results in 24 features per waveform channel.
@@ -121,7 +116,7 @@ To complement the tree-based models, we added interpretable **ExplainableBoostin
 ## Statistical Analysis
 Model performance was evaluated on the independent hold-out test set.
 *   **Metrics**: The primary performance metric was **AUPRC**, given the class imbalance. Secondary metrics included AUROC, F1-score, Sensitivity, Specificity, Accuracy, and Brier Score.
-*   **Interpretability**: SHapley Additive exPlanations (**SHAP**) values were calculated to quantify the contribution of each feature to the model's predictions, providing global and local interpretability.
+*   **Interpretability**: SHapley Additive exPlanations (**SHAP**) values were calculated for XGBoost models to quantify feature contributions. EBM runs rely on the model's native additive terms and do not emit SHAP plots.
 
 ## Post-hoc Analysis
 To ensure robust and clinically applicable performance estimates, a rigorous post-hoc analysis pipeline was implemented:
@@ -181,7 +176,7 @@ The experimental pipeline relies on the **`aeon`** toolkit (v1.1.0+) for time se
 
 ### 4. Experimental Design and Evaluation
 The Aeon pipeline mirrors the rigorous design of the primary pipeline:
-*   **Outcomes**: We train separate models for the primary outcome (`aki_label`) and each secondary outcome (`y_severe_aki`, `y_inhosp_mortality`, `y_icu_admit`, `y_prolonged_los_postop`). This ensures that the training labels correctly correspond to the intended prediction target.
+*   **Outcomes**: Current Aeon experiments align with the maintained scope of the primary pipeline and train on `any_aki` and `icu_admission`. Additional labels remain available in the cohort for archival work but are not part of the active Aeon runs.
 *   **Ablation Studies**: To quantify feature importance, we conduct systematic ablations:
     *   **Single Channel**: Performance of each waveform individually (ECG, PLETH, CO2, AWP).
     *   **Leave-One-Out**: Performance impact of removing a single waveform from the full set.
