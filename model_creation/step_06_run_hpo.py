@@ -47,7 +47,13 @@ def objective_xgboost(trial, X, y, scale_pos_weight, sample_weights=None):
         "reg_alpha": trial.suggest_float("reg_alpha", 1e-8, 1.0, log=True),
     }
 
-    cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+    # Dynamic n_splits for small data
+    min_class =  min(y.value_counts())
+    n_splits = min(5, min_class)
+    if n_splits < 2:
+        return 0.5
+
+    cv = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
     auprc_scores = []
 
     for train_idx, val_idx in cv.split(X, y):
@@ -65,7 +71,7 @@ def objective_xgboost(trial, X, y, scale_pos_weight, sample_weights=None):
     return np.mean(auprc_scores)
 
 
-def objective_ebm(trial, X, y, sample_weights):
+def objective_ebm(trial, X, y, sample_weights, feature_types=None):
     """
     Optuna objective function for EBM HPO.
     Optimizes for AUPRC using Stratified K-Fold CV.
@@ -78,43 +84,74 @@ def objective_ebm(trial, X, y, sample_weights):
     params = {
         "interactions": 0,
         "missing": "gain",
-        "inner_bags": 20,
-        "outer_bags": 14,
-        "max_bins": 1024,
+        "inner_bags": 0,  # lightweight bagging for faster HPO
+        "outer_bags": 1,
+        "max_bins": trial.suggest_categorical("max_bins", [32, 64, 128, 256]),
         "random_state": 42,
         "n_jobs": -2,
         "max_leaves": trial.suggest_categorical("max_leaves", [2, 3]),
         "smoothing_rounds": trial.suggest_categorical(
-            "smoothing_rounds", [0, 25, 50, 75, 100, 150, 200, 350, 500, 750, 1000, 1500, 2000]
+            "smoothing_rounds", [0, 25, 50, 75, 100, 150, 200, 350, 500]
         ),
         "learning_rate": trial.suggest_categorical(
-            "learning_rate", [0.0025, 0.005, 0.01, 0.015, 0.02, 0.03, 0.04, 0.05, 0.1, 0.2]
+            "learning_rate", [0.0025, 0.005, 0.01, 0.015, 0.02, 0.03, 0.04]
         ),
         "validation_size": trial.suggest_categorical(
-            "validation_size", [0.05, 0.1, 0.15, 0.2, 0.25, 0.3]
+            "validation_size", [0.1, 0.15, 0.2]
         ),
         "early_stopping_rounds": trial.suggest_categorical("early_stopping_rounds", [100, 200]),
         "early_stopping_tolerance": trial.suggest_categorical(
             "early_stopping_tolerance", [0.0, 1e-5]
         ),
-        "min_samples_leaf": trial.suggest_categorical("min_samples_leaf", [2, 3, 4, 5, 10, 20]),
+        "min_samples_leaf": trial.suggest_categorical("min_samples_leaf", [2, 3, 4, 5, 10]),
         "min_hessian": trial.suggest_categorical("min_hessian", [0.0, 1e-6, 1e-4, 1e-2]),
-        "greedy_ratio": trial.suggest_categorical("greedy_ratio", [0.0, 1.0, 2.0, 5.0, 10.0, 20.0]),
+        "greedy_ratio": trial.suggest_categorical("greedy_ratio", [0.0, 5.0, 10.0]),
         "cyclic_progress": trial.suggest_categorical("cyclic_progress", [0.0, 1.0]),
     }
 
-    cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+    # Dynamic n_splits for small data
+    min_class =  min(y.value_counts())
+    n_splits = min(5, min_class)
+    
+    # Preventing hangs on very small datasets
+    if len(y) < 50:
+        # logger.info(f"Dataset size {len(y)} < 50; forcing n_jobs=1 to prevent hangs.")
+        params['n_jobs'] = 1
+        params['inner_bags'] = 0
+        params['outer_bags'] = 1
+        params['validation_size'] = 0.2
+        
+    if n_splits < 2:
+        return 0.5 # Return dummy score if cross-validation is impossible
+        
+    cv = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
     auprc_scores = []
 
+    # If reusing frozen feature_types, we must ensure X is contiguous numpy array 
+    # and that we don't accidentally pass DataFrames if the cuts were computed on them differently.
+    # However, utils.compute_quantile_cuts_per_feature handles numpy/pandas by converting to array.
+    # Here we assume X is compatible.
+    
+    # IMPORTANT: When using frozen bins, we should set feature_types in the params.
+    if feature_types is not None:
+        params['feature_types'] = feature_types
+
     for train_idx, val_idx in cv.split(X, y):
+        # We need to be careful: splitting the dataframe is fine, but if we pass feature_types, 
+        # EBM expects the input X to match the columns of feature_types.
         X_tr, X_val = X.iloc[train_idx], X.iloc[val_idx]
         y_tr, y_val = y.iloc[train_idx], y.iloc[val_idx]
         sample_weight_tr = sample_weights[train_idx]
+        
+        # Optimization: convert to contiguous float32 array to match frozen bins assumptions
+        # and avoid internal overhead
+        X_tr_np = np.ascontiguousarray(X_tr.values, dtype=np.float32)
+        X_val_np = np.ascontiguousarray(X_val.values, dtype=np.float32)
 
         model = ExplainableBoostingClassifier(**params)
-        model.fit(X_tr, y_tr, sample_weight=sample_weight_tr)
+        model.fit(X_tr_np, y_tr, sample_weight=sample_weight_tr)
 
-        y_pred_proba = model.predict_proba(X_val)[:, 1]
+        y_pred_proba = model.predict_proba(X_val_np)[:, 1]
         score = average_precision_score(y_val, y_pred_proba)
         auprc_scores.append(score)
 
@@ -136,7 +173,7 @@ def run_hpo(outcome, branch, feature_set, n_trials=100, smoke_test=False, model_
             df, outcome, feature_set
         )
     except Exception as e:
-        logger.error(f"Failed to prepare data: {e}")
+        logger.exception(f"Failed to prepare data: {e}")
         return
 
     sample_weights = np.where(y_train == 1, scale_pos_weight, 1.0)
@@ -146,7 +183,13 @@ def run_hpo(outcome, branch, feature_set, n_trials=100, smoke_test=False, model_
     if model_type == "xgboost":
         objective_fn = lambda trial: objective_xgboost(trial, X_train, y_train, scale_pos_weight, sample_weights)
     elif model_type == "ebm":
-        objective_fn = lambda trial: objective_ebm(trial, X_train, y_train, sample_weights)
+        logger.info("Pre-computing quantile cuts to freeze bins for EBM HPO...")
+        # Convert to contiguous array for binning
+        X_train_np = np.ascontiguousarray(X_train.values, dtype=np.float32)
+        feature_types_frozen = utils.compute_quantile_cuts_per_feature(X_train_np, max_bins=1024)
+        logger.info("Bins computed. Starting HPO with frozen feature_types.")
+        
+        objective_fn = lambda trial: objective_ebm(trial, X_train, y_train, sample_weights, feature_types=feature_types_frozen)
     else:
         raise ValueError(f"Unsupported model_type: {model_type}")
 

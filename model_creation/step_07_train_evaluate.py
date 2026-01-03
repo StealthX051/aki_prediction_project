@@ -435,6 +435,19 @@ def train_evaluate(
         }
 
         ebm_params = {**ebm_defaults, **params}
+        
+        # Override for smoke test to prevent hanging
+        # Override for smoke test to prevent hanging
+        # Only force n_jobs=1 if the dataset is effectively small, ignoring the smoke_test flag
+        # to allow debugging/testing of multithreading performance if larger samples are used.
+        if len(y_train) < 50:
+             logger.info(f"EBM: Dataset size {len(y_train)} < 50; forcing n_jobs=1 to prevent hangs.")
+             ebm_params['n_jobs'] = 1
+             ebm_params['inner_bags'] = 2
+             ebm_params['outer_bags'] = 2
+        else:
+             logger.info(f"EBM: Dataset size {len(y_train)} >= 50; using configured n_jobs={ebm_params.get('n_jobs')}")
+             
         ebm_params.pop("scale_pos_weight", None)
         model_params = ebm_params
         pos_weight = params.get("scale_pos_weight", scale_pos_weight)
@@ -571,8 +584,11 @@ def train_evaluate(
         model_path = output_dir / "model.json"
         final_model.save_model(model_path)
     else:
-        model_path = output_dir / "model.ebm"
-        final_model.save(str(model_path))
+        import pickle
+        model_path = output_dir / "model.pkl"
+        with open(model_path, 'wb') as f:
+            pickle.dump(final_model, f)
+
     logger.info("Saved model to %s", model_path)
 
     # SHAP Feature Importance (XGBoost only)

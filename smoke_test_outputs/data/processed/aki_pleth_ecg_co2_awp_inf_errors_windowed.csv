@@ -1,0 +1,9 @@
+caseid,waveform,error
+4043,SNUADC/PLETH,invalid_signal_gt_5_pct_nan
+4043,SNUADC/ECG_II,invalid_signal_gt_5_pct_nan
+2160,SNUADC/ECG_II,invalid_signal_gt_5_pct_nan
+2160,SNUADC/PLETH,invalid_signal_gt_5_pct_nan
+2160,Primus/CO2,invalid_signal_gt_5_pct_nan
+2160,Primus/AWP,invalid_signal_gt_5_pct_nan
+1327,SNUADC/PLETH,invalid_signal_gt_5_pct_nan
+1327,SNUADC/ECG_II,invalid_signal_gt_5_pct_nan

@@ -40,8 +40,8 @@ WIN_SEC = 10
 SLIDE_SEC = 5
 # Configuration for feature extraction modes
 # You can enable both to generate both full-segment and windowed features in one run.
-GENERATE_FULL_FEATURES = True
-GENERATE_WINDOWED_FEATURES = False
+GENERATE_FULL_FEATURES = os.getenv("GENERATE_FULL_FEATURES", "True").lower() == "true"
+GENERATE_WINDOWED_FEATURES = os.getenv("GENERATE_WINDOWED_FEATURES", "False").lower() == "true"
 # target sampling frequency for resampling (in Hz)
 TARGET_SR = 10
 # Sampling rate for full-case feature extraction (Non-Windowed)

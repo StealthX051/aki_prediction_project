@@ -1,0 +1,13 @@
+{
+    "max_leaves": 3,
+    "smoothing_rounds": 750,
+    "learning_rate": 0.04,
+    "validation_size": 0.3,
+    "early_stopping_rounds": 100,
+    "early_stopping_tolerance": 1e-05,
+    "min_samples_leaf": 10,
+    "min_hessian": 0.0,
+    "greedy_ratio": 2.0,
+    "cyclic_progress": 1.0,
+    "scale_pos_weight": 1.0212765957446808
+}

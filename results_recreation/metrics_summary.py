@@ -139,14 +139,23 @@ def crawl_predictions(results_dir: Path) -> List[PredictionSet]:
     prediction_sets: List[PredictionSet] = []
     for pred_file in pred_files:
         logger.info("Loading predictions from %s", pred_file)
-        prediction_sets.append(_load_predictions(pred_file))
+        try:
+            prediction_sets.append(_load_predictions(pred_file))
+        except ValidationError as exc:
+            logger.warning("Skipping invalid prediction file %s: %s", pred_file, exc)
+
+    if not prediction_sets:
+        raise FileNotFoundError(
+            "No valid test prediction files found. Expected them under 'results/models/**/predictions/test.csv' "
+            "or 'results/aeon/models/**/predictions/test.csv'."
+        )
 
     return prediction_sets
 
 
-def _safe_metric(func, *args) -> float:
+def _safe_metric(func, *args, **kwargs) -> float:
     try:
-        return float(func(*args))
+        return float(func(*args, **kwargs))
     except Exception:
         return float("nan")
 

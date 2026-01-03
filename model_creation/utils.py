@@ -186,10 +186,47 @@ def prepare_data(
         )
 
     # Calculate scale_pos_weight
-    neg, pos = np.bincount(y_train)
+    neg = (y_train == 0).sum()
+    pos = (y_train == 1).sum()
     scale_pos_weight = neg / pos if pos > 0 else 1.0
     
     logger.info(f"Data prepared. Train shape: {X_train.shape}, Test shape: {X_test.shape}")
     logger.info(f"Positive samples in train: {pos}, Negative: {neg}, Scale Pos Weight: {scale_pos_weight:.4f}")
 
     return X_train, X_test, y_train, y_test, scale_pos_weight
+
+def compute_quantile_cuts_per_feature(X: np.ndarray, max_bins: int = 256) -> List:
+    """
+    Returns feature_types list where each entry is a list of float cutpoints
+    (InterpretML EBM accepts [List[float]] as explicit continuous cut values).
+    
+    This allows 'freezing' the bins so they are not re-computed for every HPO trial.
+    """
+    X = np.asarray(X)
+    n_samples, n_features = X.shape
+
+    # We want at most (max_bins - 2) internal cutpoints:
+    # (one bin reserved for missing, plus one for values below first cut, etc.)
+    n_cuts = max(0, max_bins - 2)
+    
+    # Fallback to uniform if only 2 bins (basically binary) or less requested
+    if n_cuts == 0:
+        return ["uniform"] * n_features
+
+    qs = np.linspace(0, 1, n_cuts + 2, endpoint=True)[1:-1]  # drop 0 and 1
+
+    feature_types = []
+    for j in range(n_features):
+        col = X[:, j].astype(np.float64, copy=False)
+        # Drop NaNs before computing quantiles
+        col = col[~np.isnan(col)]
+        
+        if col.size == 0:
+            feature_types.append("continuous")  # nothing to cut on
+            continue
+
+        cuts = np.quantile(col, qs)
+        cuts = np.unique(cuts)  # remove duplicates from ties
+        feature_types.append(cuts.tolist())
+
+    return feature_types

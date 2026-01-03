@@ -7,6 +7,19 @@ dictionary at `metadata/display_dictionary.json` to keep labels synchronized.
 Artifacts from the Catch22 + XGBoost/EBM pipeline are considered the primary
 source of truth; Aeon artifacts are optional and experimental.
 
+## Running experiments (full or staged)
+- Use `run_experiments.sh` for the Catch22/XGBoost/EBM grid. It supports:
+  - `--prep auto` (default): reuse `data/processed/aki_features_master_wide*.csv` if present; rebuild only if missing.
+  - `--prep force`: re-run Steps 01–05 (cohort, Catch22, preop, intraop, merge) and regenerate both non-windowed and windowed features.
+  - `--prep skip`: assume processed features already exist; skip all prep.
+- Model-family control:
+  - XGBoost only: `./run_experiments.sh --only-xgboost --prep auto`
+  - EBM only (reuse XGBoost-prepared data): `./run_experiments.sh --only-ebm --prep skip`
+  - Both families: default or `--model-types xgboost,ebm`
+- Environment roots (`DATA_DIR`, `PROCESSED_DIR`, `RAW_DIR`, `RESULTS_DIR`) are exported so both families share the same files; no wasted preprocessing.
+- Metrics/report generation is skipped if no prediction files are present, so partial runs (only one family) are handled gracefully. All CLI flags also pass through `run_catch22_experiments.sh`.
+- `results_recreation/metrics_summary.py` validates each `predictions/test.csv`; invalid files are skipped with a warning so a single bad artifact does not halt consolidation. If no valid predictions remain, it fails fast with a clear message.
+
 ## Core model evaluation outputs
 The consolidated metrics table and plots are generated from previously trained
 models without retraining:

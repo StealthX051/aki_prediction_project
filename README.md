@@ -144,7 +144,7 @@ python data_preparation/step_05_data_merge.py --impute-missing
 ### Step 7: Model Training & Evaluation
 **Directory**: `model_creation/`
 
-We have refactored the modeling pipeline into two robust scripts plus shared utilities. Both scripts accept `--model_type {xgboost,ebm}`; the default `xgboost` path matches prior behavior, while `ebm` enables a fixed ExplainableBoostingClassifier configuration (0 interactions, `missing="gain"`, 20 inner bags, 14 outer bags, 1024 bins, deterministic seed, multi-core training) with Optuna-tuned leaves, smoothing, learning rate, validation size, and stopping tolerances. Inputs retain NaNs by default; pass `--legacy_imputation` if you need the previous `-99` sentinel fill during training.
+We have refactored the modeling pipeline into two robust scripts plus shared utilities. Both scripts accept `--model_type {xgboost,ebm}`; the default `xgboost` path matches prior behavior, while `ebm` now uses an efficiency-tuned ExplainableBoostingClassifier configuration for HPO (0 interactions, `missing="gain"`, **Frozen Bins** pre-computed from the training data, **0 inner bags**, **1 outer bag**, multi-core training, deterministic seed). Optuna tunes leaves, smoothing, learning rate, validation size, early stopping, and regularization over a narrowed search space (see below). Inputs retain NaNs by default; pass `--legacy_imputation` if you need the previous `-99` sentinel fill during training.
 
 *   **Hyperparameter Optimization** — `model_creation/step_06_run_hpo.py`: Runs Optuna sweeps (default 100 trials) to maximize AUPRC and stores the best parameters at `results/params/{model_type}/{outcome}/{branch}/{feature_set}.json`.
 *   **Training & Evaluation** — `model_creation/step_07_train_evaluate.py`: Trains the final model with the tuned hyperparameters, writes calibrated predictions, and exports artifacts.
@@ -159,6 +159,9 @@ python model_creation/step_07_train_evaluate.py --outcome any_aki --branch windo
 python model_creation/step_06_run_hpo.py --outcome any_aki --branch windowed --feature_set all_waveforms --model_type ebm
 python model_creation/step_07_train_evaluate.py --outcome any_aki --branch windowed --feature_set all_waveforms --model_type ebm --export_ebm_explanations
 ```
+
+**EBM HPO (small-N optimized)**  
+During HPO we now prioritize speed and stability for ~2.5k rows: `inner_bags=0`, `outer_bags=1`, `max_bins∈{32,64,128,256}`, `max_leaves∈{2,3}`, `smoothing_rounds∈{0,25,50,75,100,150,200,350,500}`, `learning_rate∈{0.0025,0.005,0.01,0.015,0.02,0.03,0.04}`, `validation_size∈{0.1,0.15,0.2}`, `early_stopping_rounds∈{100,200}`, `early_stopping_tolerance∈{0,1e-5}`, `min_samples_leaf∈{2,3,4,5,10}`, `min_hessian∈{0,1e-6,1e-4,1e-2}`, `greedy_ratio∈{0,5,10}`, `cyclic_progress∈{0,1}`, `n_jobs=-2`. For very small data (<50 rows) we automatically force `n_jobs=1`, `inner_bags=0`, `outer_bags=1`, `validation_size=0.2` to avoid hangs. Final training in Step 7 still applies the heavier production defaults (`inner_bags=20`, `outer_bags=14`, `max_bins` from tuned value) so you can refit top configs with stability while keeping HPO fast.
 
 #### Full experiment grid (Catch22 + XGBoost/EBM)
 Use the provided shell script to sweep the default grid of outcomes, branches, feature sets, and both model families. Logs are written to `experiment_log.txt`.
@@ -189,7 +192,18 @@ Use the provided shell script to sweep the default grid of outcomes, branches, f
 *   **Feature Sets**: `preop_only`, `all_waveforms`, `preop_and_all_waveforms`, `pleth_only`, `ecg_only`, etc.
 *   **Model Types**: `xgboost` (default) or `ebm`.
 *   **Default Grid (`run_experiments.sh`)**: Primary runs cover preop-only, single-waveform models (`pleth_only`, `ecg_only`, `co2_only`, `awp_only`), all waveforms, and fused preop + all waveforms. Ablations pair preop with each single waveform (`preop_and_<waveform>`) and with all waveforms minus one (`preop_and_all_minus_<waveform>`). Two-channel waveform-only combinations (e.g., **AWP+CO2** or **ECG+PLETH**) are intentionally excluded from default sweeps and should be launched manually if needed.
-*   **Model Families**: `run_experiments.sh` iterates `MODEL_TYPES=(xgboost ebm)` and forwards `--model_type` to both Step 6 and Step 7 so outputs land under `results/models/{model_type}/…`, allowing reporting to ingest both branches side-by-side.
+*   **Model Families**: `run_experiments.sh` now supports staging and reuse. By default it runs both `xgboost` and `ebm`, but you can run families independently (`--only-xgboost` or `--only-ebm`) and reuse the same preprocessed data. PREP modes: `--prep auto` (default, reuse processed features if present), `--prep force` (re-run Steps 01–05, regenerating windowed/non-windowed features), or `--prep skip` (assume processed data already exist). The script exports `DATA_DIR/PROCESSED_DIR/RAW_DIR/RESULTS_DIR` to downstream Python so EBM can share the XGBoost-prepared files without recomputing. It skips metrics/report generation if no prediction files are found (graceful when only one family has been run).
+
+##### Running staged experiments
+
+* Full fresh run (prep + both families):  
+  `./run_experiments.sh --prep force`
+* XGBoost first, reuse data, skip EBM:  
+  `./run_experiments.sh --only-xgboost --prep auto`
+* Later EBM-only reuse of the same processed data:  
+  `./run_experiments.sh --only-ebm --prep skip`
+
+All CLI options also flow through `run_catch22_experiments.sh`, so you can pass the same flags there.
 
 ### Real-data smoke test (shell)
 Use `run_smoke_test.sh` to exercise the full pipeline on a handful of real cases before launching the full experiment grid. The script writes all intermediate data and results to an isolated directory (`smoke_test_outputs/` by default) so production artifacts remain untouched.

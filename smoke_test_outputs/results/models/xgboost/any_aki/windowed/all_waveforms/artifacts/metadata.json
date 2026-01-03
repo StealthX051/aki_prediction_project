@@ -1,0 +1,18 @@
+{
+  "seed": 42,
+  "folds": 5,
+  "dataset_hash": "d109936edbdc509df692f92adb2c7c5b46f44605c887c73590ae4eabee685687",
+  "model_type": "xgboost",
+  "counts": {
+    "train": {
+      "total": 95,
+      "positive": 47,
+      "negative": 48
+    },
+    "test": {
+      "total": 24,
+      "positive": 12,
+      "negative": 12
+    }
+  }
+}

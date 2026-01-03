@@ -27,7 +27,7 @@ from data_preparation.inputs import (
     FULL_FEATURE_TARGET_SR
 )
 from data_preparation.waveform_processing import WAVEFORM_SPECS, process_signal, harmonize_sr, load_and_validate_case
-from data_preparation.aeon_io import collate_and_save_aeon, AeonExportConfig
+from data_preparation.aeon_io import collate_and_save_aeon, AeonExportConfig, AeonSeriesPayload
 
 
 # Create mapping from VitalDB ID to Spec Key

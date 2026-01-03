@@ -228,9 +228,16 @@ def build_preop_labs_from_labdata(lab_df: pd.DataFrame,
         agg_frames.append(last)
 
     if not agg_frames:
-        return pd.DataFrame(columns=['caseid'])
+        preop_labs = pd.DataFrame(columns=['caseid'])
+    else:
+        preop_labs = pd.concat(agg_frames, axis=1).reset_index()
 
-    preop_labs = pd.concat(agg_frames, axis=1).reset_index()
+    # Ensure all requested labs are present (fill with NaN if missing)
+    for lab_name in lab_names:
+        col_name = f'preop_{lab_name}'
+        if col_name not in preop_labs.columns:
+            preop_labs[col_name] = np.nan
+
     return preop_labs
 
 def add_derived_preop_features(df: pd.DataFrame) -> pd.DataFrame:

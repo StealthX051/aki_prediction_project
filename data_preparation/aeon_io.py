@@ -11,6 +11,16 @@ from data_preparation.inputs import (
     AEON_PAD_FILL, AEON_STRICT_CHANNELS, AEON_WINDOW_POLICY, OUTCOME
 )
 
+@dataclass
+class AeonSeriesPayload:
+    caseid: int
+    waveform: str
+    target_sr: float
+    length: int
+    seg_full: Optional[np.ndarray] = None
+    win_mat: Optional[np.ndarray] = None
+    valid_window_mask: Optional[np.ndarray] = None
+
 @dataclass(frozen=True)
 class AeonExportConfig:
     out_dir: str = AEON_OUT_DIR
