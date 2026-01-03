@@ -6,7 +6,7 @@ publication-ready table summarizing baseline characteristics. Continuous
 features are tested for normality using the Shapiro–Wilk test to decide
 between mean/standard deviation or median/interquartile range summaries.
 Categorical features are summarized with counts and percentages. Outputs are
-saved to HTML and LaTeX under ``results/tables`` with human-readable labels
+saved to HTML, LaTeX, and DOCX under ``results/tables`` with human-readable labels
 from :func:`reporting.display_dictionary.DisplayDictionary.feature_label`.
 """
 from __future__ import annotations
@@ -16,7 +16,10 @@ import logging
 import os
 from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
+
 import pandas as pd
+from docx import Document
+from docx.enum.text import WD_ALIGN_PARAGRAPH
 from scipy.stats import shapiro
 
 from data_preparation.inputs import PREOP_PROCESSED_FILE
@@ -150,19 +153,43 @@ def _build_descriptive_table(
     return pd.DataFrame(rows, columns=["Feature", "Type", "Summary"])
 
 
-def _save_table(table: pd.DataFrame, output_prefix: str) -> Tuple[Path, Path]:
-    """Persist the table to HTML and LaTeX formats."""
+def _save_table(table: pd.DataFrame, output_prefix: str) -> Tuple[Path, Path, Path]:
+    """Persist the table to HTML, LaTeX, and DOCX formats."""
 
     TABLES_DIR.mkdir(parents=True, exist_ok=True)
 
     html_path = TABLES_DIR / f"{output_prefix}.html"
     latex_path = TABLES_DIR / f"{output_prefix}.tex"
+    docx_path = TABLES_DIR / f"{output_prefix}.docx"
 
     table.to_html(html_path, index=False, escape=False)
     table.to_latex(latex_path, index=False, escape=False, longtable=True)
+    _save_docx(table, docx_path)
 
-    logger.info("Saved descriptive table to %s and %s", html_path, latex_path)
-    return html_path, latex_path
+    logger.info("Saved descriptive table to %s, %s, and %s", html_path, latex_path, docx_path)
+    return html_path, latex_path, docx_path
+
+
+def _save_docx(table: pd.DataFrame, path: Path) -> None:
+    """Write the descriptive table to a DOCX document."""
+
+    document = Document()
+    document.add_heading("Preoperative Descriptive Statistics", level=1)
+
+    doc_table = document.add_table(rows=1 + len(table), cols=table.shape[1])
+    doc_table.style = "Table Grid"
+
+    header_cells = doc_table.rows[0].cells
+    for idx, column in enumerate(table.columns):
+        header_cells[idx].text = str(column)
+
+    for row_idx, (_, row) in enumerate(table.iterrows(), start=1):
+        cells = doc_table.rows[row_idx].cells
+        for col_idx, value in enumerate(row):
+            cells[col_idx].text = str(value)
+
+    document.add_paragraph().alignment = WD_ALIGN_PARAGRAPH.CENTER
+    document.save(path)
 
 
 def parse_args() -> argparse.Namespace:
