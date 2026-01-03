@@ -1,4 +1,5 @@
 import logging
+import os
 from pathlib import Path
 from typing import Dict
 
@@ -20,7 +21,7 @@ from sklearn.metrics import (
 )
 
 # Constants
-RESULTS_DIR = Path(__file__).resolve().parent.parent / 'results'
+RESULTS_DIR = Path(os.getenv("RESULTS_DIR", Path(__file__).resolve().parent.parent / 'results'))
 FIGURES_DIR = RESULTS_DIR / 'figures'
 TABLES_DIR = RESULTS_DIR / 'tables'
 
