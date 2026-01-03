@@ -132,6 +132,18 @@ To ensure robust and clinically applicable performance estimates, a rigorous pos
 
 3.  **Bootstrapped Statistical Inference**: All reported metrics (AUROC, AUPRC, Brier Score, Sensitivity, Specificity, F1, Precision, Accuracy) are computed on the held-out test predictions with the stored calibrator and threshold applied. **Non-parametric bootstrapping** (1000 iterations) resamples the test predictions with replacement while keeping the Step-7 threshold constant to derive 95% Confidence Intervals. Consolidated metrics and optional bootstrap samples are produced by `results_recreation/metrics_summary.py` and visualized in `results_recreation/results_analysis.py`.
 
+## Reporting artifacts
+Publication figures and tables are regenerated from saved artifacts rather than recomputing the full pipeline. All reporting scripts consume the shared `metadata/display_dictionary.json` so labels and units remain synchronized across outputs.
+
+### Cohort flow diagram
+`reporting/cohort_flow.py` converts the stage counts saved during `step_01_cohort_construction.py` into a consort-style flow figure. The script expects a JSON file (default: `results/metadata/cohort_flow_counts.json`) containing counts for each filter stage and writes SVG/PNG outputs to `results/figures/`. Waveform labels are pulled from the display dictionary, falling back to raw channel names when no mapping exists.
+
+### Preoperative descriptive table
+`reporting/preop_descriptives.py` summarizes baseline characteristics using the raw cohort CSV (prior to one-hot encoding) so categorical levels are preserved. Continuous features are individually tested for normality with the Shapiro–Wilk test (subsampled to 5,000 observations when needed). Normally distributed variables are reported as mean ± SD; non-normal variables are reported as median with interquartile range. Categorical features are presented as counts with percentages. Tables are emitted to HTML, LaTeX, and DOCX under `results/tables/preop_descriptives.*`.
+
+### Model-feature missingness table
+`reporting/missingness_table.py` reads the merged modeling dataset (`data/processed/aki_features_master_wide.csv` by default), excludes identifiers and outcome columns, and computes per-feature missing counts and percentages. The resulting table lists both internal feature names and display labels with units where available. CSV and HTML outputs are written to `results/tables/missingness_table.*` for manuscript supplements and QA checks.
+
 ## Experimental Pipeline: Time Series Classification (Aeon)
 
 > **Note**: This section describes the methodology for the experimental parallel pipeline designed to benchmark State-of-the-Art (SOTA) time series classifiers against the primary Catch22/XGBoost approach.

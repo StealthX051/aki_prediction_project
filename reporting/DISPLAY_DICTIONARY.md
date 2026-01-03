@@ -71,6 +71,10 @@ Resolution order for feature names:
 - **Reporting**: `results_recreation/results_analysis.py` now consumes the
   dictionary for feature-set labels and can be extended to render outcome/model
   labels the same way.
+- **Descriptive tables and figures**: `reporting/cohort_flow.py`,
+  `reporting/preop_descriptives.py`, and `reporting/missingness_table.py` all
+  pull feature and waveform labels from the dictionary so supplemental tables
+  and flow diagrams stay consistent with the main reports.
 - **Interpretability**: When generating SHAP/EBM plots, prefer
   `DisplayDictionary.feature_label()` to annotate axes and tooltips.
 - **Data prep**: If additional derived preoperative features are created,
