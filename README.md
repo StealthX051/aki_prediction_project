@@ -206,6 +206,46 @@ python results_recreation/metrics_summary.py  # Precompute consolidated metrics
 python results_recreation/results_analysis.py  # Build figures and reports
 ```
 
+### Additional reporting utilities
+These helpers live under `reporting/` and reuse the shared display dictionary
+(`metadata/display_dictionary.json`) so figure and table labels remain
+consistent across manuscripts and dashboards.
+
+- **Cohort flow diagram** — Recreate the consort-style flow from saved counts
+  emitted by `step_01_cohort_construction.py`. The script expects a JSON file
+  with stage counts (default: `results/metadata/cohort_flow_counts.json`) and
+  writes SVG/PNG under `results/figures/`.
+
+  ```bash
+  python -m reporting.cohort_flow \
+    --counts-file results/metadata/cohort_flow_counts.json \
+    --display-dictionary metadata/display_dictionary.json
+  ```
+
+- **Preoperative descriptive table** — Summarize baseline characteristics using
+  the raw (pre-encoding) cohort CSV so categorical levels are available. Each
+  continuous feature undergoes a Shapiro–Wilk test; normally distributed
+  variables are reported as mean ± SD, otherwise median (IQR). Categorical
+  features are reported as counts and percentages. Outputs land in HTML/LaTeX
+  and DOCX at `results/tables/preop_descriptives.*`.
+
+  ```bash
+  python -m reporting.preop_descriptives \
+    --dataset data/processed/aki_pleth_ecg_co2_awp.csv \
+    --display-dictionary metadata/display_dictionary.json
+  ```
+
+- **Model-feature missingness table** — Computes per-column missingness for the
+  merged modeling dataset (default: `data/processed/aki_features_master_wide.csv`)
+  while skipping identifiers and outcomes. The table includes both internal and
+  publication-ready names and is written to CSV/HTML in `results/tables/`.
+
+  ```bash
+  python -m reporting.missingness_table \
+    --dataset data/processed/aki_features_master_wide.csv \
+    --display-dictionary metadata/display_dictionary.json
+  ```
+
 ---
 
 ## 🕰️ Legacy Execution Guide (Notebook Based)
