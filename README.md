@@ -6,7 +6,7 @@ This project implements a machine learning pipeline to predict Postoperative Acu
 The pipeline consists of three main stages:
 1.  **Cohort Selection**: Filtering patients based on clinical criteria and waveform availability.
 2.  **Feature Extraction**: Extracting time-series features (Catch22) from high-frequency waveforms.
-3.  **Modeling**: Training XGBoost classifiers to predict AKI (Primary) and secondary outcomes (Mortality, ICU Admission, Prolonged LOS).
+3.  **Modeling**: Training XGBoost and Explainable Boosting Machine (EBM) classifiers to predict AKI (primary) and ICU admission (secondary).
 
 ## 🛠️ Prerequisites & Setup
 
@@ -26,7 +26,7 @@ Ensure you have access to the VitalDB API. The `vitaldb` Python package is used 
 
 ## 🚀 Execution Guide (Refactored Pipeline)
 
-**Recommended**: This new pipeline uses modular scripts for better reproducibility, data leakage prevention, and support for both full and windowed datasets.
+**Recommended**: This new pipeline uses modular scripts for better reproducibility, data leakage prevention, and support for both full and windowed datasets. The Catch22 + XGBoost/EBM workflow is the primary, production-ready path; Aeon remains **experimental**.
 
 ### Advantages over Legacy Pipeline
 *   **Reproducibility**: Modular Python scripts replace monolithic notebooks, making execution deterministic and easier to automate.
@@ -43,10 +43,10 @@ Filters the raw dataset to create a valid cohort.
 *   **Logic**: Selects patients who have all `MANDATORY_WAVEFORMS` and `MANDATORY_COLUMNS`.
 *   **Output**: A cohort CSV containing valid `caseid`s and the following derived outcomes:
     *   `aki_label`: Primary outcome (KDIGO AKI).
-    *   `y_inhosp_mortality`: In-hospital mortality.
-    *   `y_icu_admit`: ICU admission (>0 days).
-    *   `y_prolonged_los_postop`: Prolonged postoperative LOS (>= 75th percentile).
-    *   `y_severe_aki`: Severe AKI (KDIGO Stage 2 or 3).
+    *   `y_icu_admit`: ICU admission (>0 days) — secondary outcome used in the current experiment grid.
+    *   `y_inhosp_mortality`: In-hospital mortality (retained for archival analyses but not part of the current runs).
+    *   `y_prolonged_los_postop`: Prolonged postoperative LOS (>= 75th percentile; archival only).
+    *   `y_severe_aki`: Severe AKI (KDIGO Stage 2 or 3; archival only).
 ```bash
 python -m data_preparation.step_01_cohort_construction
 ```
@@ -63,7 +63,7 @@ Figures are written to `results/figures/` by default (SVG and PNG).
 **File**: `data_preparation/step_02_catch_22.py`
 Extracts 22 time-series features (Catch22) from each waveform channel.
 *   **Technical Details**:
-    *   Resamples waveforms to `TARGET_SR` (default 10Hz).
+    *   Resamples waveforms to `TARGET_SR` (default 10Hz) for both full-case and windowed branches.
     *   **Full Mode**: Extracts features from the entire case duration.
     *   **Windowed Mode**: Segments waveforms into windows (defined by `WIN_SEC`, `SLIDE_SEC`) and extracts features per window.
     *   Handles multiprocessing for efficiency.
@@ -149,6 +149,14 @@ python model_creation/step_06_run_hpo.py --outcome any_aki --branch windowed --f
 python model_creation/step_07_train_evaluate.py --outcome any_aki --branch windowed --feature_set all_waveforms --model_type ebm
 ```
 
+#### Full experiment grid (Catch22 + XGBoost/EBM)
+Use the provided shell script to sweep the default grid of outcomes, branches, feature sets, and both model families. Logs are written to `experiment_log.txt`.
+
+```bash
+# Runs Catch22-based XGBoost + EBM models (primary pipeline)
+./run_catch22_experiments.sh
+```
+
 **What happens during training & evaluation?**
 *   **OOF Calibration**: `step_07_train_evaluate.py` generates OOF predictions on the training set, fits a logistic recalibration model on those scores, and saves the calibrated OOF outputs.
 *   **Threshold Selection**: The calibrated OOF scores are searched for the **Youden-J** statistic to define a single decision threshold per (Outcome × Branch × Feature Set). That threshold is stored in `artifacts/threshold.json`.
@@ -157,7 +165,7 @@ python model_creation/step_07_train_evaluate.py --outcome any_aki --branch windo
 *   **Fixed Application at Test Time**: The stored calibrator and threshold are applied **without further fitting** when evaluating the held-out test set; these same fixed values are later reused by the reporting scripts.
 
 #### Available Options
-*   **Outcomes**: `any_aki`, `icu_admission` (default experiment script focus; other outcomes can be run manually if needed).
+*   **Outcomes**: `any_aki`, `icu_admission` (current scope). Other derived labels remain in the cohort for archival analyses but are not exercised by the standard run scripts.
 *   **Branches**: `non_windowed` (Full Case), `windowed` (Segmented).
 *   **Feature Sets**: `preop_only`, `all_waveforms`, `preop_and_all_waveforms`, `pleth_only`, `ecg_only`, etc.
 *   **Model Types**: `xgboost` (default) or `ebm`.
@@ -305,7 +313,7 @@ jupyter notebook notebooks/04_hpo_xgboost.ipynb
 
 ## 🧪 Experimental Pipeline: Aeon (Time Series Classification)
 
-> **Note**: This pipeline operates separately from the main Catch22/XGBoost pipeline.
+> **Note**: This pipeline operates separately from the main Catch22/XGBoost pipeline and is treated as **experimental**. For production or publication runs, prefer the Catch22 + XGBoost/EBM scripts above.
 
 This branch implements an end-to-end Deep Learning/State-of-the-Art Time Series Classification pipeline using the **Aeon** library. It bypasses manual feature engineering (Catch22) in favor of direct waveform processing and fusion.
 
@@ -331,8 +339,8 @@ This branch implements an end-to-end Deep Learning/State-of-the-Art Time Series 
 *   **Library**: `aeon` (Sktime fork), `tsfresh`.
 *   **Input Shape**: `(N_samples, N_channels=4, Length=8000)`.
 *   **Fusion Type**: Early Fusion (Preop features concatenated to transform embeddings).
-*   **Evaluation**: 
-    *   **Outcomes**: Primary (AKI) + Secondary (Mortality, ICU, Extended LOS, Severe AKI).
+*   **Evaluation**:
+    *   **Outcomes**: `any_aki` (primary) and `icu_admission` (secondary), matching the maintained Catch22 pipeline scope. Other labels in the cohort are not part of current Aeon runs.
     *   **Metrics**: 1000-fold bootstrapped CIs for AUROC, AUPRC, etc.
     *   **Ablations**: Single Channel, Leave-One-Out, and Fusion impact analysis.
 
