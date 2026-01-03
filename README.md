@@ -51,6 +51,14 @@ Filters the raw dataset to create a valid cohort.
 python -m data_preparation.step_01_cohort_construction
 ```
 
+To regenerate a cohort flow diagram from saved counts/metadata without rerunning
+the full pipeline, supply the JSON counts file to the reporting utility:
+
+```bash
+python -m reporting.cohort_flow --counts-file results/metadata/cohort_flow_counts.json
+```
+Figures are written to `results/figures/` by default (SVG and PNG).
+
 ### Step 3: Feature Extraction
 **File**: `data_preparation/step_02_catch_22.py`
 Extracts 22 time-series features (Catch22) from each waveform channel.

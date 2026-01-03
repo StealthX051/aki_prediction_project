@@ -186,6 +186,11 @@ class DisplayDictionary:
     def model_type_label(self, model_key: str, *, use_short: bool = False) -> str:
         return self._section_label(self.model_types, model_key, use_short=use_short)
 
+    def waveform_label(self, waveform_key: str, *, use_short: bool = False) -> str:
+        """Return the formatted waveform label."""
+
+        return self._section_label(self.waveforms, waveform_key, use_short=use_short)
+
     def feature_set_labels(self, fallback: Optional[Dict[str, str]] = None) -> Dict[str, str]:
         """Return mapping of feature set key to label, with optional fallbacks."""
 
