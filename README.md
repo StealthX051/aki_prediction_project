@@ -177,6 +177,11 @@ Key behaviors:
 
 Generates publication-ready tables and figures for both the **Primary Pipeline** (Catch22/XGBoost) and the **Experimental Pipeline** (Aeon/Multirocket).
 
+Display labels for outcomes, branches, feature sets, waveforms, and Catch22
+statistics are centralized in `metadata/display_dictionary.json`. See
+`reporting/DISPLAY_DICTIONARY.md` for the schema and helper utilities that keep
+tables/figures synchronized.
+
 *   **Artifact Validation & Aggregation**: `results_recreation/metrics_summary.py` crawls `results/**/models/**/predictions/test.csv`, confirms that the paired `artifacts/calibration.json` and `artifacts/threshold.json` from Step 7 are present, and computes held-out metrics using the stored threshold for each configuration. A consolidated metrics table is written to `results/tables/metrics_summary.csv` (and optional bootstrap samples to Parquet).
 *   **Unified Reporting**: `results_analysis.py` consumes the consolidated metrics to generate Word, PDF, and HTML tables plus ROC/PR/Calibration figures across both pipelines. Reports display distinct rows for each model type (`xgboost` vs. `ebm`) within every Outcome × Branch × Feature Set combination.
 *   **Calibration & Thresholds**: No report-time refitting occurs. The recalibration parameters and thresholds learned from OOF training scores in Step 7 are **fixed** and reapplied to the test predictions when computing metrics and bootstraps.

@@ -1,0 +1,250 @@
+{
+  "schema_version": 1,
+  "outcomes": {
+    "any_aki": {
+      "label": "Any AKI",
+      "short_label": "AKI"
+    },
+    "y_severe_aki": {
+      "label": "Severe AKI",
+      "short_label": "Severe AKI"
+    },
+    "y_inhosp_mortality": {
+      "label": "In-hospital mortality",
+      "short_label": "Mortality"
+    },
+    "y_icu_admit": {
+      "label": "ICU admission",
+      "short_label": "ICU"
+    },
+    "y_prolonged_los_postop": {
+      "label": "Prolonged postoperative LOS",
+      "short_label": "Prolonged LOS"
+    }
+  },
+  "branches": {
+    "windowed": {
+      "label": "Segmented (windowed)",
+      "short_label": "Windowed"
+    },
+    "non_windowed": {
+      "label": "Full case",
+      "short_label": "Full"
+    }
+  },
+  "model_types": {
+    "xgboost": {
+      "label": "Extreme Gradient Boosting",
+      "short_label": "XGBoost"
+    },
+    "ebm": {
+      "label": "Explainable Boosting Model",
+      "short_label": "EBM"
+    },
+    "autogluon": {
+      "label": "AutoGluon Tabular",
+      "short_label": "AutoGluon"
+    }
+  },
+  "feature_sets": {
+    "preop_only": {
+      "label": "Preoperative only"
+    },
+    "all_waveforms": {
+      "label": "All waveforms"
+    },
+    "preop_and_all_waveforms": {
+      "label": "Preoperative + all waveforms"
+    },
+    "awp_only": {
+      "label": "Airway pressure only"
+    },
+    "co2_only": {
+      "label": "CO2 only"
+    },
+    "ecg_only": {
+      "label": "ECG only"
+    },
+    "pleth_only": {
+      "label": "Plethysmography only"
+    },
+    "monitors_only": {
+      "label": "Standard monitors only"
+    },
+    "ventilator_only": {
+      "label": "Ventilator only"
+    },
+    "preop_and_awp": {
+      "label": "Preoperative + airway pressure"
+    },
+    "preop_and_co2": {
+      "label": "Preoperative + CO2"
+    },
+    "preop_and_ecg": {
+      "label": "Preoperative + ECG"
+    },
+    "preop_and_pleth": {
+      "label": "Preoperative + plethysmography"
+    },
+    "preop_and_all_minus_awp": {
+      "label": "Preoperative + all (no airway pressure)"
+    },
+    "preop_and_all_minus_co2": {
+      "label": "Preoperative + all (no CO2)"
+    },
+    "preop_and_all_minus_ecg": {
+      "label": "Preoperative + all (no ECG)"
+    },
+    "preop_and_all_minus_pleth": {
+      "label": "Preoperative + all (no plethysmography)"
+    },
+    "all_fused": {
+      "label": "All channels (fused)"
+    },
+    "all_waveonly": {
+      "label": "All channels (waveform only)"
+    }
+  },
+  "waveforms": {
+    "SNUADC/PLETH": {
+      "label": "Plethysmography",
+      "short_label": "Pleth",
+      "unit": "%"
+    },
+    "SNUADC/ECG_II": {
+      "label": "ECG Lead II",
+      "short_label": "ECG II",
+      "unit": "mV"
+    },
+    "SNUADC/ECG_V5": {
+      "label": "ECG Lead V5",
+      "short_label": "ECG V5",
+      "unit": "mV"
+    },
+    "Primus/CO2": {
+      "label": "End-tidal CO₂",
+      "short_label": "EtCO₂",
+      "unit": "mmHg"
+    },
+    "Primus/AWP": {
+      "label": "Airway pressure",
+      "short_label": "AWP",
+      "unit": "cmH₂O"
+    }
+  },
+  "catch22_statistics": {
+    "DN_HistogramMode_5": {
+      "label": "Histogram mode (5 bins)"
+    },
+    "DN_HistogramMode_10": {
+      "label": "Histogram mode (10 bins)"
+    },
+    "CO_f1ecac": {
+      "label": "First 1/e crossing of autocorrelation"
+    },
+    "CO_FirstMin_ac": {
+      "label": "First minimum of autocorrelation"
+    },
+    "CO_HistogramAMI_even_2_5": {
+      "label": "Auto mutual information (even bins)"
+    },
+    "CO_trev_1_num": {
+      "label": "Time reversibility statistic"
+    },
+    "MD_hrv_classic_pnn40": {
+      "label": "pNN40-style variability"
+    },
+    "SB_BinaryStats_mean_longstretch1": {
+      "label": "Longest stretch above mean"
+    },
+    "SB_TransitionMatrix_3ac_sumdiagcov": {
+      "label": "3-state transition matrix diagonal covariance"
+    },
+    "PD_PeriodicityWang_th0_01": {
+      "label": "Periodicity (Wang, 0.01 threshold)"
+    },
+    "CO_Embed2_Dist_tau_d_expfit_meandiff": {
+      "label": "Embed2 distance (exp-fit mean diff)"
+    },
+    "IN_AutoMutualInfoStats_40_gaussian_fmmi": {
+      "label": "First minimum of auto mutual information (Gaussian)"
+    },
+    "FC_LocalSimple_mean1_tauresrat": {
+      "label": "Local mean (lag 1) time-resolved ratio"
+    },
+    "DN_OutlierInclude_p_001_mdrmd": {
+      "label": "Right-tail outlier proportion (0.1%)"
+    },
+    "DN_OutlierInclude_n_001_mdrmd": {
+      "label": "Left-tail outlier proportion (0.1%)"
+    },
+    "SP_Summaries_welch_rect_area_5_1": {
+      "label": "Welch spectral area"
+    },
+    "SB_BinaryStats_diff_longstretch0": {
+      "label": "Longest stretch of successive differences"
+    },
+    "SB_MotifThree_quantile_hh": {
+      "label": "High-high motif frequency"
+    },
+    "SC_FluctAnal_2_rsrangefit_50_1_logi_prop_r1": {
+      "label": "Rescaled range fluctuation (50%)"
+    },
+    "SC_FluctAnal_2_dfa_50_1_2_logi_prop_r1": {
+      "label": "DFA fluctuation (50%)"
+    },
+    "SP_Summaries_welch_rect_centroid": {
+      "label": "Welch spectral centroid"
+    },
+    "FC_LocalSimple_mean3_stderr": {
+      "label": "Local mean (lag 3) standard error"
+    },
+    "DN_Mean": {
+      "label": "Mean"
+    },
+    "DN_Spread_Std": {
+      "label": "Standard deviation"
+    }
+  },
+  "catch22_aggregates": {
+    "mean": "Mean across windows",
+    "std": "Standard deviation across windows",
+    "min": "Minimum across windows",
+    "max": "Maximum across windows"
+  },
+  "features": {
+    "age": {
+      "label": "Age",
+      "unit": "years"
+    },
+    "sex": {
+      "label": "Sex"
+    },
+    "bmi": {
+      "label": "Body mass index",
+      "short_label": "BMI",
+      "unit": "kg/m²"
+    },
+    "preop_egfr_ckdepi_2021": {
+      "label": "Estimated GFR (CKD-EPI 2021)",
+      "short_label": "eGFR",
+      "unit": "mL/min/1.73 m²"
+    },
+    "preop_cr": {
+      "label": "Serum creatinine",
+      "short_label": "Creatinine",
+      "unit": "mg/dL"
+    },
+    "inpatient_preop": {
+      "label": "Inpatient prior to surgery"
+    },
+    "preop_htn": {
+      "label": "Hypertension history",
+      "short_label": "Hypertension"
+    },
+    "preop_dm": {
+      "label": "Diabetes history",
+      "short_label": "Diabetes"
+    }
+  }
+}

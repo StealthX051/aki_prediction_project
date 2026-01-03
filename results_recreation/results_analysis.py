@@ -20,6 +20,8 @@ from sklearn.metrics import (
     roc_curve,
 )
 
+from reporting.display_dictionary import load_display_dictionary
+
 # Constants
 RESULTS_DIR = Path(os.getenv("RESULTS_DIR", Path(__file__).resolve().parent.parent / 'results'))
 FIGURES_DIR = RESULTS_DIR / 'figures'
@@ -31,7 +33,7 @@ TABLES_DIR.mkdir(parents=True, exist_ok=True)
 
 logger = logging.getLogger(__name__)
 
-FEATURE_SET_MAPPING = {
+DEFAULT_FEATURE_SET_MAPPING = {
     'preop_only': 'Preoperative Only',
     'all_waveforms': 'All Waveforms',
     'preop_and_all_waveforms': 'Preop + All Waveforms',
@@ -53,6 +55,17 @@ FEATURE_SET_MAPPING = {
     'all_fused': 'All Channels (Fused)',
     'all_waveonly': 'All Channels (Waveform Only)',
 }
+
+try:
+    DISPLAY_DICTIONARY = load_display_dictionary()
+    FEATURE_SET_MAPPING = DISPLAY_DICTIONARY.feature_set_labels(DEFAULT_FEATURE_SET_MAPPING)
+except FileNotFoundError:
+    logger.warning(
+        "Display dictionary not found; using default feature set labels only. "
+        "Create metadata/display_dictionary.json to override."
+    )
+    DISPLAY_DICTIONARY = None
+    FEATURE_SET_MAPPING = DEFAULT_FEATURE_SET_MAPPING
 
 NEURIPS_CSS = """
 <style>
