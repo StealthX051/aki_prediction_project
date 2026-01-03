@@ -1,4 +1,5 @@
 import json
+import logging
 import shutil
 import sys
 import types
@@ -220,6 +221,57 @@ def test_export_ebm_local_attributions(monkeypatch: pytest.MonkeyPatch, tmp_path
     assert readme_path.is_file()
 
     shutil.rmtree(results_dir, ignore_errors=True)
+
+
+def test_plotly_export_warns_without_kaleido(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+):
+    class DummyFigure:
+        def __init__(self, data=None):
+            self.data = data
+
+        def update_layout(self, **kwargs):
+            return self
+
+        def update_yaxes(self, **kwargs):
+            return self
+
+        def write_html(self, path):
+            Path(path).write_text("html")
+
+        def write_image(self, path):
+            raise ValueError("Image export requires kaleido")
+
+    go_module = types.SimpleNamespace(Bar=lambda **kwargs: {"bar": kwargs}, Figure=DummyFigure)
+    plotly_module = types.SimpleNamespace(graph_objects=go_module)
+    monkeypatch.setitem(sys.modules, "plotly", plotly_module)
+    monkeypatch.setitem(sys.modules, "plotly.graph_objects", go_module)
+
+    destination = tmp_path / "plotly_importances"
+
+    with caplog.at_level(logging.WARNING):
+        train_module._export_plotly_bar(
+            ["feature1", "feature2"], [0.2, 0.8], destination, "EBM Term Importances"
+        )
+
+    assert (tmp_path / "plotly_importances.html").is_file()
+    assert not (tmp_path / "plotly_importances.png").exists()
+    assert "Kaleido is unavailable" in caplog.text
+
+
+def test_plotly_export_skips_when_missing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+):
+    monkeypatch.delitem(sys.modules, "plotly", raising=False)
+    monkeypatch.delitem(sys.modules, "plotly.graph_objects", raising=False)
+
+    destination = tmp_path / "missing_plotly"
+
+    with caplog.at_level(logging.WARNING):
+        train_module._export_plotly_bar(["feature1"], [0.5], destination, "Missing Plotly")
+
+    assert not (tmp_path / "missing_plotly.html").exists()
+    assert "Plotly is not installed" in caplog.text
 
 
 class FakeStudy:

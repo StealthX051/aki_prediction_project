@@ -140,6 +140,54 @@ def _plot_local_contributions(local_payload: Dict, destination: Path, max_featur
     plt.close()
 
 
+def _export_plotly_bar(
+    labels: Sequence[str], values: Sequence[float], destination: Path, title: str
+) -> None:
+    """Export a horizontal bar chart with Plotly, warning if Kaleido is missing.
+
+    The HTML export is always attempted first so interactive artifacts are
+    preserved even when static image dependencies are unavailable.
+    """
+
+    label_list = list(labels)
+    value_list = list(values)
+
+    if not label_list or not value_list:
+        logger.warning("No data available for Plotly export of %s", title)
+        return
+
+    try:
+        import plotly.graph_objects as go  # type: ignore
+    except ImportError:
+        logger.warning(
+            "Plotly is not installed; skipping %s Plotly export while retaining JSON/HTML artifacts.",
+            title,
+        )
+        return
+
+    fig = go.Figure(go.Bar(x=value_list, y=label_list, orientation="h"))
+    fig.update_layout(title=title, xaxis_title="Importance")
+    fig.update_yaxes(autorange="reversed")
+
+    html_path = destination.with_suffix(".html")
+    try:
+        fig.write_html(str(html_path))
+    except Exception:
+        logger.exception("Failed to write Plotly HTML for %s; continuing without it.", title)
+
+    image_path = destination.with_suffix(".png")
+    try:
+        fig.write_image(str(image_path))
+    except ValueError as exc:
+        logger.warning(
+            "Kaleido is unavailable; saved %s HTML but skipped static image export: %s",
+            title,
+            exc,
+        )
+    except Exception:
+        logger.exception("Failed to write Plotly image for %s; continuing with HTML only.", title)
+
+
 def export_ebm_explanations(
     model,
     artifacts_dir: Path,
@@ -177,6 +225,12 @@ def export_ebm_explanations(
         xai_dir / "global_importances.png",
         title="EBM Term Importances",
     )
+    _export_plotly_bar(
+        term_names,
+        term_importances,
+        xai_dir / "global_importances_plotly",
+        title="EBM Term Importances",
+    )
 
     interactions = []
     term_features: Sequence[Sequence[int]] = getattr(model, "term_features_", [])
@@ -197,6 +251,12 @@ def export_ebm_explanations(
         [item["name"] for item in interactions],
         [item["importance"] for item in interactions],
         xai_dir / "interaction_importances.png",
+        title="EBM Interaction Importances",
+    )
+    _export_plotly_bar(
+        [item["name"] for item in interactions],
+        [item["importance"] for item in interactions],
+        xai_dir / "interaction_importances_plotly",
         title="EBM Interaction Importances",
     )
 
