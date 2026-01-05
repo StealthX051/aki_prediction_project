@@ -62,8 +62,10 @@ paths (`DATA_DIR`, `PROCESSED_DIR`, `RESULTS_DIR`) if they are already set.
 `reporting/cohort_flow.py` transforms the saved cohort counts from
 `step_01_cohort_construction.py` into a vertical flow diagram. Provide the
 counts JSON (default: `results/metadata/cohort_flow_counts.json`) and an optional
-custom display dictionary path. Outputs: `results/figures/cohort_flow.svg` and
-`cohort_flow.png`.
+custom display dictionary path. The renderer skips no-op/increasing steps, shows
+per-step removals, applies friendly labels, and draws the AKI False/True split
+when `label_split` is present in the JSON. Outputs: `results/figures/cohort_flow.svg`
+and `cohort_flow.png`.
 
 ```bash
 python -m reporting.cohort_flow \
@@ -99,7 +101,8 @@ render 0/1 as False/True, and one-hot categoricals use human-readable labels fro
 `reporting/missingness_table.py` computes per-feature missing counts and
 percentages for the merged modeling dataset
 (`data/processed/aki_features_master_wide.csv` by default), excluding
-identifiers and outcomes. Outputs are written to:
+identifiers and outcomes. Headers are human-friendly and one-hot columns resolve
+to display labels. Outputs are written to:
 - `results/tables/missingness_table.csv`
 - `results/tables/missingness_table.html`
 

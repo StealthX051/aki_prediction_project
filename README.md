@@ -63,7 +63,9 @@ python -m data_preparation.step_01_cohort_construction
 ```
 
 To regenerate a cohort flow diagram from saved counts/metadata without rerunning
-the full pipeline, supply the JSON counts file to the reporting utility:
+the full pipeline, supply the JSON counts file to the reporting utility. The renderer
+skips no-op steps, uses friendly labels, shows per-step removals, and draws the final
+label split (AKI False/True) when present in the counts JSON produced by step 01.
 
 ```bash
 python -m reporting.cohort_flow --counts-file results/metadata/cohort_flow_counts.json
@@ -261,9 +263,11 @@ These helpers live under `reporting/` and reuse the shared display dictionary
 consistent across manuscripts and dashboards.
 
 - **Cohort flow diagram** — Recreate the consort-style flow from saved counts
-  emitted by `step_01_cohort_construction.py`. The script expects a JSON file
-  with stage counts (default: `results/metadata/cohort_flow_counts.json`) and
-  writes SVG/PNG under `results/figures/`.
+  emitted by `step_01_cohort_construction.py`. The renderer skips no-op/increasing
+  steps, shows per-step removals, uses friendly labels (waveforms, filters), and
+  draws the AKI False/True split when `label_split` is present in the JSON (default:
+  `results/metadata/cohort_flow_counts.json`). Figures are written to SVG/PNG under
+  `results/figures/`.
 
   ```bash
   python -m reporting.cohort_flow \
@@ -272,22 +276,24 @@ consistent across manuscripts and dashboards.
   ```
 
 - **Preoperative descriptive table** — Summarize baseline characteristics using
-  the raw (pre-encoding) cohort CSV so categorical levels are available. Each
-  continuous feature undergoes a Shapiro–Wilk test; normally distributed
-  variables are reported as mean ± SD, otherwise median (IQR). Categorical
-  features are reported as counts and percentages. Outputs land in HTML/LaTeX
-  and DOCX at `results/tables/preop_descriptives.*`.
+  the raw (pre-encoding) cohort CSV for categoricals plus the winsorized
+  `aki_preop_processed.csv` for continuous features. Each continuous variable
+  undergoes a Shapiro–Wilk test; report mean ± SD if normal, otherwise median (IQR).
+  Binary categoricals render as False/True; all labels/units come from the display
+  dictionary. Outputs: HTML/LaTeX/DOCX at `results/tables/preop_descriptives.*`.
 
   ```bash
   python -m reporting.preop_descriptives \
     --dataset data/processed/aki_pleth_ecg_co2_awp.csv \
+    --processed-dataset data/processed/aki_preop_processed.csv \
     --display-dictionary metadata/display_dictionary.json
   ```
 
 - **Model-feature missingness table** — Computes per-column missingness for the
   merged modeling dataset (default: `data/processed/aki_features_master_wide.csv`)
-  while skipping identifiers and outcomes. The table includes both internal and
-  publication-ready names and is written to CSV/HTML in `results/tables/`.
+  while skipping identifiers and outcomes. Columns are human-readable (friendly
+  headers, one-hot labels resolved via the display dictionary) and written to
+  CSV/HTML in `results/tables/`.
 
   ```bash
   python -m reporting.missingness_table \

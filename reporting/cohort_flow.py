@@ -37,6 +37,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, List, Mapping, MutableSequence, Optional, Sequence, Tuple, Union
+import textwrap
 
 import matplotlib.pyplot as plt
 from matplotlib.patches import FancyArrowPatch, FancyBboxPatch
@@ -57,6 +58,7 @@ class CohortStage:
 
     title: str
     count: int
+    removed: Optional[int] = None
 
 
 @dataclass(frozen=True)
@@ -124,6 +126,13 @@ def normalize_counts(
     raw_counts: Mapping[str, Any], display_dictionary: Optional[DisplayDictionary] = None
 ) -> CohortFlowData:
     """Convert raw count metadata into ordered :class:`CohortStage` entries."""
+
+    filter_label_map = {
+        "filter_preop_cr": "Preop creatinine available",
+        "ensure_sample_independence": "Sampling independence",
+        "filter_postop_cr": "Postop creatinine available",
+        "add_aki_label": "AKI label derived",
+    }
 
     def _parse_outcome_split(raw_counts_inner: Mapping[str, Any]) -> Optional[OutcomeSplit]:
         split_raw = (
@@ -199,7 +208,9 @@ def normalize_counts(
 
     for entry in custom_filters:
         if isinstance(entry, Mapping):
-            name = str(entry.get("label") or entry.get("name") or "Custom filter")
+            raw_name = str(entry.get("name") or "Custom filter")
+            label = str(entry.get("label") or filter_label_map.get(raw_name) or raw_name.replace("_", " ").title())
+            name = label
             count = _extract_count(entry)
         else:
             logger.warning("Skipping unrecognized custom filter entry: %s", entry)
@@ -219,7 +230,28 @@ def normalize_counts(
 
     outcome_split = _parse_outcome_split(raw_counts)
 
-    return CohortFlowData(stages=list(stages), outcome_split=outcome_split)
+    # Drop non-filtering stages (no change) except first and final; attach removed deltas.
+    filtered: List[CohortStage] = []
+    prev_count: Optional[int] = None
+    for idx, stage in enumerate(stages):
+        if prev_count is None:
+            filtered.append(stage)
+            prev_count = stage.count
+            continue
+
+        delta = prev_count - stage.count
+        is_final = stage.title == "Final cohort" or idx == len(stages) - 1
+        if delta == 0 and not is_final:
+            # Skip no-op steps
+            continue
+        if delta < 0 and not is_final:
+            logger.warning("Skipping stage %s because count increased (%s -> %s)", stage.title, prev_count, stage.count)
+            continue
+
+        filtered.append(CohortStage(title=stage.title, count=stage.count, removed=delta if delta > 0 else None))
+        prev_count = stage.count
+
+    return CohortFlowData(stages=filtered, outcome_split=outcome_split)
 
 
 def render_cohort_flow(
@@ -244,15 +276,17 @@ def render_cohort_flow(
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    fig_height = max(3.5, 1.6 * (len(stages) + (1 if outcome_split else 0)))
-    fig, ax = plt.subplots(figsize=(8, fig_height))
+    vertical_steps = len(stages) + (1 if outcome_split else 0)
+    fig_height = max(6.0, (1.8 * vertical_steps))
+    fig_width = 8.5
+    fig, ax = plt.subplots(figsize=(fig_width, fig_height))
     ax.axis("off")
 
-    box_width = 6
-    box_height = 0.9
-    gap = 0.7
-    x0 = 1
-    y_top = (box_height + gap) * (len(stages) - 1)
+    box_width = 6.4
+    box_height = 1.0
+    gap = 0.8
+    x0 = 1.0
+    y_top = (box_height + gap) * (len(stages) - 1) + 0.5
     lowest_y = y_top
 
     for idx, stage in enumerate(stages):
@@ -262,40 +296,44 @@ def render_cohort_flow(
             (x0, y),
             box_width,
             box_height,
-            boxstyle="round,pad=0.4",
-            linewidth=1.5,
-            facecolor="#f2f2f2",
-            edgecolor="#4b5563",
+            boxstyle="round,pad=0.35,rounding_size=0.15",
+            linewidth=1.2,
+            facecolor="#f8fafc",
+            edgecolor="#1f2937",
         )
         ax.add_patch(box)
 
-        text = f"{stage.title}\n n = {stage.count:,}"
+        wrapped_title = "\n".join(textwrap.wrap(stage.title, width=32)) or stage.title
+        removed_text = f"\nRemoved: {stage.removed:,}" if stage.removed else ""
+        text = f"{wrapped_title}\n n = {stage.count:,}{removed_text}"
         ax.text(
             x0 + box_width / 2,
             y + box_height / 2,
             text,
             ha="center",
             va="center",
-            fontsize=11,
+            fontsize=11.5,
             wrap=True,
         )
 
         if idx < len(stages) - 1:
             arrow = FancyArrowPatch(
-                (x0 + box_width / 2, y),
-                (x0 + box_width / 2, y - gap),
-                arrowstyle="->",
-                mutation_scale=12,
+                (x0 + box_width / 2, y - 0.05),
+                (x0 + box_width / 2, y - gap + 0.05),
+                arrowstyle="-|>",
+                mutation_scale=10,
                 linewidth=1.2,
-                color="#4b5563",
+                color="#64748b",
+                shrinkA=4,
+                shrinkB=4,
             )
             ax.add_patch(arrow)
 
-    split_box_width = 3.5
-    split_spacing = 0.5
+        split_box_width = 4.0
+        split_spacing = 0.75
 
     if outcome_split:
-        split_y = lowest_y - (box_height + gap)
+        split_y = lowest_y - (box_height + gap + 0.2)
         total = outcome_split.total or 1
 
         left_x = x0 - split_box_width - split_spacing
@@ -330,12 +368,12 @@ def render_cohort_flow(
         final_center_y = lowest_y
         for target_x in (left_x + split_box_width / 2, right_x + split_box_width / 2):
             arrow = FancyArrowPatch(
-                (final_center_x, final_center_y),
-                (target_x, split_y + box_height),
-                arrowstyle="->",
-                mutation_scale=12,
-                linewidth=1.2,
-                color="#4b5563",
+                (final_center_x, final_center_y - 0.05),
+                (target_x, split_y + box_height + 0.05),
+                arrowstyle="-|>",
+                mutation_scale=14,
+                linewidth=1.4,
+                color="#475569",
             )
             ax.add_patch(arrow)
 
