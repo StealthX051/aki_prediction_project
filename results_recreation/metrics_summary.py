@@ -10,10 +10,13 @@ from __future__ import annotations
 
 import argparse
 import logging
+import sys
+from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
+from joblib import Parallel, delayed
 import numpy as np
 import pandas as pd
 from sklearn.metrics import (
@@ -26,6 +29,10 @@ from sklearn.metrics import (
     recall_score,
     roc_auc_score,
 )
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from model_creation.prediction_io import REQUIRED_PREDICTION_COLUMNS, validate_prediction_dataframe
 
@@ -167,10 +174,17 @@ def compute_point_metrics(pred_set: PredictionSet) -> Dict[str, float]:
     y_prob = pred_set.df["y_prob_calibrated"].values
     y_pred = (y_prob >= pred_set.threshold).astype(int)
 
+    return _compute_metrics_arrays(y_true, y_prob, pred_set.threshold)
+
+
+def _compute_metrics_arrays(y_true: np.ndarray, y_prob: np.ndarray, threshold: float) -> Dict[str, float]:
+    """Fast path to compute metrics without constructing a PredictionSet."""
+    y_pred = (y_prob >= threshold).astype(int)
+
     metrics = {
         "n": len(y_true),
         "prevalence": float(np.mean(y_true)),
-        "threshold": pred_set.threshold,
+        "threshold": threshold,
         "auroc": _safe_metric(roc_auc_score, y_true, y_prob),
         "auprc": _safe_metric(average_precision_score, y_true, y_prob),
         "brier": _safe_metric(brier_score_loss, y_true, y_prob),
@@ -192,33 +206,57 @@ def compute_point_metrics(pred_set: PredictionSet) -> Dict[str, float]:
     return metrics
 
 
-def _bootstrap_metrics(pred_set: PredictionSet, n_bootstrap: int, seed: int = 0) -> pd.DataFrame:
+def _generate_bootstrap_indices(
+    y_true: np.ndarray, n_bootstrap: int, stratified: bool, seed: int
+) -> List[np.ndarray]:
+    """Create bootstrap index sets, optionally stratified by outcome."""
+
     rng = np.random.default_rng(seed)
+    indices = np.arange(len(y_true))
+
+    if not stratified:
+        return [rng.choice(indices, size=len(indices), replace=True) for _ in range(n_bootstrap)]
+
+    pos_idx = indices[y_true == 1]
+    neg_idx = indices[y_true == 0]
+
+    # If a class is missing, fall back to unstratified to avoid degenerate samples.
+    if len(pos_idx) == 0 or len(neg_idx) == 0:
+        logger.warning("Stratified bootstrap requested but one class is missing; falling back to unstratified.")
+        return [rng.choice(indices, size=len(indices), replace=True) for _ in range(n_bootstrap)]
+
+    samples: List[np.ndarray] = []
+    for _ in range(n_bootstrap):
+        pos_sample = rng.choice(pos_idx, size=len(pos_idx), replace=True)
+        neg_sample = rng.choice(neg_idx, size=len(neg_idx), replace=True)
+        samples.append(np.concatenate([pos_sample, neg_sample]))
+    return samples
+
+
+def _bootstrap_metrics(
+    pred_set: PredictionSet,
+    n_bootstrap: int,
+    seed: int = 0,
+    stratified: bool = True,
+    indices_list: Optional[Sequence[np.ndarray]] = None,
+) -> pd.DataFrame:
     df = pred_set.df
     y_true = df["y_true"].values
     y_prob = df["y_prob_calibrated"].values
-    indices = np.arange(len(df))
+
+    if indices_list is None:
+        indices_list = _generate_bootstrap_indices(y_true, n_bootstrap, stratified=stratified, seed=seed)
 
     records = []
-    for i in range(n_bootstrap):
-        sample_idx = rng.choice(indices, size=len(indices), replace=True)
-        sample_df = pd.DataFrame(
-            {
-                "y_true": y_true[sample_idx],
-                "y_prob_calibrated": y_prob[sample_idx],
-            }
-        )
-        sample_set = PredictionSet(
-            path=pred_set.path,
-            df=sample_df,
-            threshold=pred_set.threshold,
-            outcome=pred_set.outcome,
-            branch=pred_set.branch,
-            feature_set=pred_set.feature_set,
-            model_name=pred_set.model_name,
-            pipeline=pred_set.pipeline,
-        )
-        metrics = compute_point_metrics(sample_set)
+    for i, sample_idx in enumerate(indices_list):
+        y_true_sample = y_true[sample_idx]
+        y_prob_sample = y_prob[sample_idx]
+
+        # Skip replicate if only one class is present after sampling.
+        if len(np.unique(y_true_sample)) < 2:
+            continue
+
+        metrics = _compute_metrics_arrays(y_true_sample, y_prob_sample, pred_set.threshold)
         metrics.update(
             {
                 "outcome": pred_set.outcome,
@@ -235,10 +273,61 @@ def _bootstrap_metrics(pred_set: PredictionSet, n_bootstrap: int, seed: int = 0)
 
 
 def summarize(
-    prediction_sets: Iterable[PredictionSet], n_bootstrap: int = 1000
+    prediction_sets: Iterable[PredictionSet],
+    n_bootstrap: int = 1000,
+    stratified_bootstrap: bool = True,
+    bootstrap_seed: int = 0,
+    n_jobs: int = -1,
+    parallel_backend: str = "threads",
+    delta_mode: str = "none",
+    reference_feature_set: str = "preop_only",
+    reference_model_name: Optional[str] = None,
 ) -> Tuple[pd.DataFrame, Optional[pd.DataFrame]]:
     summary_rows: List[Dict[str, object]] = []
     bootstrap_frames: List[pd.DataFrame] = []
+
+    prediction_sets = list(prediction_sets)
+    logger.info(
+        "Summarizing %d prediction files (bootstrap=%d, stratified=%s, n_jobs=%s)",
+        len(prediction_sets),
+        n_bootstrap,
+        stratified_bootstrap,
+        n_jobs,
+    )
+
+    pairing_groups: Dict[Tuple[str, str, Optional[str]], List[PredictionSet]] = defaultdict(list)
+    for pred_set in prediction_sets:
+        grouping_key = (pred_set.outcome, pred_set.branch, pred_set.pipeline)
+        pairing_groups[grouping_key].append(pred_set)
+
+    shared_indices: Dict[Tuple[str, str, Optional[str]], Optional[List[np.ndarray]]] = {}
+    paired_groups: set = set()
+    if n_bootstrap > 0:
+        for key, group_sets in pairing_groups.items():
+            first = group_sets[0]
+            base_len = len(first.df)
+            if any(len(ps.df) != base_len for ps in group_sets):
+                logger.warning(
+                    "Grouping %s has mismatched prediction lengths; skipping paired bootstrap for this group.",
+                    key,
+                )
+                shared_indices[key] = None
+                continue
+
+            shared_indices[key] = _generate_bootstrap_indices(
+                first.df["y_true"].values,
+                n_bootstrap,
+                stratified=stratified_bootstrap,
+                seed=bootstrap_seed,
+            )
+            paired_groups.add(key)
+            logger.info(
+                "Prepared bootstrap indices for group %s (models=%d, cases=%d, reps=%d)",
+                key,
+                len(group_sets),
+                base_len,
+                n_bootstrap,
+            )
 
     for pred_set in prediction_sets:
         metrics = compute_point_metrics(pred_set)
@@ -253,8 +342,23 @@ def summarize(
             row[key] = value
         summary_rows.append(row)
 
-        if n_bootstrap > 0:
-            bootstrap_frames.append(_bootstrap_metrics(pred_set, n_bootstrap))
+    if n_bootstrap > 0:
+        tasks = []
+        for pred_set in prediction_sets:
+            grouping_key = (pred_set.outcome, pred_set.branch, pred_set.pipeline)
+            indices_list = shared_indices.get(grouping_key)
+            tasks.append(
+                delayed(_bootstrap_metrics)(
+                    pred_set,
+                    n_bootstrap,
+                    seed=bootstrap_seed,
+                    stratified=stratified_bootstrap,
+                    indices_list=indices_list,
+                )
+            )
+
+        logger.info("Launching bootstrap jobs: %d tasks (backend=%s)", len(tasks), parallel_backend)
+        bootstrap_frames = Parallel(n_jobs=n_jobs, backend="loky" if parallel_backend == "processes" else "threading")(tasks)
 
     summary_df = pd.DataFrame(summary_rows)
 
@@ -302,7 +406,119 @@ def summarize(
                     summary_df.loc[idx, f"{col}_lower"] = lower
                     summary_df.loc[idx, f"{col}_upper"] = upper
 
+        if delta_mode == "reference":
+            _attach_delta_cis(
+                summary_df,
+                bootstrap_df,
+                ci_cols,
+                paired_groups=paired_groups,
+                reference_feature_set=reference_feature_set,
+                reference_model_name=reference_model_name,
+            )
+
     return summary_df, bootstrap_df
+
+
+def _attach_delta_cis(
+    summary_df: pd.DataFrame,
+    bootstrap_df: pd.DataFrame,
+    metric_cols: Sequence[str],
+    *,
+    paired_groups: set,
+    reference_feature_set: str,
+    reference_model_name: Optional[str],
+) -> None:
+    """Compute delta CIs (target - reference) within each outcome/branch/pipeline group."""
+
+    grouping_cols = ["outcome", "branch", "pipeline"]
+    bootstrap_grouped = bootstrap_df.groupby(grouping_cols, dropna=False)
+
+    for group_key, group_df in bootstrap_grouped:
+        if group_key not in paired_groups:
+            logger.warning("Skipping delta CIs for unpaired group %s.", group_key)
+            continue
+
+        outcome, branch, pipeline = group_key
+        # Locate reference rows for this group.
+        ref_candidates = group_df[group_df["feature_set"] == reference_feature_set]
+        if reference_model_name:
+            ref_candidates = ref_candidates[ref_candidates["model_name"] == reference_model_name]
+
+        if ref_candidates.empty:
+            logger.warning(
+                "No reference rows found for group %s with feature_set=%s%s; skipping delta CIs.",
+                group_key,
+                reference_feature_set,
+                f", model_name={reference_model_name}" if reference_model_name else "",
+            )
+            continue
+
+        # If multiple references remain, pick the first sorted by model_name for determinism.
+        ref_model_name = ref_candidates.sort_values("model_name").iloc[0]["model_name"]
+        ref_bootstrap = ref_candidates[ref_candidates["model_name"] == ref_model_name]
+
+        ref_summary_row = summary_df[
+            (summary_df["outcome"] == outcome)
+            & (summary_df["branch"] == branch)
+            & (summary_df["pipeline"] == pipeline)
+            & (summary_df["feature_set"] == reference_feature_set)
+            & (summary_df["model_name"] == ref_model_name)
+        ]
+        ref_point = ref_summary_row.iloc[0] if not ref_summary_row.empty else None
+
+        # Build fast lookup for reference per bootstrap_id.
+        ref_lookup = ref_bootstrap.set_index("bootstrap_id")
+
+        # Iterate target models within the same grouping (including other feature sets).
+        target_rows = summary_df[
+            (summary_df["outcome"] == outcome)
+            & (summary_df["branch"] == branch)
+            & (summary_df["pipeline"] == pipeline)
+        ]
+
+        for idx, target_row in target_rows.iterrows():
+            if (
+                target_row["feature_set"] == reference_feature_set
+                and (reference_model_name is None or target_row["model_name"] == reference_model_name)
+            ):
+                # Reference row: deltas are zero by definition.
+                for col in metric_cols:
+                    summary_df.loc[idx, f"delta_{col}"] = 0.0
+                    summary_df.loc[idx, f"delta_{col}_lower"] = 0.0
+                    summary_df.loc[idx, f"delta_{col}_upper"] = 0.0
+                continue
+
+            target_bootstrap = group_df[
+                (group_df["feature_set"] == target_row["feature_set"])
+                & (group_df["model_name"] == target_row["model_name"])
+            ].set_index("bootstrap_id")
+
+            # Align on bootstrap_id; require overlapping indices.
+            joined_ids = target_bootstrap.index.intersection(ref_lookup.index)
+            if joined_ids.empty:
+                logger.warning(
+                    "No overlapping bootstrap samples for delta comparison in group %s between %s/%s and reference %s/%s.",
+                    group_key,
+                    target_row["feature_set"],
+                    target_row["model_name"],
+                    reference_feature_set,
+                    ref_model_name,
+                )
+                continue
+
+            for col in metric_cols:
+                if col not in target_bootstrap.columns or col not in ref_lookup.columns:
+                    continue
+                deltas = target_bootstrap.loc[joined_ids, col] - ref_lookup.loc[joined_ids, col]
+                deltas = deltas.dropna()
+                if deltas.empty:
+                    continue
+                lower, upper = np.percentile(deltas, [2.5, 97.5])
+                ref_point_val = ref_point.get(col, float("nan")) if ref_point is not None else float("nan")
+                point_delta = target_row.get(col, float("nan")) - ref_point_val
+                summary_df.loc[idx, f"delta_{col}"] = point_delta
+                summary_df.loc[idx, f"delta_{col}_lower"] = float(lower)
+                summary_df.loc[idx, f"delta_{col}_upper"] = float(upper)
 
 
 def write_outputs(summary_df: pd.DataFrame, bootstrap_df: Optional[pd.DataFrame], save_bootstrap: Optional[Path]) -> None:
@@ -327,6 +543,21 @@ def parse_args() -> argparse.Namespace:
         "--bootstrap", type=int, default=1000, help="Number of bootstrap iterations (default: 1000; 0 to skip)"
     )
     parser.add_argument(
+        "--bootstrap-seed", type=int, default=0, help="Random seed for bootstrap resampling (default: 0)"
+    )
+    parser.add_argument(
+        "--bootstrap-stratified",
+        action="store_true",
+        default=True,
+        help="Enable outcome-stratified bootstrap sampling (default: on)",
+    )
+    parser.add_argument(
+        "--no-bootstrap-stratified",
+        action="store_false",
+        dest="bootstrap_stratified",
+        help="Disable outcome-stratified bootstrap sampling.",
+    )
+    parser.add_argument(
         "--bootstrap-output",
         type=Path,
         default=None,
@@ -334,13 +565,53 @@ def parse_args() -> argparse.Namespace:
             "Optional path to save bootstrap samples (parquet). If a directory, saves metrics_bootstrap.parquet inside."
         ),
     )
+    parser.add_argument(
+        "--delta-mode",
+        choices=["none", "reference"],
+        default="none",
+        help="Delta CI mode: none (default) or reference-based comparisons.",
+    )
+    parser.add_argument(
+        "--n-jobs",
+        type=int,
+        default=-1,
+        help="Parallel jobs for bootstrap computation (joblib, default: -1 for all cores).",
+    )
+    parser.add_argument(
+        "--parallel-backend",
+        choices=["threads", "processes"],
+        default="threads",
+        help="Joblib backend to use for bootstrapping (threads or processes; default: threads).",
+    )
+    parser.add_argument(
+        "--reference-feature-set",
+        type=str,
+        default="preop_only",
+        help="Feature set name to use as the reference model when computing delta CIs (default: preop_only).",
+    )
+    parser.add_argument(
+        "--reference-model-name",
+        type=str,
+        default=None,
+        help="Optional model_name to disambiguate the reference model when computing delta CIs.",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
     prediction_sets = crawl_predictions(args.results_dir)
-    summary_df, bootstrap_df = summarize(prediction_sets, n_bootstrap=args.bootstrap)
+    summary_df, bootstrap_df = summarize(
+        prediction_sets,
+        n_bootstrap=args.bootstrap,
+        stratified_bootstrap=args.bootstrap_stratified,
+        bootstrap_seed=args.bootstrap_seed,
+        delta_mode=args.delta_mode,
+        reference_feature_set=args.reference_feature_set,
+        reference_model_name=args.reference_model_name,
+        n_jobs=args.n_jobs,
+        parallel_backend=args.parallel_backend,
+    )
     write_outputs(summary_df, bootstrap_df, args.bootstrap_output)
 
 

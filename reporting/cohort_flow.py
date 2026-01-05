@@ -36,7 +36,7 @@ import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, List, Mapping, MutableSequence, Optional, Sequence
+from typing import Any, Iterable, List, Mapping, MutableSequence, Optional, Sequence, Tuple, Union
 
 import matplotlib.pyplot as plt
 from matplotlib.patches import FancyArrowPatch, FancyBboxPatch
@@ -57,6 +57,27 @@ class CohortStage:
 
     title: str
     count: int
+
+
+@dataclass(frozen=True)
+class OutcomeSplit:
+    """Optional terminal split (e.g., AKI label false/true)."""
+
+    label: str
+    true_count: int
+    false_count: int
+
+    @property
+    def total(self) -> int:
+        return self.true_count + self.false_count
+
+
+@dataclass(frozen=True)
+class CohortFlowData:
+    """Container holding ordered stages and an optional outcome split."""
+
+    stages: List[CohortStage]
+    outcome_split: Optional[OutcomeSplit] = None
 
 
 def _load_counts(path: Path) -> Mapping[str, Any]:
@@ -101,8 +122,25 @@ def _waveform_label(channel: str, display_dictionary: Optional[DisplayDictionary
 
 def normalize_counts(
     raw_counts: Mapping[str, Any], display_dictionary: Optional[DisplayDictionary] = None
-) -> List[CohortStage]:
+) -> CohortFlowData:
     """Convert raw count metadata into ordered :class:`CohortStage` entries."""
+
+    def _parse_outcome_split(raw_counts_inner: Mapping[str, Any]) -> Optional[OutcomeSplit]:
+        split_raw = (
+            raw_counts_inner.get("outcome_split")
+            or raw_counts_inner.get("label_split")
+            or raw_counts_inner.get("label_counts")
+        )
+        if not split_raw or not isinstance(split_raw, Mapping):
+            return None
+
+        true_count = _extract_count(split_raw.get("true") or split_raw.get("positive"))
+        false_count = _extract_count(split_raw.get("false") or split_raw.get("negative"))
+        if true_count is None or false_count is None:
+            return None
+
+        label = str(split_raw.get("label") or "Label split")
+        return OutcomeSplit(label=label, true_count=true_count, false_count=false_count)
 
     stages: MutableSequence[CohortStage] = []
 
@@ -179,11 +217,13 @@ def normalize_counts(
     if final_count is not None:
         stages.append(CohortStage(title="Final cohort", count=final_count))
 
-    return list(stages)
+    outcome_split = _parse_outcome_split(raw_counts)
+
+    return CohortFlowData(stages=list(stages), outcome_split=outcome_split)
 
 
 def render_cohort_flow(
-    stages: Sequence[CohortStage],
+    flow: Union[Sequence[CohortStage], CohortFlowData],
     *,
     output_dir: Path = FIGURES_DIR,
     output_name: str = "cohort_flow",
@@ -192,12 +232,19 @@ def render_cohort_flow(
 ) -> List[Path]:
     """Render the cohort flow chart to the requested formats."""
 
+    if isinstance(flow, CohortFlowData):
+        stages = flow.stages
+        outcome_split = flow.outcome_split
+    else:
+        stages = list(flow)
+        outcome_split = None
+
     if not stages:
         raise ValueError("At least one stage is required to render a flow diagram.")
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    fig_height = max(2.5, 1.5 * len(stages))
+    fig_height = max(3.5, 1.6 * (len(stages) + (1 if outcome_split else 0)))
     fig, ax = plt.subplots(figsize=(8, fig_height))
     ax.axis("off")
 
@@ -206,9 +253,11 @@ def render_cohort_flow(
     gap = 0.7
     x0 = 1
     y_top = (box_height + gap) * (len(stages) - 1)
+    lowest_y = y_top
 
     for idx, stage in enumerate(stages):
         y = y_top - idx * (box_height + gap)
+        lowest_y = y
         box = FancyBboxPatch(
             (x0, y),
             box_width,
@@ -242,8 +291,61 @@ def render_cohort_flow(
             )
             ax.add_patch(arrow)
 
+    split_box_width = 3.5
+    split_spacing = 0.5
+
+    if outcome_split:
+        split_y = lowest_y - (box_height + gap)
+        total = outcome_split.total or 1
+
+        left_x = x0 - split_box_width - split_spacing
+        right_x = x0 + box_width + split_spacing
+
+        def _draw_split_box(x: float, label: str, count: int) -> None:
+            pct = (count / total) * 100
+            box = FancyBboxPatch(
+                (x, split_y),
+                split_box_width,
+                box_height,
+                boxstyle="round,pad=0.35",
+                linewidth=1.5,
+                facecolor="#f8fafc",
+                edgecolor="#0f172a",
+            )
+            ax.add_patch(box)
+            ax.text(
+                x + split_box_width / 2,
+                split_y + box_height / 2,
+                f"{label}\n{count:,} ({pct:.1f}%)",
+                ha="center",
+                va="center",
+                fontsize=10.5,
+            )
+
+        _draw_split_box(left_x, f"{outcome_split.label} — False", outcome_split.false_count)
+        _draw_split_box(right_x, f"{outcome_split.label} — True", outcome_split.true_count)
+
+        # Arrows from final cohort to split boxes
+        final_center_x = x0 + box_width / 2
+        final_center_y = lowest_y
+        for target_x in (left_x + split_box_width / 2, right_x + split_box_width / 2):
+            arrow = FancyArrowPatch(
+                (final_center_x, final_center_y),
+                (target_x, split_y + box_height),
+                arrowstyle="->",
+                mutation_scale=12,
+                linewidth=1.2,
+                color="#4b5563",
+            )
+            ax.add_patch(arrow)
+
     if title:
         ax.set_title(title, fontsize=14, fontweight="bold", pad=12)
+
+    max_x = x0 + box_width + split_box_width + 2 * split_spacing if outcome_split else x0 + box_width + 1
+    min_x = (x0 - split_box_width - split_spacing) if outcome_split else 0
+    ax.set_xlim(min_x - 0.5, max_x + 0.5)
+    ax.set_ylim(-gap - box_height, y_top + box_height + gap)
 
     saved_paths: List[Path] = []
     for fmt in formats:
@@ -309,9 +411,9 @@ def main() -> None:
         display_dict = None
 
     counts = _load_counts(args.counts_file)
-    stages = normalize_counts(counts, display_dict)
+    flow_data = normalize_counts(counts, display_dict)
     render_cohort_flow(
-        stages,
+        flow_data,
         output_dir=args.output_dir,
         output_name=args.output_name,
         title=args.title,

@@ -14,6 +14,7 @@ Patients were included in the study if they met the following criteria:
 3.  **Clinical Criteria**:
     *   Availability of postoperative creatinine measurements for AKI adjudication.
     *   Exclusion of patients with pre-existing end-stage renal disease (baseline creatinine > 4.0 mg/dL).
+    *   Exclusion of extreme physical status: **ASA V–VI** cases were removed before downstream filtering.
     *   Exclusion of cases with insufficient waveform duration or quality (>5% missing data in the signal segment).
 
 
@@ -181,5 +182,5 @@ The Aeon pipeline mirrors the rigorous design of the primary pipeline:
     *   **Single Channel**: Performance of each waveform individually (ECG, PLETH, CO2, AWP).
     *   **Leave-One-Out**: Performance impact of removing a single waveform from the full set.
     *   **Fusion Impact**: Comparison of "Waveform Only" vs. "Early Fusion" (Waveform + Preop) performance.
-*   **Bootstrapping**: 1000-fold bootstrapped metrics (AUROC, AUPRC) with 95% Confidence Intervals.
+*   **Bootstrapping**: 1000-fold, outcome-stratified non-parametric bootstrap on held-out **test predictions only**, with fixed Step-7 calibration and thresholds. Bootstrap samples are paired across models within each Outcome × Branch × Pipeline group so Δ CIs can be derived against a prespecified reference (default: preoperative-only feature set). 95% percentile CIs are reported; no BCa.
 *   **Calibration**: Logistic calibration (Platt Scaling) is fitted on training folds and the learned parameters are **fixed** when applied to held-out validation/test scores; no recalibration is performed on the full prediction set.

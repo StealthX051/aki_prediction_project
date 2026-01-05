@@ -156,6 +156,15 @@ def main() -> None:
         use_short_labels=True,
     )
 
+    table = table.rename(
+        columns={
+            "feature_name": "Feature",
+            "display_name": "Display name",
+            "missing_count": "Missing count",
+            "missing_percent": "Missing (%)",
+        }
+    )
+
     _save_table(table, args.output_prefix)
 
 

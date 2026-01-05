@@ -19,28 +19,44 @@ source of truth; Aeon artifacts are optional and experimental.
 - Environment roots (`DATA_DIR`, `PROCESSED_DIR`, `RAW_DIR`, `RESULTS_DIR`) are exported so both families share the same files; no wasted preprocessing.
 - Metrics/report generation is skipped if no prediction files are present, so partial runs (only one family) are handled gracefully. All CLI flags also pass through `run_catch22_experiments.sh`.
 - `results_recreation/metrics_summary.py` validates each `predictions/test.csv`; invalid files are skipped with a warning so a single bad artifact does not halt consolidation. If no valid predictions remain, it fails fast with a clear message.
+- All run scripts (`run_experiments*.sh`, smoke tests) now invoke `metrics_summary` with stratified, paired bootstrapping, Δ vs `preop_only`, and full-core parallelism, then call `reporting/make_report` to emit the report bundle (main + Δ tables).
 
 ## Core model evaluation outputs
 The consolidated metrics table and plots are generated from previously trained
 models without retraining:
 
 1. Build the unified metrics summary from saved predictions and calibration
-   metadata:
+   metadata (stratified, paired bootstrap with Δ vs preop reference using all
+   cores):
    ```bash
-   python results_recreation/metrics_summary.py
+   python results_recreation/metrics_summary.py \
+     --delta-mode reference \
+     --reference-feature-set preop_only \
+     --parallel-backend processes \
+     --n-jobs -1
    ```
 
-2. Render styled tables, ROC/PR/calibration plots, and Word/PDF reports:
+2. Render styled tables, ROC/PR/calibration plots, and Word/PDF reports (with
+   separate delta tables and heatmap shading where the Δ CI excludes 0):
    ```bash
-   python results_recreation/results_analysis.py
+   python reporting/make_report.py
    ```
 
 Result locations:
 - `results/tables/metrics_summary.csv`: Consolidated AUROC/AUPRC and
-  thresholded metrics with confidence intervals.
-- `results/report.docx` and `results/report.pdf`: Styled reports with all
-  tables.
+  thresholded metrics with confidence intervals, plus Δ columns.
+- `results/report.docx` and `results/report.pdf`: Styled reports with main
+  tables and separate Δ tables (Δ vs reference).
 - `results/figures/`: ROC, PR, and calibration curves for each configuration.
+
+## Descriptive figures bundle
+Run all descriptive artifacts (preop demographics table, cohort flow diagram,
+missingness table) with one command. The script reuses your training run's
+paths (`DATA_DIR`, `PROCESSED_DIR`, `RESULTS_DIR`) if they are already set.
+
+```bash
+./run_descriptive_figures.sh
+```
 
 ## Cohort flow diagram
 `reporting/cohort_flow.py` transforms the saved cohort counts from
@@ -55,6 +71,9 @@ python -m reporting.cohort_flow \
   --display-dictionary metadata/display_dictionary.json
 ```
 
+The cohort excludes ASA V–VI cases prior to waveform availability checks and
+other custom filters; the counts JSON reflects that step.
+
 ## Preoperative descriptive statistics
 `reporting/preop_descriptives.py` summarizes baseline demographics and clinical
 variables using the raw cohort CSV (before one-hot encoding). Continuous
@@ -68,8 +87,13 @@ as counts with percentages. Outputs:
 ```bash
 python -m reporting.preop_descriptives \
   --dataset data/processed/aki_pleth_ecg_co2_awp.csv \
+  --processed-dataset data/processed/aki_preop_processed.csv \
   --display-dictionary metadata/display_dictionary.json
 ```
+Continuous summaries pull from the winsorized preop dataset (`aki_preop_processed.csv`) when present; binary categoricals
+render 0/1 as False/True, and one-hot categoricals use human-readable labels from the display dictionary. Regenerate
+`aki_preop_processed.csv` via
+`python -m data_preparation.step_03_preop_prep` if you rebuild the cohort.
 
 ## Missingness summary for model features
 `reporting/missingness_table.py` computes per-feature missing counts and

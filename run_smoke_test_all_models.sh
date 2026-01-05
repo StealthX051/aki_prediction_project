@@ -112,7 +112,16 @@ $PYTHON_BIN -m model_creation.step_07_train_evaluate \
     --smoke_test 2>&1 | tee -a "$LOG_FILE"
 
 echo "--- Reporting: metrics summary ---" | tee -a "$LOG_FILE"
-$PYTHON_BIN -m results_recreation.metrics_summary --results-dir "$SMOKE_RESULTS_DIR" 2>&1 | tee -a "$LOG_FILE"
+$PYTHON_BIN -m results_recreation.metrics_summary \
+    --results-dir "$SMOKE_RESULTS_DIR" \
+    --delta-mode reference \
+    --reference-feature-set preop_only \
+    --parallel-backend processes \
+    --n-jobs -1 \
+    2>&1 | tee -a "$LOG_FILE"
+
+echo "--- Reporting: build reports ---" | tee -a "$LOG_FILE"
+$PYTHON_BIN -m reporting.make_report 2>&1 | tee -a "$LOG_FILE"
 
 echo "=== Smoke test (XGBoost + EBM) complete ===" | tee -a "$LOG_FILE"
 echo "Artifacts written under $SMOKE_ROOT" | tee -a "$LOG_FILE"

@@ -220,6 +220,14 @@
     "sex": {
       "label": "Sex"
     },
+    "height": {
+      "label": "Height",
+      "unit": "cm"
+    },
+    "weight": {
+      "label": "Weight",
+      "unit": "kg"
+    },
     "bmi": {
       "label": "Body mass index",
       "short_label": "BMI",
@@ -245,6 +253,125 @@
     "preop_dm": {
       "label": "Diabetes history",
       "short_label": "Diabetes"
+    },
+    "asa": {
+      "label": "ASA physical status",
+      "short_label": "ASA"
+    },
+    "emop": {
+      "label": "Emergency surgery",
+      "short_label": "Emergency"
+    },
+    "department": {
+      "label": "Surgical department"
+    },
+    "approach": {
+      "label": "Surgical approach"
+    },
+    "optype": {
+      "label": "Procedure type"
+    },
+    "ane_type": {
+      "label": "Anesthesia type",
+      "short_label": "Anesthesia"
+    },
+    "preop_ecg": {
+      "label": "Preoperative ECG performed",
+      "short_label": "Preop ECG"
+    },
+    "preop_pft": {
+      "label": "Preoperative pulmonary function test",
+      "short_label": "Preop PFT"
+    },
+    "preop_hb": {
+      "label": "Hemoglobin",
+      "short_label": "Hb",
+      "unit": "g/dL"
+    },
+    "preop_plt": {
+      "label": "Platelet count",
+      "short_label": "Platelets",
+      "unit": "10^3/µL"
+    },
+    "preop_pt": {
+      "label": "Prothrombin time",
+      "short_label": "PT",
+      "unit": "seconds"
+    },
+    "preop_aptt": {
+      "label": "Activated partial thromboplastin time",
+      "short_label": "aPTT",
+      "unit": "seconds"
+    },
+    "preop_na": {
+      "label": "Sodium",
+      "unit": "mmol/L"
+    },
+    "preop_k": {
+      "label": "Potassium",
+      "unit": "mmol/L"
+    },
+    "preop_gluc": {
+      "label": "Glucose",
+      "unit": "mg/dL"
+    },
+    "preop_alb": {
+      "label": "Albumin",
+      "unit": "g/dL"
+    },
+    "preop_ast": {
+      "label": "Aspartate aminotransferase",
+      "short_label": "AST",
+      "unit": "U/L"
+    },
+    "preop_alt": {
+      "label": "Alanine aminotransferase",
+      "short_label": "ALT",
+      "unit": "U/L"
+    },
+    "preop_bun": {
+      "label": "Blood urea nitrogen",
+      "short_label": "BUN",
+      "unit": "mg/dL"
+    },
+    "preop_hco3": {
+      "label": "Bicarbonate",
+      "short_label": "HCO₃",
+      "unit": "mmol/L"
+    },
+    "preop_ph": {
+      "label": "Arterial pH"
+    },
+    "preop_be": {
+      "label": "Base excess",
+      "unit": "mmol/L"
+    },
+    "preop_pao2": {
+      "label": "Arterial PaO₂",
+      "unit": "mmHg"
+    },
+    "preop_paco2": {
+      "label": "Arterial PaCO₂",
+      "unit": "mmHg"
+    },
+    "preop_sao2": {
+      "label": "Arterial oxygen saturation",
+      "short_label": "SaO₂",
+      "unit": "%"
+    },
+    "preop_wbc": {
+      "label": "White blood cell count",
+      "short_label": "WBC",
+      "unit": "10^3/µL"
+    },
+    "preop_crp": {
+      "label": "C-reactive protein",
+      "short_label": "CRP",
+      "unit": "mg/L"
+    },
+    "preop_lac": {
+      "label": "Lactate",
+      "unit": "mmol/L"
     }
   }
 }

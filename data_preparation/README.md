@@ -8,7 +8,8 @@ settings (paths, sample rate, windowing, required waveforms) live in
 
 ## Steps
 1. **Cohort construction** — filter cases, derive outcomes, and emit
-   `results/metadata/cohort_flow_counts.json` for reporting:
+   `results/metadata/cohort_flow_counts.json` for reporting. ASA V–VI cases are
+   excluded before waveform checks and custom filters:
    ```bash
    python -m data_preparation.step_01_cohort_construction
    ```

@@ -17,14 +17,14 @@ import argparse
 import logging
 import os
 from pathlib import Path
-from typing import List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import pandas as pd
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from scipy.stats import shapiro
 
-from data_preparation.inputs import COHORT_FILE
+from data_preparation.inputs import COHORT_FILE, PREOP_PROCESSED_FILE
 from data_preparation.step_03_preop_prep import CATEGORICAL_COLS, CONTINUOUS_COLS
 from reporting.display_dictionary import DisplayDictionary, load_display_dictionary
 
@@ -33,6 +33,16 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 
 RESULTS_DIR = Path(os.getenv("RESULTS_DIR", Path(__file__).resolve().parent.parent / "results"))
 TABLES_DIR = RESULTS_DIR / "tables"
+ORDERED_CATEGORICALS: Dict[str, Sequence[str]] = {
+    # Preserve clinical severity ordering rather than frequency sorting.
+    "asa": ("1.0", "2.0", "3.0", "4.0", "5.0", "6.0"),
+}
+BINARY_LABELS: Dict[str, Dict[str, str]] = {
+    # Map binary codes to human-friendly labels for readability.
+    "emop": {"0": "False", "1": "True"},
+    "preop_htn": {"0": "False", "1": "True"},
+    "preop_dm": {"0": "False", "1": "True"},
+}
 
 
 def _load_preop_data(path: Path) -> pd.DataFrame:
@@ -45,6 +55,20 @@ def _load_preop_data(path: Path) -> pd.DataFrame:
         raise FileNotFoundError(f"Preoperative dataset not found at {path}")
 
     logger.info("Loading preoperative data from %s", path)
+    return pd.read_csv(path)
+
+
+def _load_optional_processed_data(path: Optional[Path]) -> Optional[pd.DataFrame]:
+    """Load the outlier-handled preoperative dataset when available."""
+
+    if path is None:
+        return None
+
+    if not path.exists():
+        logger.warning("Processed dataset not found at %s; falling back to raw data for continuous features.", path)
+        return None
+
+    logger.info("Loading processed (winsorized) data from %s", path)
     return pd.read_csv(path)
 
 
@@ -79,43 +103,62 @@ def _summarize_continuous(
     alpha: float,
     max_sample: int,
     random_state: int,
-) -> Tuple[str, Optional[float]]:
+) -> Tuple[str, Optional[float], str]:
     """Summarize a continuous series with normality-guided metrics."""
 
     numeric = pd.to_numeric(series, errors="coerce").dropna()
     if numeric.empty:
-        return "No data", None
+        return "No data", None, "not calculated"
 
     p_value = _shapiro_p_value(numeric, max_sample=max_sample, random_state=random_state)
     if p_value is not None and p_value >= alpha:
         mean = numeric.mean()
         std = numeric.std(ddof=1)
         summary = f"{mean:.2f} ± {std:.2f}"
+        method = "mean ± SD"
     else:
         median = numeric.median()
         q1 = numeric.quantile(0.25)
         q3 = numeric.quantile(0.75)
         summary = f"{median:.2f} ({q1:.2f}, {q3:.2f})"
+        method = "median (IQR)"
 
-    return summary, p_value
+    return summary, p_value, method
 
 
-def _format_category_counts(series: pd.Series) -> str:
-    """Return a compact counts/percentages string for a categorical column."""
+def _format_category_counts(
+    series: pd.Series,
+    category_order: Optional[Sequence[str]] = None,
+    category_labels: Optional[Dict[str, str]] = None,
+) -> List[Tuple[str, int, float]]:
+    """Return ordered category/count/percent tuples for a categorical column."""
 
     if series.empty:
-        return "No data"
+        return []
 
     filled = series.fillna("Missing")
     total = len(filled)
     counts = filled.value_counts(dropna=False)
+    ordered_items: List[Tuple[str, int]] = []
 
-    parts: List[str] = []
-    for category, count in counts.items():
-        proportion = (count / total) * 100
-        parts.append(f"{category}: {count} ({proportion:.1f}%)")
+    if category_order:
+        desired_order = [str(cat) for cat in category_order]
+        counts.index = counts.index.astype(str)
 
-    return "; ".join(parts)
+        for label in desired_order:
+            if label in counts:
+                ordered_items.append((label, int(counts[label])))
+
+        for label, count in counts.items():
+            if label not in desired_order:
+                ordered_items.append((str(label), int(count)))
+    else:
+        ordered_items = [(str(label), int(count)) for label, count in counts.items()]
+
+    return [
+        (category_labels.get(cat, cat) if category_labels else cat, count, (count / total) * 100)
+        for cat, count in ordered_items
+    ]
 
 
 def _filter_and_validate_features(
@@ -146,7 +189,8 @@ def _filter_and_validate_features(
 
 
 def _build_descriptive_table(
-    df: pd.DataFrame,
+    df_raw: pd.DataFrame,
+    df_processed: Optional[pd.DataFrame],
     *,
     continuous_features: Sequence[str],
     categorical_features: Sequence[str],
@@ -157,21 +201,29 @@ def _build_descriptive_table(
 ) -> pd.DataFrame:
     """Compile descriptive statistics into a tidy DataFrame."""
 
-    rows: List[Tuple[str, str, str]] = []
+    rows: List[Tuple[str, str, str, str]] = []
 
     for feature in continuous_features:
-        summary, _ = _summarize_continuous(
-            df[feature], alpha=alpha, max_sample=max_sample, random_state=random_state
+        source_series = df_processed[feature] if (df_processed is not None and feature in df_processed.columns) else df_raw[feature]
+        summary, p_value, method = _summarize_continuous(
+            source_series, alpha=alpha, max_sample=max_sample, random_state=random_state
         )
         label = display_dictionary.feature_label(feature, use_short=True, include_unit=True)
-        rows.append((label, "Continuous", summary))
+        p_display = "N/A" if p_value is None else f"{p_value:.3g}"
+        rows.append((f"{label}, {method}", "Continuous", summary, p_display))
 
     for feature in categorical_features:
-        summary = _format_category_counts(df[feature])
         label = display_dictionary.feature_label(feature, use_short=True, include_unit=True)
-        rows.append((label, "Categorical", summary))
+        category_rows = _format_category_counts(
+            df_raw[feature],
+            category_order=ORDERED_CATEGORICALS.get(feature),
+            category_labels=BINARY_LABELS.get(feature),
+        )
+        rows.append((f"{label}, n (%)", "Categorical", "", ""))
+        for category, count, pct in category_rows:
+            rows.append((f"&nbsp;&nbsp;{category}", "", f"{count} ({pct:.1f}%)", ""))
 
-    return pd.DataFrame(rows, columns=["Feature", "Type", "Summary"])
+    return pd.DataFrame(rows, columns=["Feature", "Type", "Summary", "Normality p-value"])
 
 
 def _save_table(table: pd.DataFrame, output_prefix: str) -> Tuple[Path, Path, Path]:
@@ -225,6 +277,15 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--processed-dataset",
+        type=Path,
+        default=PREOP_PROCESSED_FILE,
+        help=(
+            "Optional path to the outlier-handled preoperative dataset (after winsorization in step_03). "
+            "Continuous features will be pulled from this file when present; categoricals always come from --dataset."
+        ),
+    )
+    parser.add_argument(
         "--display-dictionary",
         type=Path,
         default=None,
@@ -259,18 +320,29 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
 
-    df = _load_preop_data(args.dataset)
+    df_raw = _load_preop_data(args.dataset)
+    df_processed = _load_optional_processed_data(args.processed_dataset)
+    if df_processed is not None and len(df_processed) != len(df_raw):
+        logger.warning(
+            "Processed dataset length (%s) does not match raw dataset length (%s); ignoring processed dataset.",
+            len(df_processed),
+            len(df_raw),
+        )
+        df_processed = None
+
     display_dict = load_display_dictionary(args.display_dictionary)
+    total_n = len(df_raw)
 
     continuous_features, categorical_features = _filter_and_validate_features(
-        df,
+        df_raw,
         continuous_features=CONTINUOUS_COLS,
         categorical_features=CATEGORICAL_COLS,
         dataset_path=args.dataset,
     )
 
     descriptive_table = _build_descriptive_table(
-        df,
+        df_raw,
+        df_processed,
         continuous_features=continuous_features,
         categorical_features=categorical_features,
         display_dictionary=display_dict,
@@ -278,6 +350,13 @@ def main() -> None:
         max_sample=args.max_normality_sample,
         random_state=args.random_state,
     )
+
+    descriptive_table.columns = [
+        "Characteristic",
+        "Type",
+        f"Finding (N={total_n})",
+        "Normality p-value",
+    ]
 
     if descriptive_table.empty:
         raise ValueError("No descriptive statistics generated; verify dataset columns match expectations.")

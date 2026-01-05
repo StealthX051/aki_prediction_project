@@ -193,7 +193,13 @@ echo "--- Evaluating models and generating reports ---" | tee -a "$LOG_FILE"
 
 if has_predictions; then
     echo "  > Running evaluation (results -> results directory)..." | tee -a "$LOG_FILE"
-    "$PYTHON_BIN" -m results_recreation.metrics_summary --results-dir "$RESULTS_DIR" 2>&1 | tee -a "$LOG_FILE"
+    "$PYTHON_BIN" -m results_recreation.metrics_summary \
+        --results-dir "$RESULTS_DIR" \
+        --delta-mode reference \
+        --reference-feature-set preop_only \
+        --parallel-backend processes \
+        --n-jobs -1 \
+        2>&1 | tee -a "$LOG_FILE"
 
     echo "  > Building reports from standardized artifacts..." | tee -a "$LOG_FILE"
     "$PYTHON_BIN" -m reporting.make_report 2>&1 | tee -a "$LOG_FILE"

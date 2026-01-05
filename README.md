@@ -163,6 +163,8 @@ python model_creation/step_07_train_evaluate.py --outcome any_aki --branch windo
 **EBM HPO (small-N optimized)**  
 During HPO we now prioritize speed and stability for ~2.5k rows: `inner_bags=0`, `outer_bags=1`, `max_bins∈{32,64,128,256}`, `max_leaves∈{2,3}`, `smoothing_rounds∈{0,25,50,75,100,150,200,350,500}`, `learning_rate∈{0.0025,0.005,0.01,0.015,0.02,0.03,0.04}`, `validation_size∈{0.1,0.15,0.2}`, `early_stopping_rounds∈{100,200}`, `early_stopping_tolerance∈{0,1e-5}`, `min_samples_leaf∈{2,3,4,5,10}`, `min_hessian∈{0,1e-6,1e-4,1e-2}`, `greedy_ratio∈{0,5,10}`, `cyclic_progress∈{0,1}`, `n_jobs=-2`. For very small data (<50 rows) we automatically force `n_jobs=1`, `inner_bags=0`, `outer_bags=1`, `validation_size=0.2` to avoid hangs. Final training in Step 7 still applies the heavier production defaults (`inner_bags=20`, `outer_bags=14`, `max_bins` from tuned value) so you can refit top configs with stability while keeping HPO fast.
 
+*Trial-level parallelism*: Optuna now runs EBM trials concurrently (up to `cpu_count-1`) while keeping XGBoost trials sequential. EBM per-trial fits still use `n_jobs=-2` (all but one core) unless the tiny-data safeguard is triggered.
+
 #### Full experiment grid (Catch22 + XGBoost/EBM)
 Use the provided shell script to sweep the default grid of outcomes, branches, feature sets, and both model families. Logs are written to `experiment_log.txt`.
 
@@ -220,11 +222,12 @@ Key behaviors:
 * Activates environment variable overrides added to `data_preparation.inputs` and `model_creation.utils` so cohort, features, merged data, and results are written under `SMOKE_ROOT`.
 * Trims the generated cohort to `CASE_LIMIT` rows, then runs Steps 1–5, a minimal HPO (`--n_trials HPO_TRIALS` with `--smoke_test`), final training/evaluation (`--smoke_test`), and `results_recreation.metrics_summary` against the smoke results tree.
 * Logs progress to `$SMOKE_ROOT/smoke_test.log` and leaves artifacts under `$SMOKE_ROOT/data/processed` and `$SMOKE_ROOT/results` for inspection.
+* Reporting: smoke scripts now run `metrics_summary` with stratified/paired bootstrap (Δ vs `preop_only`, all cores) and `reporting/make_report` to emit the main + Δ tables/figures bundle.
 
 ### Step 8: Post-hoc Analysis & Visualization
-**Primary Script**: `results_recreation/results_analysis.py`
+**Primary Scripts**: `results_recreation/metrics_summary.py` → `reporting/make_report.py`
 
-Generates publication-ready tables and figures for both the **Primary Pipeline** (Catch22/XGBoost) and the **Experimental Pipeline** (Aeon/Multirocket).
+Generates publication-ready tables and figures for both the **Primary Pipeline** (Catch22/XGBoost) and the **Experimental Pipeline** (Aeon/Multirocket). Metrics are computed once from stored predictions/artifacts; no refitting happens at report time.
 
 Display labels for outcomes, branches, feature sets, waveforms, and Catch22
 statistics are centralized in `metadata/display_dictionary.json`. See
@@ -232,9 +235,9 @@ statistics are centralized in `metadata/display_dictionary.json`. See
 tables/figures synchronized.
 
 *   **Artifact Validation & Aggregation**: `results_recreation/metrics_summary.py` crawls `results/**/models/**/predictions/test.csv`, confirms that the paired `artifacts/calibration.json` and `artifacts/threshold.json` from Step 7 are present, and computes held-out metrics using the stored threshold for each configuration. A consolidated metrics table is written to `results/tables/metrics_summary.csv` (and optional bootstrap samples to Parquet).
-*   **Unified Reporting**: `results_analysis.py` consumes the consolidated metrics to generate Word, PDF, and HTML tables plus ROC/PR/Calibration figures across both pipelines. Reports display distinct rows for each model type (`xgboost` vs. `ebm`) within every Outcome × Branch × Feature Set combination.
 *   **Calibration & Thresholds**: No report-time refitting occurs. The recalibration parameters and thresholds learned from OOF training scores in Step 7 are **fixed** and reapplied to the test predictions when computing metrics and bootstraps.
-*   **Bootstrapping**: Uses non-parametric bootstrap resampling (default 1000 iterations, parallelized) on the held-out test predictions while holding the Step-7 thresholds constant.
+*   **Bootstrapping**: Non-parametric, outcome-stratified bootstrap of the held-out test predictions (default 1000 reps). The stored threshold is fixed. Bootstrap samples are **paired across models within each Outcome × Branch × Pipeline group**, enabling Δ CIs. Default reference for Δ is the `preop_only` feature set.
+*   **Unified Reporting**: `reporting/make_report.py` consumes `metrics_summary.csv` to generate Word, PDF, and HTML tables plus ROC/PR/Calibration figures across both pipelines. Reports display distinct rows for each model type (`xgboost` vs. `ebm`) within every Outcome × Branch × Feature Set combination, and add a separate delta table (Δ vs reference) with heatmap shading only when the Δ CI excludes 0.
 *   **Outputs**:
     *   **Reports**:
         *   `results/report.docx`: Formatted Word document containing all results tables with selective bolding and background gradients.
@@ -243,8 +246,13 @@ tables/figures synchronized.
     *   **Figures**: High-quality ROC, PR, and Calibration curves saved in `results/figures/`.
     *   **Data**: `results/tables/metrics_summary.csv` containing all calculated metrics and confidence intervals, plus optional bootstrap Parquet files for downstream analysis.
 ```bash
-python results_recreation/metrics_summary.py  # Precompute consolidated metrics
-python results_recreation/results_analysis.py  # Build figures and reports
+python results_recreation/metrics_summary.py \
+  --delta-mode reference \
+  --reference-feature-set preop_only \
+  --parallel-backend processes \
+  --n-jobs -1       # Precompute consolidated metrics + Δs using all cores
+
+python reporting/make_report.py  # Build figures and reports from the precomputed CSV
 ```
 
 ### Additional reporting utilities

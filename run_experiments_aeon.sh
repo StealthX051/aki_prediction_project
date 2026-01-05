@@ -97,7 +97,13 @@ done
 echo "--- Evaluating Aeon models and generating reports ---" | tee -a "$LOG_FILE"
 
 echo "  > Running evaluation (results -> results directory)..." | tee -a "$LOG_FILE"
-$PYTHON_EXEC -m results_recreation.metrics_summary --results-dir results 2>&1 | tee -a "$LOG_FILE"
+$PYTHON_EXEC -m results_recreation.metrics_summary \
+    --results-dir results \
+    --delta-mode reference \
+    --reference-feature-set preop_only \
+    --parallel-backend processes \
+    --n-jobs -1 \
+    2>&1 | tee -a "$LOG_FILE"
 
 echo "  > Building reports from standardized artifacts..." | tee -a "$LOG_FILE"
 $PYTHON_EXEC -m reporting.make_report 2>&1 | tee -a "$LOG_FILE"

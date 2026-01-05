@@ -1,6 +1,7 @@
 import argparse
 import json
 import logging
+import os
 from pathlib import Path
 import sys
 
@@ -193,10 +194,20 @@ def run_hpo(outcome, branch, feature_set, n_trials=100, smoke_test=False, model_
     else:
         raise ValueError(f"Unsupported model_type: {model_type}")
 
+    # Optuna trial-level parallelism: keep XGBoost sequential (heavier per-trial threading),
+    # but allow EBM trials to run concurrently to better utilize cores.
+    optuna_n_jobs = 1
+    if model_type == "ebm":
+        optuna_n_jobs = max(1, (os.cpu_count() or 2) - 1)
+        logger.info("EBM HPO: enabling parallel trials with n_jobs=%s", optuna_n_jobs)
+    else:
+        logger.info("XGBoost HPO: running trials sequentially (n_jobs=1)")
+
     study.optimize(
         objective_fn,
         n_trials=n_trials,
-        show_progress_bar=True
+        show_progress_bar=True,
+        n_jobs=optuna_n_jobs,
     )
 
     logger.info(f"HPO Complete. Best AUPRC: {study.best_value:.4f}")

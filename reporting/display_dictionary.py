@@ -59,6 +59,17 @@ class DisplayDictionary:
         self.features = raw.get("features", {})
 
         self._waveform_aliases = self._build_waveform_aliases(self.waveforms)
+        self._one_hot_prefix_labels = {
+            "department": "Department",
+            "optype": "Procedure type",
+            "preop_ecg": "Preop ECG",
+            "preop_pft": "Preop PFT",
+            "sex": "Sex",
+            "approach": "Surgical approach",
+            "ane_type": "Anesthesia type",
+        }
+        self._sex_category_labels = {"M": "Male", "F": "Female"}
+        self._anesthesia_category_labels = {"Sedationalgesia": "Sedation analgesia"}
 
     @classmethod
     def load(cls, path: Optional[Path] = None) -> "DisplayDictionary":
@@ -133,18 +144,40 @@ class DisplayDictionary:
             return DisplayEntry(label=str(entry))
         return None
 
+    def _parse_one_hot_feature(self, feature_name: str) -> Optional[DisplayEntry]:
+        """Handle one-hot encoded categoricals like 'optype_Colorectal'."""
+
+        for prefix, base_label in self._one_hot_prefix_labels.items():
+            prefix_token = f"{prefix}_"
+            if feature_name.startswith(prefix_token):
+                category = feature_name[len(prefix_token) :]
+                if prefix == "sex":
+                    category_label = self._sex_category_labels.get(category, category)
+                elif prefix == "ane_type":
+                    category_label = self._anesthesia_category_labels.get(category, category)
+                else:
+                    category_label = category.replace("_", " ")
+                label = f"{base_label} — {category_label}"
+                return DisplayEntry(label=label)
+        return None
+
     def feature_entry(self, feature_name: str) -> DisplayEntry:
         """Return a :class:`DisplayEntry` for a feature name.
 
         Resolution order:
           1. Direct match in the ``features`` section.
-          2. Catch22 waveform features that follow ``<waveform>_<stat>[_aggregate]``.
-          3. Fallback to the raw feature name.
+          2. One-hot encoded categoricals with known prefixes (department/optype/preop_ecg/preop_pft/sex).
+          3. Catch22 waveform features that follow ``<waveform>_<stat>[_aggregate]``.
+          4. Fallback to the raw feature name.
         """
 
         direct_entry = self._to_entry(self.features, feature_name)
         if direct_entry:
             return direct_entry
+
+        one_hot_entry = self._parse_one_hot_feature(feature_name)
+        if one_hot_entry:
+            return one_hot_entry
 
         parsed = self._parse_catch22_feature(feature_name)
         if parsed:

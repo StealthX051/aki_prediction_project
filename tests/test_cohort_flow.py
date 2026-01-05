@@ -30,23 +30,26 @@ def test_normalize_counts_uses_display_dictionary(display_dict):
         "final_cohort": {"count": 5},
     }
 
-    stages = normalize_counts(counts, display_dict)
+    flow = normalize_counts(counts, display_dict)
 
-    waveform_stage = next(stage for stage in stages if "Waveform availability" in stage.title)
+    waveform_stage = next(stage for stage in flow.stages if "Waveform availability" in stage.title)
     assert "Pleth" in waveform_stage.title or "Plethysmography" in waveform_stage.title
-    assert stages[0].count == 10
-    assert stages[-1].title == "Final cohort"
+    assert flow.stages[0].count == 10
+    assert flow.stages[-1].title == "Final cohort"
 
 
 def test_render_creates_files(tmp_path: Path):
-    stages = normalize_counts({
-        "total_cases": 4,
-        "waveforms": {"SNUADC/PLETH": 3},
-        "final_cohort": 3,
-    })
+    flow = normalize_counts(
+        {
+            "total_cases": 4,
+            "waveforms": {"SNUADC/PLETH": 3},
+            "final_cohort": 3,
+            "label_split": {"label": "AKI", "true": 1, "false": 2},
+        }
+    )
 
     output_paths = render_cohort_flow(
-        stages,
+        flow,
         output_dir=tmp_path,
         output_name="test_flow",
         formats=("png",),

@@ -1,5 +1,6 @@
 import logging
 import os
+import sys
 from pathlib import Path
 from typing import Dict
 
@@ -19,6 +20,10 @@ from sklearn.metrics import (
     roc_auc_score,
     roc_curve,
 )
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from reporting.display_dictionary import load_display_dictionary
 
@@ -156,7 +161,10 @@ def prepare_metrics_for_display(summary_df: pd.DataFrame) -> pd.DataFrame:
     }
     metrics_df.rename(columns=rename_map, inplace=True)
 
-    for metric_key, display_name in METRIC_DISPLAY_MAP.items():
+    display_pairs = list(METRIC_DISPLAY_MAP.items())
+    delta_pairs = [(f"delta_{k}", f"Δ {v}") for k, v in METRIC_DISPLAY_MAP.items()]
+
+    for metric_key, display_name in display_pairs + delta_pairs:
         if metric_key not in metrics_df.columns:
             continue
 
@@ -178,93 +186,106 @@ def generate_html_tables(metrics_df: pd.DataFrame):
     """
     Generates styled HTML tables for each Outcome/Branch.
     """
-    # Apply Naming Convention
     metrics_df['Feature Set'] = metrics_df['Feature Set'].map(FEATURE_SET_MAPPING).fillna(metrics_df['Feature Set'])
-    
-    # Group by Outcome and Branch
+
     for (outcome, branch, model_name), group in metrics_df.groupby(['Outcome', 'Branch', 'Model']):
-        # Sort by AUROC Value (Hidden column)
         table_df = group.sort_values('AUROC_val', ascending=False)
-        
-        # Display Columns
-        display_cols = ['Feature Set', 'AUROC', 'AUPRC', 'Brier Score', 'Sensitivity', 'Specificity', 'F1 Score']
-        
-        # Filter columns
+
+        display_cols = [
+            'Feature Set',
+            'AUROC',
+            'AUPRC',
+            'Brier Score',
+            'Sensitivity',
+            'Specificity',
+            'F1 Score',
+        ]
         table_df_display = table_df[display_cols].copy()
-        
-        # Style: Academic + Modern Subtle Gradient
-        cmap = LinearSegmentedColormap.from_list("soft_teal", ["#ffffff", "#d1e7dd"]) 
-        cmap_r = LinearSegmentedColormap.from_list("soft_teal_r", ["#d1e7dd", "#ffffff"]) 
-        
-        # We need to apply styles based on the _val columns but display the formatted strings
-        # Pandas Styler is tricky with this.
-        # Strategy: Create a Styler on the DISPLAY dataframe, but use the _val dataframe for logic.
-        
+
+        cmap = LinearSegmentedColormap.from_list("soft_teal", ["#ffffff", "#d1e7dd"])
+        cmap_r = LinearSegmentedColormap.from_list("soft_teal_r", ["#d1e7dd", "#ffffff"])
+
         styler = table_df_display.style
-        
-        # Helper to apply background gradient based on hidden values
+
         def apply_gradient(s, val_col, cmap):
-            # Get values from the original sorted dataframe
-            # We must ensure alignment. table_df is sorted, table_df_display is a copy of it.
-            # s.index should match table_df.index
             vals = table_df.loc[s.index, val_col]
-            
-            # Normalize
             min_v, max_v = vals.min(), vals.max()
             if max_v == min_v:
                 return ['' for _ in s]
-                
             norm = plt.Normalize(min_v, max_v)
             colors = [cmap(norm(v)) for v in vals]
-            
-            # Convert to hex/css
             from matplotlib.colors import to_hex
             return [f'background-color: {to_hex(c)}' for c in colors]
 
-        # Helper for bolding best
         def highlight_best(s, val_col, mode='max'):
             vals = table_df.loc[s.index, val_col]
-            if mode == 'max':
-                is_best = vals == vals.max()
-            else:
-                is_best = vals == vals.min()
+            is_best = vals == (vals.max() if mode == 'max' else vals.min())
             return ['font-weight: bold' if v else '' for v in is_best]
 
-        # Apply styles column by column
-        # AUROC
-        styler.apply(apply_gradient, val_col='AUROC_val', cmap=cmap, subset=['AUROC'])
-        styler.apply(highlight_best, val_col='AUROC_val', mode='max', subset=['AUROC'])
-        
-        # AUPRC
-        styler.apply(apply_gradient, val_col='AUPRC_val', cmap=cmap, subset=['AUPRC'])
-        styler.apply(highlight_best, val_col='AUPRC_val', mode='max', subset=['AUPRC'])
-        
-        # Brier (Lower Better)
-        styler.apply(apply_gradient, val_col='Brier Score_val', cmap=cmap_r, subset=['Brier Score'])
-        styler.apply(highlight_best, val_col='Brier Score_val', mode='min', subset=['Brier Score'])
-        
-        # Sens/Spec/F1
+        if 'AUROC_val' in table_df.columns:
+            styler.apply(apply_gradient, val_col='AUROC_val', cmap=cmap, subset=['AUROC'])
+            styler.apply(highlight_best, val_col='AUROC_val', mode='max', subset=['AUROC'])
+        if 'AUPRC_val' in table_df.columns:
+            styler.apply(apply_gradient, val_col='AUPRC_val', cmap=cmap, subset=['AUPRC'])
+            styler.apply(highlight_best, val_col='AUPRC_val', mode='max', subset=['AUPRC'])
+        if 'Brier Score_val' in table_df.columns:
+            styler.apply(apply_gradient, val_col='Brier Score_val', cmap=cmap_r, subset=['Brier Score'])
+            styler.apply(highlight_best, val_col='Brier Score_val', mode='min', subset=['Brier Score'])
         for col in ['Sensitivity', 'Specificity', 'F1 Score']:
-            styler.apply(apply_gradient, val_col=f'{col}_val', cmap=cmap, subset=[col])
-            styler.apply(highlight_best, val_col=f'{col}_val', mode='max', subset=[col])
+            val_col = f'{col}_val'
+            if val_col in table_df.columns:
+                styler.apply(apply_gradient, val_col=val_col, cmap=cmap, subset=[col])
+                styler.apply(highlight_best, val_col=val_col, mode='max', subset=[col])
 
         styler.hide(axis="index")
-        
-        # Format for HTML: Replace " (" with "<br>("
-        # We need to apply this to the display values
+
         def format_cell(v):
             if isinstance(v, str) and ' (' in v:
                 return v.replace(' (', '<br>(')
             return v
-            
+
         styler.format(format_cell)
-        
-        # Center align all cells
         styler.set_properties(**{'text-align': 'center'})
-                               
+
         html_table = styler.to_html(table_id=f"results_{outcome}_{branch}_{model_name}", escape=False)
-        
-        # Construct Full HTML
+
+        # Optional delta table
+        delta_candidates = [
+            'Δ AUROC',
+            'Δ AUPRC',
+            'Δ Brier Score',
+            'Δ Sensitivity',
+            'Δ Specificity',
+            'Δ F1 Score',
+        ]
+        delta_cols = ['Feature Set'] + [c for c in delta_candidates if c in table_df.columns]
+        delta_html = ""
+        if len(delta_cols) > 1:
+            delta_df = table_df[delta_cols].copy()
+            delta_styler = delta_df.style.hide(axis="index")
+            delta_styler.set_properties(**{'text-align': 'center'})
+            delta_styler.format(format_cell)
+
+            # Heatmap only if CI excludes 0
+            display_to_key = {col: f"delta_{col.split('Δ ')[-1].lower().replace(' ', '_')}" for col in delta_candidates}
+            delta_styles = get_delta_style_info(table_df, display_to_key)
+
+            def apply_delta_background(s, col_name):
+                styles = []
+                for idx in s.index:
+                    bg = delta_styles.get(idx, {}).get(col_name, {}).get('bg')
+                    styles.append(f'background-color: {bg}' if bg else '')
+                return styles
+
+            for col in delta_candidates:
+                if col not in delta_df.columns:
+                    continue
+                delta_styler.apply(apply_delta_background, col_name=col, subset=[col])
+
+            delta_html = delta_styler.to_html(
+                table_id=f"delta_{outcome}_{branch}_{model_name}", escape=False
+            )
+
         full_html = f"""
         <!DOCTYPE html>
         <html>
@@ -275,20 +296,18 @@ def generate_html_tables(metrics_df: pd.DataFrame):
         <body>
             <h1>Model Performance Analysis</h1>
             <div class="subtitle">Outcome: {outcome} | Branch: {branch} | Model: {model_name}</div>
-            
             {html_table}
-            
+            {('<h2>Δ vs Reference</h2>' + delta_html) if delta_html else ''}
             <div class="footer">
                 Generated on {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M')} | AKI Prediction Project
             </div>
         </body>
         </html>
         """
-        
-        # Save
+
         with open(TABLES_DIR / f'results_{outcome}_{branch}_{model_name}.html', 'w') as f:
             f.write(full_html)
-            
+
     print("Tables generated.")
 
 def plot_curves(df: pd.DataFrame) -> None:
@@ -494,6 +513,47 @@ def get_style_info(df: pd.DataFrame) -> Dict:
             
     return style_info
 
+
+def get_delta_style_info(df: pd.DataFrame, display_to_key: Dict[str, str]) -> Dict:
+    """Background styling for delta tables; no color if CI crosses 0."""
+
+    style_info: Dict[int, Dict[str, Dict[str, str]]] = {}
+    cmap_pos = LinearSegmentedColormap.from_list("delta_pos", ["#ffffff", "#d1e7dd"])
+    cmap_neg = LinearSegmentedColormap.from_list("delta_neg", ["#ffffff", "#f8d7da"])
+
+    for idx in df.index:
+        style_info[idx] = {}
+
+    for display_col, metric_key in display_to_key.items():
+        val_col = f"delta_{metric_key.split('delta_')[-1]}"
+        lower_col = f"{val_col}_lower"
+        upper_col = f"{val_col}_upper"
+        if val_col not in df.columns:
+            continue
+
+        vals = df[val_col]
+        lowers = df[lower_col] if lower_col in df.columns else pd.Series(index=df.index, data=np.nan)
+        uppers = df[upper_col] if upper_col in df.columns else pd.Series(index=df.index, data=np.nan)
+
+        mask = (~vals.isna()) & (~lowers.isna()) & (~uppers.isna()) & ~((lowers <= 0) & (uppers >= 0))
+        if not mask.any():
+            continue
+
+        abs_vals = vals.abs()[mask]
+        max_abs = abs_vals.max()
+        if max_abs == 0:
+            continue
+        norm = plt.Normalize(0, max_abs)
+
+        for idx in df.index:
+            if not mask.get(idx, False):
+                continue
+            val = vals.loc[idx]
+            color = cmap_pos(norm(abs(val))) if val >= 0 else cmap_neg(norm(abs(val)))
+            style_info[idx][display_col] = {'bg': to_hex(color)}
+
+    return style_info
+
 def generate_docx_report(metrics_df: pd.DataFrame):
     """
     Generates a DOCX report with all tables.
@@ -551,8 +611,47 @@ def generate_docx_report(metrics_df: pd.DataFrame):
                         for run in cell.paragraphs[0].runs:
                             run.bold = True
                     set_cell_background(cell, s['bg'])
-                
+        
         doc.add_paragraph() # Spacer
+
+        # Delta table (if available)
+        delta_candidates = [
+            'Δ AUROC',
+            'Δ AUPRC',
+            'Δ Brier Score',
+            'Δ Sensitivity',
+            'Δ Specificity',
+            'Δ F1 Score',
+        ]
+        delta_cols = ['Feature Set'] + [c for c in delta_candidates if c in table_df.columns]
+        if len(delta_cols) > 1:
+            doc.add_paragraph('Δ vs Reference', style='Heading 2')
+            delta_table_df = table_df[delta_cols]
+
+            display_to_key = {col: f"delta_{col.split('Δ ')[-1].lower().replace(' ', '_')}" for col in delta_candidates}
+            delta_styles = get_delta_style_info(table_df, display_to_key)
+
+            delta_table = doc.add_table(rows=1, cols=len(delta_cols))
+            delta_table.style = 'Table Grid'
+
+            hdr = delta_table.rows[0].cells
+            for i, col in enumerate(delta_cols):
+                hdr[i].text = col
+                hdr[i].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+                hdr[i].paragraphs[0].runs[0].bold = True
+
+            for _, row in delta_table_df.iterrows():
+                row_cells = delta_table.add_row().cells
+                for i, col in enumerate(delta_cols):
+                    val = str(row[col])
+                    if ' (' in val:
+                        val = val.replace(' (', '\n(')
+                    row_cells[i].text = val
+                    row_cells[i].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+                    bg = delta_styles.get(row.name, {}).get(col, {}).get('bg')
+                    if bg:
+                        set_cell_background(row_cells[i], bg)
+            doc.add_paragraph()  # spacer
         
     doc.save(RESULTS_DIR / 'report.docx')
     print("DOCX report generated.")
@@ -620,6 +719,62 @@ def generate_pdf_report(metrics_df: pd.DataFrame):
             
             pdf.savefig(fig, bbox_inches='tight')
             plt.close()
+
+            # Delta table as separate page if available
+            delta_candidates = [
+                'Δ AUROC',
+                'Δ AUPRC',
+                'Δ Brier Score',
+                'Δ Sensitivity',
+                'Δ Specificity',
+                'Δ F1 Score',
+            ]
+            delta_cols = ['Feature Set'] + [c for c in delta_candidates if c in table_df.columns]
+            if len(delta_cols) > 1:
+                delta_df = table_df[delta_cols]
+                display_data = []
+                for _, row in delta_df.iterrows():
+                    new_row = []
+                    for col in delta_cols:
+                        val = str(row[col])
+                        if ' (' in val:
+                            val = val.replace(' (', '\n(')
+                        new_row.append(val)
+                    display_data.append(new_row)
+
+                row_height = 0.6
+                fig_height = len(delta_df) * row_height + 2
+
+                fig, ax = plt.subplots(figsize=(12, fig_height))
+                ax.axis('off')
+                ax.set_title(
+                    f"Δ vs Reference - Outcome: {outcome} | Branch: {branch} | Model: {model_name}",
+                    fontsize=14,
+                    fontweight='bold',
+                    pad=20,
+                )
+
+                delta_table = ax.table(cellText=display_data, colLabels=delta_cols, loc='center', cellLoc='center')
+                delta_table.auto_set_font_size(False)
+                delta_table.set_fontsize(10)
+                delta_table.scale(1, 2.5)
+
+                display_to_key = {col: f"delta_{col.split('Δ ')[-1].lower().replace(' ', '_')}" for col in delta_candidates}
+                delta_styles = get_delta_style_info(table_df, display_to_key)
+
+                for (row, col), cell in delta_table.get_celld().items():
+                    if row == 0:
+                        cell.set_text_props(weight='bold')
+                        cell.set_facecolor('#f0f0f0')
+                    else:
+                        df_idx = delta_df.index[row - 1]
+                        col_name = delta_cols[col]
+                        bg = delta_styles.get(df_idx, {}).get(col_name, {}).get('bg')
+                        if bg:
+                            cell.set_facecolor(bg)
+
+                pdf.savefig(fig, bbox_inches='tight')
+                plt.close()
             
     print("PDF report generated.")
 
