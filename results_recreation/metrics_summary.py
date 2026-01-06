@@ -9,6 +9,7 @@ also be saved to Parquet for further analysis.
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import logging
 import sys
 from collections import defaultdict
@@ -272,16 +273,94 @@ def _bootstrap_metrics(
     return pd.DataFrame(records)
 
 
+def _run_with_timeout(func, timeout: Optional[float], desc: str):
+    """Run a callable with an optional wall-clock timeout."""
+    if timeout is None or timeout <= 0:
+        return func()
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(func)
+        try:
+            return future.result(timeout=timeout)
+        except concurrent.futures.TimeoutError as exc:
+            raise TimeoutError(f"{desc} timed out after {timeout} seconds.") from exc
+
+
+def _run_bootstrap_jobs(
+    tasks: List,
+    *,
+    n_jobs: int,
+    parallel_backend: str,
+    timeout: Optional[float],
+    max_retries: int,
+) -> List[pd.DataFrame]:
+    """Execute bootstrap tasks with retries, backend fallbacks, and timeout safeguards."""
+
+    backend_plan: List[str] = []
+    backend_plan.append(parallel_backend)
+    if parallel_backend == "processes":
+        backend_plan.append("threads")
+    elif parallel_backend == "threads":
+        backend_plan.append("processes")
+    backend_plan.append("sequential")
+
+    last_error: Optional[BaseException] = None
+
+    for backend in backend_plan:
+        attempt_limit = 1 if backend == "sequential" else max_retries
+        for attempt in range(1, attempt_limit + 1):
+            try:
+                logger.info(
+                    "Launching bootstrap jobs (backend=%s, attempt=%d/%d, n_jobs=%s, timeout=%s)",
+                    backend,
+                    attempt,
+                    attempt_limit,
+                    n_jobs if backend != "sequential" else 1,
+                    timeout if timeout and timeout > 0 else None,
+                )
+
+                def runner():
+                    if backend == "sequential":
+                        return [task() for task in tasks]
+                    backend_name = "loky" if backend == "processes" else "threading"
+                    return Parallel(n_jobs=n_jobs, backend=backend_name)(tasks)
+
+                effective_timeout = timeout if timeout and timeout > 0 else None
+                return _run_with_timeout(runner, effective_timeout, f"Bootstrap ({backend})")
+            except TimeoutError as exc:
+                last_error = exc
+                logger.error(
+                    "Bootstrap attempt %d/%d (backend=%s) timed out after %s seconds. Falling back if available.",
+                    attempt,
+                    attempt_limit,
+                    backend,
+                    timeout if timeout and timeout > 0 else "unspecified",
+                )
+            except Exception as exc:  # noqa: BLE001
+                last_error = exc
+                logger.exception(
+                    "Bootstrap attempt %d/%d (backend=%s) failed: %s. Falling back if available.",
+                    attempt,
+                    attempt_limit,
+                    backend,
+                    exc,
+                )
+
+    raise RuntimeError("Bootstrapping failed after retries and fallbacks.") from last_error
+
+
 def summarize(
     prediction_sets: Iterable[PredictionSet],
     n_bootstrap: int = 1000,
     stratified_bootstrap: bool = True,
     bootstrap_seed: int = 0,
     n_jobs: int = -1,
-    parallel_backend: str = "threads",
+    parallel_backend: str = "processes",
     delta_mode: str = "none",
     reference_feature_set: str = "preop_only",
     reference_model_name: Optional[str] = None,
+    bootstrap_timeout: Optional[float] = 1800.0,
+    bootstrap_max_retries: int = 2,
 ) -> Tuple[pd.DataFrame, Optional[pd.DataFrame]]:
     summary_rows: List[Dict[str, object]] = []
     bootstrap_frames: List[pd.DataFrame] = []
@@ -357,8 +436,14 @@ def summarize(
                 )
             )
 
-        logger.info("Launching bootstrap jobs: %d tasks (backend=%s)", len(tasks), parallel_backend)
-        bootstrap_frames = Parallel(n_jobs=n_jobs, backend="loky" if parallel_backend == "processes" else "threading")(tasks)
+        logger.info("Prepared %d bootstrap tasks (backend preference=%s)", len(tasks), parallel_backend)
+        bootstrap_frames = _run_bootstrap_jobs(
+            tasks,
+            n_jobs=n_jobs,
+            parallel_backend=parallel_backend,
+            timeout=bootstrap_timeout,
+            max_retries=max(1, bootstrap_max_retries),
+        )
 
     summary_df = pd.DataFrame(summary_rows)
 
@@ -441,9 +526,6 @@ def _attach_delta_cis(
         outcome, branch, pipeline = group_key
         # Locate reference rows for this group.
         ref_candidates = group_df[group_df["feature_set"] == reference_feature_set]
-        if reference_model_name:
-            ref_candidates = ref_candidates[ref_candidates["model_name"] == reference_model_name]
-
         if ref_candidates.empty:
             logger.warning(
                 "No reference rows found for group %s with feature_set=%s%s; skipping delta CIs.",
@@ -453,21 +535,40 @@ def _attach_delta_cis(
             )
             continue
 
-        # If multiple references remain, pick the first sorted by model_name for determinism.
-        ref_model_name = ref_candidates.sort_values("model_name").iloc[0]["model_name"]
-        ref_bootstrap = ref_candidates[ref_candidates["model_name"] == ref_model_name]
+        def select_reference(target_model_name: str):
+            """Pick the reference matching the target model when possible."""
+            preferred_models = []
+            unique_models = ref_candidates["model_name"].dropna().unique()
+            if target_model_name in unique_models:
+                preferred_models.append(target_model_name)
+            if reference_model_name and reference_model_name not in preferred_models:
+                preferred_models.append(reference_model_name)
+            # Deterministic fallback order for any remaining candidates.
+            for name in sorted(unique_models):
+                if name not in preferred_models:
+                    preferred_models.append(name)
 
-        ref_summary_row = summary_df[
-            (summary_df["outcome"] == outcome)
-            & (summary_df["branch"] == branch)
-            & (summary_df["pipeline"] == pipeline)
-            & (summary_df["feature_set"] == reference_feature_set)
-            & (summary_df["model_name"] == ref_model_name)
-        ]
-        ref_point = ref_summary_row.iloc[0] if not ref_summary_row.empty else None
+            for model_name in preferred_models:
+                ref_bootstrap = ref_candidates[ref_candidates["model_name"] == model_name]
+                if ref_bootstrap.empty:
+                    continue
+                ref_summary_row = summary_df[
+                    (summary_df["outcome"] == outcome)
+                    & (summary_df["branch"] == branch)
+                    & (summary_df["pipeline"] == pipeline)
+                    & (summary_df["feature_set"] == reference_feature_set)
+                    & (summary_df["model_name"] == model_name)
+                ]
+                ref_point = ref_summary_row.iloc[0] if not ref_summary_row.empty else None
+                return model_name, ref_bootstrap.set_index("bootstrap_id"), ref_point
 
-        # Build fast lookup for reference per bootstrap_id.
-        ref_lookup = ref_bootstrap.set_index("bootstrap_id")
+            logger.warning(
+                "Reference selection failed for group %s (target model=%s, feature_set=%s).",
+                group_key,
+                target_model_name,
+                reference_feature_set,
+            )
+            return None
 
         # Iterate target models within the same grouping (including other feature sets).
         target_rows = summary_df[
@@ -477,10 +578,13 @@ def _attach_delta_cis(
         ]
 
         for idx, target_row in target_rows.iterrows():
-            if (
-                target_row["feature_set"] == reference_feature_set
-                and (reference_model_name is None or target_row["model_name"] == reference_model_name)
-            ):
+            ref_selection = select_reference(target_row["model_name"])
+            if ref_selection is None:
+                continue
+
+            ref_model_name, ref_lookup, ref_point = ref_selection
+
+            if target_row["feature_set"] == reference_feature_set and target_row["model_name"] == ref_model_name:
                 # Reference row: deltas are zero by definition.
                 for col in metric_cols:
                     summary_df.loc[idx, f"delta_{col}"] = 0.0
@@ -546,6 +650,19 @@ def parse_args() -> argparse.Namespace:
         "--bootstrap-seed", type=int, default=0, help="Random seed for bootstrap resampling (default: 0)"
     )
     parser.add_argument(
+        "--bootstrap-timeout",
+        type=float,
+        default=1800.0,
+        help="Wall-clock timeout (seconds) for executing all bootstrap tasks per backend (default: 1800). "
+        "Set to 0 to disable timeouts.",
+    )
+    parser.add_argument(
+        "--bootstrap-max-retries",
+        type=int,
+        default=2,
+        help="Number of retry attempts per backend before falling back (default: 2).",
+    )
+    parser.add_argument(
         "--bootstrap-stratified",
         action="store_true",
         default=True,
@@ -580,8 +697,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--parallel-backend",
         choices=["threads", "processes"],
-        default="threads",
-        help="Joblib backend to use for bootstrapping (threads or processes; default: threads).",
+        default="processes",
+        help="Joblib backend to use for bootstrapping (threads or processes; default: processes).",
     )
     parser.add_argument(
         "--reference-feature-set",
@@ -609,6 +726,8 @@ def main() -> None:
         delta_mode=args.delta_mode,
         reference_feature_set=args.reference_feature_set,
         reference_model_name=args.reference_model_name,
+        bootstrap_timeout=args.bootstrap_timeout,
+        bootstrap_max_retries=args.bootstrap_max_retries,
         n_jobs=args.n_jobs,
         parallel_backend=args.parallel_backend,
     )
