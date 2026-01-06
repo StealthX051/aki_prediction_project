@@ -4,6 +4,7 @@
 # source activate aki_prediction_project
 
 PYTHON_EXEC="/home/exouser/.conda/envs/aki_prediction_project/bin/python"
+PARALLEL_BACKEND="${PARALLEL_BACKEND:-processes}"
 
 # Outcomes
 OUTCOMES=("any_aki" "icu_admission")
@@ -101,8 +102,10 @@ $PYTHON_EXEC -m results_recreation.metrics_summary \
     --results-dir results \
     --delta-mode reference \
     --reference-feature-set preop_only \
-    --parallel-backend processes \
+    --parallel-backend "$PARALLEL_BACKEND" \
     --n-jobs -1 \
+    --bootstrap-timeout 1800 \
+    --bootstrap-max-retries 2 \
     2>&1 | tee -a "$LOG_FILE"
 
 echo "  > Building reports from standardized artifacts..." | tee -a "$LOG_FILE"

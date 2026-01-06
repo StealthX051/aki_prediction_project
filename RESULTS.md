@@ -12,6 +12,7 @@ source of truth; Aeon artifacts are optional and experimental.
   - `--prep auto` (default): reuse `data/processed/aki_features_master_wide*.csv` if present; rebuild only if missing.
   - `--prep force`: re-run Steps 01–05 (cohort, Catch22, preop, intraop, merge) and regenerate both non-windowed and windowed features.
   - `--prep skip`: assume processed features already exist; skip all prep.
+- Parallel backend default: set `PARALLEL_BACKEND=processes` in the shells (override via env) to keep bootstrapping on the process pool; scripts fall back to threads or sequential only on timeout/error.
 - Model-family control:
   - XGBoost only: `./run_experiments.sh --only-xgboost --prep auto`
   - EBM only (reuse XGBoost-prepared data): `./run_experiments.sh --only-ebm --prep skip`
@@ -25,6 +26,7 @@ source of truth; Aeon artifacts are optional and experimental.
   - PR curves: step rendering with a prevalence baseline; class-count annotations are off by default.
   - Plotting runs in parallel (`PLOT_N_JOBS=-2`) and prefers calibrated probabilities.
   - Override via env when rerunning `reporting.make_report` if you need different visuals (e.g., `CALIBRATION_SHOW_BIN_COUNTS`, `CALIBRATION_MAX_COUNT_ANNOTATE`, `CALIBRATION_SHOW_PROB_HIST`, `CALIBRATION_SHOW_XLIM_INSET`, `PLOT_PREFER_CALIBRATED`, `PR_SHOW_CLASS_BALANCE`).
+- Bootstrapping safeguards: run scripts pin `--bootstrap-timeout 1800` and `--bootstrap-max-retries 2` so long jobs don’t hang silently; if the process backend fails or times out, they retry threads then sequential.
 - EBM explainability is auto-enabled in `run_experiments.sh` (the script injects `--export_ebm_explanations` for EBM runs). Per-term exports run in a bounded thread pool with per-term timeouts and retries; logging is unbuffered (`PYTHONUNBUFFERED=1`) to surface progress and avoid silent hangs. If you need to regenerate XAI for existing EBM models only, reuse processed data and models:  
   ```bash
   PYTHON_BIN=/home/exouser/.conda/envs/aki_prediction_project/bin/python

@@ -124,6 +124,7 @@ Model performance was evaluated on the independent hold-out test set.
 *   **Metrics**: The primary performance metric was **AUPRC**, given the class imbalance. Secondary metrics included AUROC, F1-score, Sensitivity, Specificity, Accuracy, and Brier Score.
 *   **Interpretability**: SHapley Additive exPlanations (**SHAP**) values were calculated for XGBoost models to quantify feature contributions. EBM runs rely on the model's native additive terms; SHAP is skipped, and interpretability is provided by calibrated EBM exports (global, local, per-term) that align logits, probabilities, thresholds, and calibration parameters in the saved artifacts.
 *   **Reporting visuals (defaults)**: Calibration plots use quantile bins (10 by default), annotate per-bin counts, include a probability histogram beneath the curve, and auto-zoom the x-axis with a small inset showing the full [0,1] range. Precision–recall plots render as step curves with a prevalence baseline; class-count annotations are disabled by default but can be enabled via environment flags when regenerating reports.
+*   **Execution safeguards**: Bootstrapping runs on a process pool by default (`PARALLEL_BACKEND=processes` in the run shells) with bounded retries and wall-clock timeouts; if a pool hangs or exceeds the timeout it cleanly falls back to threads, then sequential, ensuring reporting completes rather than stalling.
 
 ## Post-hoc Analysis
 To ensure robust and clinically applicable performance estimates, a rigorous post-hoc analysis pipeline was implemented:

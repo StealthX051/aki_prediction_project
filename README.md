@@ -252,6 +252,7 @@ tables/figures synchronized.
 *   **Artifact Validation & Aggregation**: `results_recreation/metrics_summary.py` crawls `results/**/models/**/predictions/test.csv`, confirms that the paired `artifacts/calibration.json` and `artifacts/threshold.json` from Step 7 are present, and computes held-out metrics using the stored threshold for each configuration. A consolidated metrics table is written to `results/tables/metrics_summary.csv` (and optional bootstrap samples to Parquet).
 *   **Calibration & Thresholds**: No report-time refitting occurs. The recalibration parameters and thresholds learned from OOF training scores in Step 7 are **fixed** and reapplied to the test predictions when computing metrics and bootstraps.
 *   **Bootstrapping**: Non-parametric, outcome-stratified bootstrap of the held-out test predictions (default 1000 reps). The stored threshold is fixed. Bootstrap samples are **paired across models within each Outcome × Branch × Pipeline group**, enabling Δ CIs. Default reference for Δ is the `preop_only` feature set.
+    * Parallelization defaults to the process backend with `PARALLEL_BACKEND=processes` in the run shells; retries and timeouts are baked in (`--bootstrap-timeout 1800`, `--bootstrap-max-retries 2`) so a stuck pool falls back to threads, then sequential, instead of hanging.
 *   **Unified Reporting**: `reporting/make_report.py` consumes `metrics_summary.csv` to generate Word, PDF, and HTML tables plus ROC/PR/Calibration figures across both pipelines. Reports display distinct rows for each model type (`xgboost` vs. `ebm`) within every Outcome × Branch × Feature Set combination, and add a separate delta table (Δ vs reference) with heatmap shading only when the Δ CI excludes 0.
 *   **Outputs**:
     *   **Reports**:
@@ -265,6 +266,8 @@ python results_recreation/metrics_summary.py \
   --delta-mode reference \
   --reference-feature-set preop_only \
   --parallel-backend processes \
+  --bootstrap-timeout 1800 \
+  --bootstrap-max-retries 2 \
   --n-jobs -1       # Precompute consolidated metrics + Δs using all cores
 
 python reporting/make_report.py  # Build figures and reports from the precomputed CSV

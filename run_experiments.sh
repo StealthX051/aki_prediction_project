@@ -18,6 +18,7 @@ PYTHON_BIN="${PYTHON_BIN:-python}"
 LOG_FILE="${LOG_FILE:-experiment_log.txt}"
 PREP_MODE="${PREP_MODE:-auto}" # auto|force|skip
 SMOKE_TEST_FLAG="${SMOKE_TEST_FLAG:-}"
+PARALLEL_BACKEND="${PARALLEL_BACKEND:-processes}"
 
 export DATA_DIR PROCESSED_DIR RAW_DIR RESULTS_DIR
 
@@ -199,8 +200,10 @@ if has_predictions; then
         --results-dir "$RESULTS_DIR" \
         --delta-mode reference \
         --reference-feature-set preop_only \
-        --parallel-backend processes \
+        --parallel-backend "$PARALLEL_BACKEND" \
         --n-jobs -1 \
+        --bootstrap-timeout 1800 \
+        --bootstrap-max-retries 2 \
         2>&1 | tee -a "$LOG_FILE"
 
     echo "  > Building reports from standardized artifacts..." | tee -a "$LOG_FILE"

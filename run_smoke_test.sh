@@ -11,6 +11,7 @@ SMOKE_ROOT=${SMOKE_ROOT:-"$ROOT_DIR/smoke_test_outputs"}
 CASE_LIMIT=${CASE_LIMIT:-10}
 HPO_TRIALS=${HPO_TRIALS:-2}
 PYTHON_BIN=${PYTHON_BIN:-python}
+PARALLEL_BACKEND=${PARALLEL_BACKEND:-processes}
 
 SMOKE_DATA_DIR="$SMOKE_ROOT/data"
 SMOKE_PROCESSED_DIR="$SMOKE_DATA_DIR/processed"
@@ -85,8 +86,10 @@ $PYTHON_BIN -m results_recreation.metrics_summary \
     --results-dir "$SMOKE_RESULTS_DIR" \
     --delta-mode reference \
     --reference-feature-set preop_only \
-    --parallel-backend processes \
+    --parallel-backend "$PARALLEL_BACKEND" \
     --n-jobs -1 \
+    --bootstrap-timeout 1800 \
+    --bootstrap-max-retries 2 \
     2>&1 | tee -a "$LOG_FILE"
 
 echo "--- Reporting: build reports ---" | tee -a "$LOG_FILE"
