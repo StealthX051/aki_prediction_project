@@ -204,6 +204,15 @@ if has_predictions; then
         2>&1 | tee -a "$LOG_FILE"
 
     echo "  > Building reports from standardized artifacts..." | tee -a "$LOG_FILE"
+    CALIBRATION_BIN_STRATEGY=quantile \
+    CALIBRATION_N_BINS=10 \
+    CALIBRATION_SHOW_BIN_COUNTS=true \
+    CALIBRATION_SHOW_PROB_HIST=true \
+    CALIBRATION_SHOW_XLIM_INSET=true \
+    CALIBRATION_MAX_COUNT_ANNOTATE=30 \
+    PLOT_PREFER_CALIBRATED=true \
+    PLOT_N_JOBS=-2 \
+    PR_SHOW_CLASS_BALANCE=false \
     "$PYTHON_BIN" -m reporting.make_report 2>&1 | tee -a "$LOG_FILE"
 else
     echo "  > No prediction files found; skipping metrics/report generation." | tee -a "$LOG_FILE"

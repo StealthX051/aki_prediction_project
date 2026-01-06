@@ -20,6 +20,11 @@ source of truth; Aeon artifacts are optional and experimental.
 - Metrics/report generation is skipped if no prediction files are present, so partial runs (only one family) are handled gracefully. All CLI flags also pass through `run_catch22_experiments.sh`.
 - `results_recreation/metrics_summary.py` validates each `predictions/test.csv`; invalid files are skipped with a warning so a single bad artifact does not halt consolidation. If no valid predictions remain, it fails fast with a clear message.
 - All run scripts (`run_experiments*.sh`, smoke tests) now invoke `metrics_summary` with stratified, paired bootstrapping, Δ vs `preop_only`, and full-core parallelism, then call `reporting/make_report` to emit the report bundle (main + Δ tables).
+- Reporting defaults baked into the run scripts:
+  - Calibration: quantile bins (`CALIBRATION_BIN_STRATEGY=quantile`, `CALIBRATION_N_BINS=10`), per-bin counts, probability histograms under the curve, auto x-axis zoom with a full-range inset, counts annotated up to 30/bin.
+  - PR curves: step rendering with a prevalence baseline; class-count annotations are off by default.
+  - Plotting runs in parallel (`PLOT_N_JOBS=-2`) and prefers calibrated probabilities.
+  - Override via env when rerunning `reporting.make_report` if you need different visuals (e.g., `CALIBRATION_SHOW_BIN_COUNTS`, `CALIBRATION_MAX_COUNT_ANNOTATE`, `CALIBRATION_SHOW_PROB_HIST`, `CALIBRATION_SHOW_XLIM_INSET`, `PLOT_PREFER_CALIBRATED`, `PR_SHOW_CLASS_BALANCE`).
 - EBM explainability is auto-enabled in `run_experiments.sh` (the script injects `--export_ebm_explanations` for EBM runs). Per-term exports run in a bounded thread pool with per-term timeouts and retries; logging is unbuffered (`PYTHONUNBUFFERED=1`) to surface progress and avoid silent hangs. If you need to regenerate XAI for existing EBM models only, reuse processed data and models:  
   ```bash
   PYTHON_BIN=/home/exouser/.conda/envs/aki_prediction_project/bin/python

@@ -1,8 +1,10 @@
 import logging
+import math
 import os
 import sys
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict
+from typing import Dict, List, Optional, Set, Tuple
 
 import matplotlib.pyplot as plt
 import pandas as pd
@@ -13,6 +15,9 @@ from docx.oxml.shared import OxmlElement
 from docx.shared import Pt
 from matplotlib.backends.backend_pdf import PdfPages
 from matplotlib.colors import LinearSegmentedColormap, to_hex
+from mpl_toolkits.axes_grid1.inset_locator import inset_axes
+import numpy as np
+from joblib import Parallel, delayed
 from sklearn.calibration import calibration_curve
 from sklearn.metrics import (
     average_precision_score,
@@ -37,6 +42,69 @@ FIGURES_DIR.mkdir(parents=True, exist_ok=True)
 TABLES_DIR.mkdir(parents=True, exist_ok=True)
 
 logger = logging.getLogger(__name__)
+
+# --- Plot configuration helpers ------------------------------------------------
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    """Parse a boolean-like environment variable."""
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _env_set(name: str) -> Optional[Set[str]]:
+    """Parse a comma-separated env var into a set of strings."""
+    raw = os.getenv(name)
+    if not raw:
+        return None
+    items = {item.strip() for item in raw.split(",") if item.strip()}
+    return items or None
+
+
+@dataclass
+class PlotConfig:
+    """Configurable plotting defaults with environment overrides.
+
+    Defaults mirror the current behavior (plot all models/feature sets) but
+    switch calibration bins to quantile-based for stability and prefer
+    calibrated probabilities when available.
+    """
+
+    n_bins: int = 10
+    bin_strategy: str = "quantile"
+    prefer_calibrated: bool = True
+    feature_set_allowlist: Optional[Set[str]] = None
+    feature_set_blocklist: Optional[Set[str]] = None
+    model_allowlist: Optional[Set[str]] = None
+    model_blocklist: Optional[Set[str]] = None
+    show_bin_counts: bool = True
+    show_prob_hist: bool = True
+    show_xlim_inset: bool = True
+    max_count_to_annotate: int = 30
+    n_jobs: int = -2
+    show_class_balance: bool = False
+
+    @classmethod
+    def from_env(cls) -> "PlotConfig":
+        """Create a PlotConfig using optional environment overrides."""
+        return cls(
+            n_bins=int(os.getenv("CALIBRATION_N_BINS", cls.n_bins)),
+            bin_strategy=os.getenv("CALIBRATION_BIN_STRATEGY", cls.bin_strategy),
+            prefer_calibrated=_env_bool("PLOT_PREFER_CALIBRATED", cls.prefer_calibrated),
+            feature_set_allowlist=_env_set("PLOT_FEATURE_SET_ALLOWLIST"),
+            feature_set_blocklist=_env_set("PLOT_FEATURE_SET_BLOCKLIST"),
+            model_allowlist=_env_set("PLOT_MODEL_ALLOWLIST"),
+            model_blocklist=_env_set("PLOT_MODEL_BLOCKLIST"),
+            show_bin_counts=_env_bool("CALIBRATION_SHOW_BIN_COUNTS", cls.show_bin_counts),
+            show_prob_hist=_env_bool("CALIBRATION_SHOW_PROB_HIST", cls.show_prob_hist),
+            show_xlim_inset=_env_bool("CALIBRATION_SHOW_XLIM_INSET", cls.show_xlim_inset),
+            max_count_to_annotate=int(os.getenv("CALIBRATION_MAX_COUNT_ANNOTATE", cls.max_count_to_annotate)),
+            n_jobs=int(os.getenv("PLOT_N_JOBS", cls.n_jobs)),
+            show_class_balance=_env_bool("PR_SHOW_CLASS_BALANCE", cls.show_class_balance),
+        )
+
 
 DEFAULT_FEATURE_SET_MAPPING = {
     'preop_only': 'Preoperative Only',
@@ -310,12 +378,78 @@ def generate_html_tables(metrics_df: pd.DataFrame):
 
     print("Tables generated.")
 
-def plot_curves(df: pd.DataFrame) -> None:
-    """Generate ROC, PR, and calibration plots for each model grouping.
+def _select_prob_column(model_group: pd.DataFrame, config: PlotConfig) -> str:
+    """Choose probability column based on preference and availability."""
+    if config.prefer_calibrated and "y_prob_calibrated" in model_group.columns:
+        return "y_prob_calibrated"
+    if not config.prefer_calibrated and "y_prob_raw" in model_group.columns:
+        return "y_prob_raw"
+    # Fallback to whatever exists
+    return "y_prob_calibrated" if "y_prob_calibrated" in model_group.columns else "y_prob_raw"
 
-    Groups lacking both positive and negative examples are skipped to avoid
-    metric calculation errors.
+
+def _filter_plot_groups(df: pd.DataFrame, config: PlotConfig) -> pd.DataFrame:
+    """Apply allow/block lists to feature sets and models."""
+    filtered = df.copy()
+    if config.feature_set_allowlist:
+        filtered = filtered[filtered['feature_set'].isin(config.feature_set_allowlist)]
+    if config.feature_set_blocklist:
+        filtered = filtered[~filtered['feature_set'].isin(config.feature_set_blocklist)]
+    if config.model_allowlist:
+        filtered = filtered[filtered['model_name'].isin(config.model_allowlist)]
+    if config.model_blocklist:
+        filtered = filtered[~filtered['model_name'].isin(config.model_blocklist)]
+    return filtered
+
+
+def _calibration_bins(
+    y_true: pd.Series, y_prob: pd.Series, cfg: PlotConfig
+) -> Tuple[List[float], List[float], List[int]]:
+    """Compute calibration bin statistics with counts.
+
+    Returns (mean_pred, frac_positive, count) per non-empty bin.
     """
+    y_true_arr = y_true.values
+    y_prob_arr = y_prob.values
+    n_bins = cfg.n_bins
+
+    if cfg.bin_strategy == "quantile":
+        edges = np.quantile(y_prob_arr, np.linspace(0.0, 1.0, n_bins + 1))
+    else:
+        edges = np.linspace(0.0, 1.0, n_bins + 1)
+
+    # Ensure edges are strictly increasing to avoid empty duplicates
+    edges = np.unique(edges)
+    mean_pred: List[float] = []
+    frac_pos: List[float] = []
+    counts: List[int] = []
+
+    for i in range(len(edges) - 1):
+        left, right = edges[i], edges[i + 1]
+        if i == 0:
+            mask = (y_prob_arr >= left) & (y_prob_arr <= right)
+        else:
+            mask = (y_prob_arr > left) & (y_prob_arr <= right)
+        if not mask.any():
+            continue
+        probs_bin = y_prob_arr[mask]
+        true_bin = y_true_arr[mask]
+        mean_pred.append(float(np.mean(probs_bin)))
+        frac_pos.append(float(np.mean(true_bin)))
+        counts.append(int(len(true_bin)))
+
+    return mean_pred, frac_pos, counts
+
+
+def plot_curves(df: pd.DataFrame, config: Optional[PlotConfig] = None) -> None:
+    """Generate ROC, PR, and calibration plots for each model grouping."""
+    cfg = config or PlotConfig.from_env()
+
+    df = _filter_plot_groups(df, cfg)
+    if df.empty:
+        logger.warning("No data left to plot after applying plot filters.")
+        return
+
     # Set Style for NeurIPS (Serif, Academic)
     plt.style.use('seaborn-v0_8-whitegrid')
     plt.rcParams['font.family'] = 'serif'
@@ -330,20 +464,26 @@ def plot_curves(df: pd.DataFrame) -> None:
     plt.rcParams['legend.frameon'] = True
     plt.rcParams['legend.framealpha'] = 0.9
     plt.rcParams['legend.edgecolor'] = 'white'
-    
-    # Group by Outcome and Branch
-    for (outcome, branch, model_name), group in df.groupby(['outcome', 'branch', 'model_name']):
-        if group['y_true'].nunique() < 2:
+
+    tasks = list(df.groupby(['outcome', 'branch', 'model_name']))
+    if not tasks:
+        logger.warning("No groups found for plotting.")
+        return
+
+    def _plot_group(group_key, group_df):
+        outcome, branch, model_name = group_key
+
+        if group_df['y_true'].nunique() < 2:
             logger.warning(
                 "Skipping plots for %s/%s/%s because only one class is present.",
                 outcome,
                 branch,
                 model_name,
             )
-            continue
+            return
 
-        valid_groups = {}
-        for feature_set, model_group in group.groupby('feature_set'):
+        valid_groups: Dict[str, pd.DataFrame] = {}
+        for feature_set, model_group in group_df.groupby('feature_set'):
             if model_group['y_true'].nunique() < 2:
                 logger.warning(
                     "Skipping feature set %s for %s/%s/%s because only one class is present.",
@@ -362,15 +502,20 @@ def plot_curves(df: pd.DataFrame) -> None:
                 branch,
                 model_name,
             )
-            continue
+            return
 
-        # 1. ROC Curve (Raw)
-        plt.figure(figsize=(8, 6)) # Standard academic figure size
+        # Helper to save and close figures consistently
+        def _save_fig(fig_obj: plt.Figure, path: Path) -> None:
+            fig_obj.savefig(path, dpi=300, bbox_inches='tight')
+            plt.close(fig_obj)
 
-        auc_scores = []
+        # 1. ROC Curve
+        fig, ax = plt.subplots(figsize=(8, 6), constrained_layout=True)
+
+        auc_scores: List[Tuple[str, float]] = []
         for feature_set, model_group in valid_groups.items():
             y_true = model_group['y_true']
-            prob_col = 'y_prob_calibrated' if 'y_prob_calibrated' in model_group.columns else 'y_prob_raw'
+            prob_col = _select_prob_column(model_group, cfg)
             y_prob = model_group[prob_col]
             roc_auc = roc_auc_score(y_true, y_prob)
             auc_scores.append((feature_set, roc_auc))
@@ -380,72 +525,147 @@ def plot_curves(df: pd.DataFrame) -> None:
         for feature_set, roc_auc in auc_scores:
             model_group = valid_groups[feature_set]
             y_true = model_group['y_true']
-            prob_col = 'y_prob_calibrated' if 'y_prob_calibrated' in model_group.columns else 'y_prob_raw'
+            prob_col = _select_prob_column(model_group, cfg)
             y_prob = model_group[prob_col]
             fpr, tpr, _ = roc_curve(y_true, y_prob)
 
             label_name = FEATURE_SET_MAPPING.get(feature_set, feature_set)
-            plt.plot(fpr, tpr, label=f'{label_name} (AUC = {roc_auc:.3f})', linewidth=1.5)
+            ax.plot(fpr, tpr, label=f'{label_name} (AUC = {roc_auc:.3f})', linewidth=1.5)
 
-        plt.plot([0, 1], [0, 1], 'k--', alpha=0.5, linewidth=1)
-        plt.xlabel('False Positive Rate')
-        plt.ylabel('True Positive Rate')
-        plt.title(f'ROC Curves - {outcome} ({branch}) - {model_name}')
-        plt.legend(loc='lower right')
-        plt.tight_layout()
-        plt.savefig(FIGURES_DIR / f'roc_{outcome}_{branch}_{model_name}.png', dpi=300)
-        plt.close()
+        ax.plot([0, 1], [0, 1], 'k--', alpha=0.5, linewidth=1)
+        ax.set_xlabel('False Positive Rate')
+        ax.set_ylabel('True Positive Rate')
+        ax.set_title(f'ROC Curves - {outcome} ({branch}) - {model_name}')
+        ax.legend(loc='lower right')
+        _save_fig(fig, FIGURES_DIR / f'roc_{outcome}_{branch}_{model_name}.png')
 
-        # 2. PR Curve (Raw)
-        plt.figure(figsize=(8, 6))
+        # 2. PR Curve
+        fig, ax = plt.subplots(figsize=(8, 6), constrained_layout=True)
 
-        auprc_scores = []
+        auprc_scores: List[Tuple[str, float]] = []
+        class_balance: Dict[str, Tuple[int, int]] = {}
         for feature_set, model_group in valid_groups.items():
             y_true = model_group['y_true']
-            prob_col = 'y_prob_calibrated' if 'y_prob_calibrated' in model_group.columns else 'y_prob_raw'
+            prob_col = _select_prob_column(model_group, cfg)
             y_prob = model_group[prob_col]
             pr_auc = average_precision_score(y_true, y_prob)
             auprc_scores.append((feature_set, pr_auc))
+            if cfg.show_class_balance:
+                pos = int((y_true == 1).sum())
+                neg = int((y_true == 0).sum())
+                class_balance[feature_set] = (pos, neg)
 
         auprc_scores.sort(key=lambda x: x[1], reverse=True)
+
+        prevalence = None
+        if cfg.show_class_balance:
+            # Use the first valid group for prevalence baseline (they share outcome/branch/model)
+            for feature_set, model_group in valid_groups.items():
+                y_true = model_group['y_true']
+                prevalence = float((y_true == 1).mean())
+                break
+
+        if prevalence is not None:
+            ax.axhline(prevalence, color='gray', linestyle='--', linewidth=1, alpha=0.7, label=f'Prevalence = {prevalence:.3f}')
 
         for feature_set, pr_auc in auprc_scores:
             model_group = valid_groups[feature_set]
             y_true = model_group['y_true']
-            prob_col = 'y_prob_calibrated' if 'y_prob_calibrated' in model_group.columns else 'y_prob_raw'
+            prob_col = _select_prob_column(model_group, cfg)
             y_prob = model_group[prob_col]
             prec, rec, _ = precision_recall_curve(y_true, y_prob)
 
             label_name = FEATURE_SET_MAPPING.get(feature_set, feature_set)
-            plt.plot(rec, prec, label=f'{label_name} (AUPRC = {pr_auc:.3f})', linewidth=1.5)
+            cb_suffix = ""
+            if cfg.show_class_balance and feature_set in class_balance:
+                pos, neg = class_balance[feature_set]
+                cb_suffix = f" (pos={pos}, neg={neg})"
+            ax.step(rec, prec, where="post", label=f'{label_name} (AP = {pr_auc:.3f}){cb_suffix}', linewidth=1.5)
 
-        plt.xlabel('Recall')
-        plt.ylabel('Precision')
-        plt.title(f'PR Curves - {outcome} ({branch}) - {model_name}')
-        plt.legend(loc='lower left')
-        plt.tight_layout()
-        plt.savefig(FIGURES_DIR / f'pr_{outcome}_{branch}_{model_name}.png', dpi=300)
-        plt.close()
+        ax.set_xlabel('Recall')
+        ax.set_ylabel('Precision')
+        ax.set_title(f'PR Curves - {outcome} ({branch}) - {model_name}')
+        ax.legend(loc='lower left')
+        _save_fig(fig, FIGURES_DIR / f'pr_{outcome}_{branch}_{model_name}.png')
 
         # 3. Calibration Curve
-        plt.figure(figsize=(8, 6))
+        fig, ax = plt.subplots(figsize=(8, 6), constrained_layout=True)
+        all_probs: List[float] = []
+        max_prob_seen = 0.0
         for feature_set, model_group in valid_groups.items():
             y_true = model_group['y_true']
-            prob_col = 'y_prob_calibrated' if 'y_prob_calibrated' in model_group.columns else 'y_prob_raw'
+            prob_col = _select_prob_column(model_group, cfg)
             y_prob = model_group[prob_col]
-            prob_true, prob_pred = calibration_curve(y_true, y_prob, n_bins=10)
+            prob_pred, prob_true, counts = _calibration_bins(y_true, y_prob, cfg)
+            all_probs.extend(y_prob.tolist())
+            max_prob_seen = max(max_prob_seen, y_prob.max())
 
             label_name = FEATURE_SET_MAPPING.get(feature_set, feature_set)
-            plt.plot(prob_pred, prob_true, marker='o', label=label_name, linewidth=1, markersize=4, alpha=0.7)
+            ax.plot(prob_pred, prob_true, marker='o', label=label_name, linewidth=1, markersize=4, alpha=0.7)
 
-        plt.plot([0, 1], [0, 1], 'k--', alpha=0.5, linewidth=1)
-        plt.xlabel('Mean Predicted Probability')
-        plt.ylabel('Fraction of Positives')
-        plt.title(f'Calibration Curves - {outcome} ({branch}) - {model_name}')
-        plt.legend(loc='best')
-        plt.tight_layout()
-        plt.savefig(FIGURES_DIR / f'calibration_{outcome}_{branch}_{model_name}.png', dpi=300)
-        plt.close()
+            if cfg.show_bin_counts:
+                for x, y, c in zip(prob_pred, prob_true, counts):
+                    if c > cfg.max_count_to_annotate:
+                        continue
+                    ax.annotate(
+                        str(c),
+                        (x, y),
+                        textcoords="offset points",
+                        xytext=(0, 6),
+                        ha='center',
+                        fontsize=7,
+                        color='gray',
+                    )
+
+        ax.plot([0, 1], [0, 1], 'k--', alpha=0.5, linewidth=1)
+        ax.set_xlabel('Mean Predicted Probability')
+        ax.set_ylabel('Fraction of Positives')
+        ax.set_title(f'Calibration Curves - {outcome} ({branch}) - {model_name}')
+
+        if max_prob_seen > 0:
+            auto_xmax = min(1.0, math.ceil((max_prob_seen * 1.05) * 10) / 10.0)
+            auto_xmax = max(auto_xmax, 0.1)
+            auto_xmax = min(auto_xmax, 0.3)
+            ax.set_xlim(0, auto_xmax)
+            if cfg.show_xlim_inset:
+                inset_ax = inset_axes(ax, width="35%", height="35%", loc="upper left", borderpad=1.2)
+                inset_ax.plot([0, 1], [0, 1], 'k--', alpha=0.4, linewidth=1)
+                inset_ax.set_xlim(0, 1)
+                inset_ax.set_ylim(ax.get_ylim())
+                inset_ax.set_xticks([0, 0.5, 1.0])
+                inset_ax.set_yticks([])
+                inset_ax.tick_params(axis='both', labelsize=7)
+                inset_ax.set_title("Full range", fontsize=7)
+                inset_ax.grid(False)
+                for feature_set, model_group in valid_groups.items():
+                    y_true = model_group['y_true']
+                    prob_col = _select_prob_column(model_group, cfg)
+                    y_prob = model_group[prob_col]
+                    prob_pred, prob_true, _ = _calibration_bins(y_true, y_prob, cfg)
+                    inset_ax.plot(prob_pred, prob_true, linewidth=1, alpha=0.4)
+
+        if cfg.show_prob_hist and all_probs:
+            rug_ax = inset_axes(
+                ax,
+                width="100%",
+                height="22%",
+                loc="lower left",
+                borderpad=0,
+                bbox_to_anchor=(0, -0.32, 1, 0.25),
+                bbox_transform=ax.transAxes,
+            )
+            rug_ax.hist(all_probs, bins=min(20, cfg.n_bins * 2), color="#4c72b0", alpha=0.35, edgecolor="none")
+            rug_ax.set_xlim(ax.get_xlim())
+            rug_ax.set_yticks([])
+            rug_ax.set_xticks(ax.get_xticks())
+            rug_ax.set_xlabel('Predicted probability distribution', fontsize=8)
+            rug_ax.tick_params(axis='both', labelsize=7)
+            rug_ax.grid(False)
+
+        ax.legend(loc='best')
+        _save_fig(fig, FIGURES_DIR / f'calibration_{outcome}_{branch}_{model_name}.png')
+
+    Parallel(n_jobs=cfg.n_jobs)(delayed(_plot_group)(key, group) for key, group in tasks)
 
 def set_cell_background(cell, color_hex):
     """

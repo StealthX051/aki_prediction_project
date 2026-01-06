@@ -22,6 +22,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from results_recreation.metrics_summary import PredictionSet, crawl_predictions
 from results_recreation.results_analysis import (
     FIGURES_DIR,
+    PlotConfig,
     RESULTS_DIR,
     TABLES_DIR,
     generate_docx_report,
@@ -81,7 +82,8 @@ def main() -> None:
     if prediction_frame.empty:
         logger.warning("No prediction files found; skipping plots.")
     else:
-        plot_curves(prediction_frame)
+        plot_config = PlotConfig.from_env()
+        plot_curves(prediction_frame, config=plot_config)
         logger.info("Plots saved to %s", FIGURES_DIR)
 
 
