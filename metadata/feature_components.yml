@@ -1,0 +1,30 @@
+components:
+  - key: preop
+    label: Preop
+  - key: awp
+    label: AWP
+  - key: co2
+    label: CO2
+  - key: ecg
+    label: ECG
+  - key: pleth
+    label: Pleth
+
+feature_sets:
+  preop_only: [preop]
+  awp_only: [awp]
+  co2_only: [co2]
+  ecg_only: [ecg]
+  pleth_only: [pleth]
+  all_waveforms: [awp, co2, ecg, pleth]
+  preop_and_all_waveforms: [preop, awp, co2, ecg, pleth]
+  preop_and_awp: [preop, awp]
+  preop_and_co2: [preop, co2]
+  preop_and_ecg: [preop, ecg]
+  preop_and_pleth: [preop, pleth]
+  preop_and_all_minus_awp: [preop, co2, ecg, pleth]
+  preop_and_all_minus_co2: [preop, awp, ecg, pleth]
+  preop_and_all_minus_ecg: [preop, awp, co2, pleth]
+  preop_and_all_minus_pleth: [preop, awp, co2, ecg]
+  all_fused: [awp, co2, ecg, pleth]
+  all_waveonly: [awp, co2, ecg, pleth]

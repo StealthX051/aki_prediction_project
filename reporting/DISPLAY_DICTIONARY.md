@@ -88,3 +88,10 @@ plot labeling.
 
 Additions should be reviewed during PRs to avoid drift between the dictionary
 and the data/model artifacts that reference it.
+
+## Feature set checkboxes
+- Component order for checkbox grids is defined in `metadata/feature_components.yml` (Preop tabular, AWP, CO2, ECG, Pleth). Add new feature-set keys or tweak membership there to keep tables in sync.
+- Rendering mode is controlled by the `FEATURE_SET_DISPLAY` environment variable: `checkbox` (default, show the grid), `label` (text-only), or `both` (grid + label column). The setting flows through `reporting/make_report.py` for HTML/DOCX/PDF outputs.
+- Column sizing is dynamic: component columns scale to header length with light padding; metric columns stay wider. DOCX and PDF use matching dynamic/fixed widths to keep the checkbox grid compact without crowding metrics.
+- Heatmap gradients for metrics/deltas use darker greens/reds to stay legible after export (Brier uses the inverse palette).
+- If `feature_components.yml` is missing or PyYAML is unavailable, defaults are used so reports still render. Update the YAML before adding new permutations to avoid blank grids.

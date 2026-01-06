@@ -10,9 +10,10 @@ import matplotlib.pyplot as plt
 import pandas as pd
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.enum.section import WD_ORIENT
 from docx.oxml.ns import qn
 from docx.oxml.shared import OxmlElement
-from docx.shared import Pt
+from docx.shared import Pt, Inches
 from matplotlib.backends.backend_pdf import PdfPages
 from matplotlib.colors import LinearSegmentedColormap, to_hex
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
@@ -31,6 +32,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from reporting.display_dictionary import load_display_dictionary
+from reporting.feature_set_display import FeatureSetDisplay
 
 # Constants
 RESULTS_DIR = Path(os.getenv("RESULTS_DIR", Path(__file__).resolve().parent.parent / 'results'))
@@ -131,14 +133,17 @@ DEFAULT_FEATURE_SET_MAPPING = {
 
 try:
     DISPLAY_DICTIONARY = load_display_dictionary()
-    FEATURE_SET_MAPPING = DISPLAY_DICTIONARY.feature_set_labels(DEFAULT_FEATURE_SET_MAPPING)
 except FileNotFoundError:
     logger.warning(
         "Display dictionary not found; using default feature set labels only. "
         "Create metadata/display_dictionary.json to override."
     )
     DISPLAY_DICTIONARY = None
-    FEATURE_SET_MAPPING = DEFAULT_FEATURE_SET_MAPPING
+FEATURE_SET_DISPLAY = FeatureSetDisplay.from_defaults(
+    display_dictionary=DISPLAY_DICTIONARY,
+    default_label_map=DEFAULT_FEATURE_SET_MAPPING,
+)
+FEATURE_SET_MAPPING = FEATURE_SET_DISPLAY.label_map
 
 NEURIPS_CSS = """
 <style>
@@ -189,6 +194,36 @@ NEURIPS_CSS = """
         border-bottom: none;
     }
 
+    /* Checkbox grid for feature inputs */
+    .inputs-grid {
+        border-collapse: collapse;
+        margin: 0 auto;
+    }
+
+    .inputs-grid th,
+    .inputs-grid td {
+        border: 1px solid #000000;
+        padding: 4px 6px;
+        text-align: center;
+        font-size: 10pt;
+    }
+
+    .inputs-grid th {
+        background-color: #f5f5f5;
+        font-weight: bold;
+    }
+
+    .inputs-grid td.checked {
+        background-color: #f8fdf8;
+    }
+
+    .inputs-grid-unknown {
+        font-style: italic;
+        text-align: center;
+        display: block;
+        padding: 4px 0;
+    }
+
     /* Tasteful highlighting */
     .highlight-high {
         background-color: #f0f7f0; /* Very light green */
@@ -216,10 +251,13 @@ METRIC_DISPLAY_MAP = {
 }
 
 
-def prepare_metrics_for_display(summary_df: pd.DataFrame) -> pd.DataFrame:
+def prepare_metrics_for_display(
+    summary_df: pd.DataFrame, renderer: FeatureSetDisplay = FEATURE_SET_DISPLAY
+) -> pd.DataFrame:
     """Prepare metrics_summary output for styling and reporting."""
 
     metrics_df = summary_df.copy()
+    metrics_df["Feature Set Key"] = metrics_df["feature_set"]
 
     rename_map = {
         'outcome': 'Outcome',
@@ -228,6 +266,22 @@ def prepare_metrics_for_display(summary_df: pd.DataFrame) -> pd.DataFrame:
         'model_name': 'Model',
     }
     metrics_df.rename(columns=rename_map, inplace=True)
+
+    # Populate display-friendly feature set variants
+    metrics_df["Feature Set Label"] = metrics_df["Feature Set Key"].apply(renderer.as_label)
+    metrics_df["Feature Set"] = metrics_df["Feature Set Label"]
+    # Expand checkbox columns if enabled
+    if renderer.show_checkbox:
+        for comp in renderer.config.components:
+            col_name = comp.label
+            def _mark(fs: str, comp_key: str = comp.key) -> str:
+                flags, known = renderer.component_flags(fs)
+                if not known:
+                    return "?"
+                return "✓" if flags.get(comp_key, False) else ""
+            metrics_df[col_name] = metrics_df["Feature Set Key"].apply(_mark)
+    # Text fallback for DOCX/PDF
+    metrics_df["Inputs Text"] = metrics_df["Feature Set Key"].apply(renderer.as_checkbox_text)
 
     display_pairs = list(METRIC_DISPLAY_MAP.items())
     delta_pairs = [(f"delta_{k}", f"Δ {v}") for k, v in METRIC_DISPLAY_MAP.items()]
@@ -250,30 +304,71 @@ def prepare_metrics_for_display(summary_df: pd.DataFrame) -> pd.DataFrame:
 
     return metrics_df
 
-def generate_html_tables(metrics_df: pd.DataFrame):
+def generate_html_tables(metrics_df: pd.DataFrame, renderer: FeatureSetDisplay = FEATURE_SET_DISPLAY):
     """
     Generates styled HTML tables for each Outcome/Branch.
     """
-    metrics_df['Feature Set'] = metrics_df['Feature Set'].map(FEATURE_SET_MAPPING).fillna(metrics_df['Feature Set'])
+    component_cols = renderer.component_labels if renderer.show_checkbox else []
+    label_col = "Feature Set" if renderer.show_label else None
 
     for (outcome, branch, model_name), group in metrics_df.groupby(['Outcome', 'Branch', 'Model']):
         table_df = group.sort_values('AUROC_val', ascending=False)
 
-        display_cols = [
-            'Feature Set',
-            'AUROC',
-            'AUPRC',
-            'Brier Score',
-            'Sensitivity',
-            'Specificity',
-            'F1 Score',
-        ]
+        display_cols: List[str] = []
+        display_cols.extend(component_cols)
+        if label_col:
+            display_cols.append(label_col)
+        display_cols.extend(
+            [
+                'AUROC',
+                'AUPRC',
+                'Brier Score',
+                'Sensitivity',
+                'Specificity',
+                'F1 Score',
+            ]
+        )
         table_df_display = table_df[display_cols].copy()
 
-        cmap = LinearSegmentedColormap.from_list("soft_teal", ["#ffffff", "#d1e7dd"])
-        cmap_r = LinearSegmentedColormap.from_list("soft_teal_r", ["#d1e7dd", "#ffffff"])
+        cmap = LinearSegmentedColormap.from_list("soft_teal", ["#ffffff", "#b7dfc4"])
+        cmap_r = LinearSegmentedColormap.from_list("soft_teal_r", ["#f5c2c7", "#ffffff"])
 
         styler = table_df_display.style
+        component_indices = [table_df_display.columns.get_loc(col) for col in component_cols if col in table_df_display.columns]
+        if component_indices:
+            component_styles = []
+            for idx in component_indices:
+                col_name = table_df_display.columns[idx]
+                label_len = max(len(str(col_name)), 3)
+                width_ch = min(12, max(5, label_len + 2))  # dynamic width with padding
+                component_styles.append(
+                    {'selector': f'col.col{idx}', 'props': [('width', f'{width_ch}ch')]}
+                )
+                component_styles.append(
+                    {
+                        'selector': f'th.col_heading.level0.col{idx}',
+                        'props': [
+                            ('width', f'{width_ch}ch'),
+                            ('padding', '1px 3px'),
+                            ('text-align', 'center'),
+                            ('white-space', 'nowrap'),
+                            ('font-size', '10px'),
+                        ],
+                    }
+                )
+                component_styles.append(
+                    {
+                        'selector': f'td.col{idx}',
+                        'props': [
+                            ('width', f'{width_ch}ch'),
+                            ('padding', '1px 3px'),
+                            ('text-align', 'center'),
+                            ('white-space', 'nowrap'),
+                            ('font-size', '10px'),
+                        ],
+                    }
+                )
+            styler.set_table_styles(component_styles, overwrite=False)
 
         def apply_gradient(s, val_col, cmap):
             vals = table_df.loc[s.index, val_col]
@@ -326,7 +421,11 @@ def generate_html_tables(metrics_df: pd.DataFrame):
             'Δ Specificity',
             'Δ F1 Score',
         ]
-        delta_cols = ['Feature Set'] + [c for c in delta_candidates if c in table_df.columns]
+        delta_cols: List[str] = []
+        delta_cols.extend(component_cols)
+        if label_col:
+            delta_cols.append(label_col)
+        delta_cols += [c for c in delta_candidates if c in table_df.columns]
         delta_html = ""
         if len(delta_cols) > 1:
             delta_df = table_df[delta_cols].copy()
@@ -738,8 +837,8 @@ def get_delta_style_info(df: pd.DataFrame, display_to_key: Dict[str, str]) -> Di
     """Background styling for delta tables; no color if CI crosses 0."""
 
     style_info: Dict[int, Dict[str, Dict[str, str]]] = {}
-    cmap_pos = LinearSegmentedColormap.from_list("delta_pos", ["#ffffff", "#d1e7dd"])
-    cmap_neg = LinearSegmentedColormap.from_list("delta_neg", ["#ffffff", "#f8d7da"])
+    cmap_pos = LinearSegmentedColormap.from_list("delta_pos", ["#ffffff", "#9fd4b2"])
+    cmap_neg = LinearSegmentedColormap.from_list("delta_neg", ["#ffffff", "#f2b6bd"])
 
     for idx in df.index:
         style_info[idx] = {}
@@ -774,35 +873,59 @@ def get_delta_style_info(df: pd.DataFrame, display_to_key: Dict[str, str]) -> Di
 
     return style_info
 
-def generate_docx_report(metrics_df: pd.DataFrame):
+def generate_docx_report(metrics_df: pd.DataFrame, renderer: FeatureSetDisplay = FEATURE_SET_DISPLAY):
     """
     Generates a DOCX report with all tables.
     """
     doc = Document()
+    # Default to landscape orientation to give tables more horizontal space
+    for section in doc.sections:
+        section.orientation = WD_ORIENT.LANDSCAPE
+        section.page_width, section.page_height = section.page_height, section.page_width
     style = doc.styles['Normal']
     style.font.name = 'Times New Roman'
     style.font.size = Pt(11)
     
     doc.add_heading('AKI Prediction Project - Results Report', 0)
     
-    # Ensure mapping is applied (idempotent)
-    metrics_df['Feature Set'] = metrics_df['Feature Set'].map(FEATURE_SET_MAPPING).fillna(metrics_df['Feature Set'])
+    component_cols = renderer.component_labels if renderer.show_checkbox else []
+    label_source = "Feature Set" if renderer.show_label else None
     
     for (outcome, branch, model_name), group in metrics_df.groupby(['Outcome', 'Branch', 'Model']):
         doc.add_heading(f'Outcome: {outcome} | Branch: {branch} | Model: {model_name}', level=1)
         
         # Sort
         table_df = group.sort_values('AUROC_val', ascending=False)
-        display_cols = ['Feature Set', 'AUROC', 'AUPRC', 'Brier Score', 'Sensitivity', 'Specificity', 'F1 Score']
+        display_cols: List[str] = []
+        display_cols.extend(component_cols)
+        if label_source:
+            display_cols.append(label_source)
+        display_cols += ['AUROC', 'AUPRC', 'Brier Score', 'Sensitivity', 'Specificity', 'F1 Score']
         
         # Get Styles
         styles = get_style_info(table_df)
         
-        table_df = table_df[display_cols]
+        table_df_display = table_df[display_cols].copy()
+        header_renames = {}
+        if label_source:
+            header_renames[label_source] = "Feature Set"
+        if header_renames:
+            table_df_display = table_df_display.rename(columns=header_renames)
+            display_cols = [header_renames.get(col, col) for col in display_cols]
         
         # Add Table
         table = doc.add_table(rows=1, cols=len(display_cols))
         table.style = 'Table Grid'
+        # Column widths: dynamic for components based on label length
+        def _comp_width(col_name: str) -> float:
+            # ~0.08" per character with padding, bounded
+            return float(min(0.7, max(0.35, 0.08 * len(col_name) + 0.25)))
+        metric_width = Inches(1.1)
+        col_widths = [
+            Inches(_comp_width(col)) if col in component_cols else metric_width  # keep metrics roomy
+            for col in display_cols
+        ]
+        width_lookup = {col: width for col, width in zip(display_cols, col_widths)}
         
         # Header
         hdr_cells = table.rows[0].cells
@@ -810,19 +933,20 @@ def generate_docx_report(metrics_df: pd.DataFrame):
             hdr_cells[i].text = col
             hdr_cells[i].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
             hdr_cells[i].paragraphs[0].runs[0].bold = True
+            hdr_cells[i].width = col_widths[i]
             
         # Rows
-        for idx, row in table_df.iterrows():
+        for idx, row in table_df_display.iterrows():
             row_cells = table.add_row().cells
             for i, col in enumerate(display_cols):
                 val = str(row[col])
                 # Format: Value\n(CI)
                 if ' (' in val:
                     val = val.replace(' (', '\n(')
-                
                 cell = row_cells[i]
                 cell.text = val
                 cell.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+                cell.width = col_widths[i]
                 
                 # Apply Styles
                 if col in styles[idx]:
@@ -843,31 +967,51 @@ def generate_docx_report(metrics_df: pd.DataFrame):
             'Δ Specificity',
             'Δ F1 Score',
         ]
-        delta_cols = ['Feature Set'] + [c for c in delta_candidates if c in table_df.columns]
-        if len(delta_cols) > 1:
+        label_header = header_renames.get(label_source, label_source)
+        delta_source_cols: List[str] = []
+        delta_headers: List[str] = []
+        # Component columns preserved as-is
+        delta_source_cols.extend(component_cols)
+        delta_headers.extend(component_cols)
+        if label_source:
+            delta_source_cols.append(label_source)
+            delta_headers.append(label_header)
+        delta_metric_cols = [c for c in delta_candidates if c in table_df.columns]
+        delta_source_cols += delta_metric_cols
+        delta_headers += delta_metric_cols
+        if len(delta_headers) > 1:
             doc.add_paragraph('Δ vs Reference', style='Heading 2')
-            delta_table_df = table_df[delta_cols]
+            delta_table_df = table_df[delta_source_cols].copy()
+            if header_renames:
+                delta_table_df = delta_table_df.rename(columns=header_renames)
+            delta_headers = list(delta_table_df.columns)
 
             display_to_key = {col: f"delta_{col.split('Δ ')[-1].lower().replace(' ', '_')}" for col in delta_candidates}
             delta_styles = get_delta_style_info(table_df, display_to_key)
 
-            delta_table = doc.add_table(rows=1, cols=len(delta_cols))
+            delta_table = doc.add_table(rows=1, cols=len(delta_headers))
             delta_table.style = 'Table Grid'
+            delta_col_widths = [
+                width_lookup.get(col, Inches(_comp_width(col)) if col in component_cols else metric_width)
+                for col in delta_headers
+            ]
 
             hdr = delta_table.rows[0].cells
-            for i, col in enumerate(delta_cols):
+            for i, col in enumerate(delta_headers):
                 hdr[i].text = col
                 hdr[i].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
                 hdr[i].paragraphs[0].runs[0].bold = True
+                hdr[i].width = delta_col_widths[i]
 
             for _, row in delta_table_df.iterrows():
                 row_cells = delta_table.add_row().cells
-                for i, col in enumerate(delta_cols):
+                for i, col in enumerate(delta_headers):
                     val = str(row[col])
                     if ' (' in val:
                         val = val.replace(' (', '\n(')
                     row_cells[i].text = val
                     row_cells[i].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+                    row_cells[i].width = delta_col_widths[i]
                     bg = delta_styles.get(row.name, {}).get(col, {}).get('bg')
                     if bg:
                         set_cell_background(row_cells[i], bg)
@@ -876,23 +1020,33 @@ def generate_docx_report(metrics_df: pd.DataFrame):
     doc.save(RESULTS_DIR / 'report.docx')
     print("DOCX report generated.")
 
-def generate_pdf_report(metrics_df: pd.DataFrame):
+def generate_pdf_report(metrics_df: pd.DataFrame, renderer: FeatureSetDisplay = FEATURE_SET_DISPLAY):
     """
     Generates an aggregated PDF report using Matplotlib.
     """
-    # Ensure mapping is applied (idempotent)
-    metrics_df['Feature Set'] = metrics_df['Feature Set'].map(FEATURE_SET_MAPPING).fillna(metrics_df['Feature Set'])
+    component_cols = renderer.component_labels if renderer.show_checkbox else []
+    label_source = "Feature Set" if renderer.show_label else None
     
     with PdfPages(RESULTS_DIR / 'report.pdf') as pdf:
         for (outcome, branch, model_name), group in metrics_df.groupby(['Outcome', 'Branch', 'Model']):
             # Sort
             table_df = group.sort_values('AUROC_val', ascending=False)
-            display_cols = ['Feature Set', 'AUROC', 'AUPRC', 'Brier Score', 'Sensitivity', 'Specificity', 'F1 Score']
+            display_cols: List[str] = []
+            display_cols.extend(component_cols)
+            if label_source:
+                display_cols.append(label_source)
+            display_cols += ['AUROC', 'AUPRC', 'Brier Score', 'Sensitivity', 'Specificity', 'F1 Score']
             
             # Get Styles
             styles = get_style_info(table_df)
             
-            table_df_display = table_df[display_cols]
+            table_df_display = table_df[display_cols].copy()
+            header_renames = {}
+            if label_source:
+                header_renames[label_source] = "Feature Set"
+            if header_renames:
+                table_df_display = table_df_display.rename(columns=header_renames)
+                display_cols = [header_renames.get(c, c) for c in display_cols]
             
             # Format values for display
             display_data = []
@@ -915,7 +1069,11 @@ def generate_pdf_report(metrics_df: pd.DataFrame):
             ax.set_title(f"Outcome: {outcome} | Branch: {branch} | Model: {model_name}", fontsize=14, fontweight='bold', pad=20)
             
             # Create Table
-            table = ax.table(cellText=display_data, colLabels=display_cols, loc='center', cellLoc='center')
+            def _comp_width_fraction(col_name: str) -> float:
+                # small fractions of the axis width; scale with label length
+                return float(min(0.08, max(0.04, 0.01 * len(col_name) + 0.03)))
+            col_widths = [_comp_width_fraction(col) if col in component_cols else 0.12 for col in display_cols]
+            table = ax.table(cellText=display_data, colLabels=display_cols, loc='center', cellLoc='center', colWidths=col_widths)
             table.auto_set_font_size(False)
             table.set_fontsize(10)
             table.scale(1, 2.5) # Scale height to accommodate newlines
@@ -949,13 +1107,26 @@ def generate_pdf_report(metrics_df: pd.DataFrame):
                 'Δ Specificity',
                 'Δ F1 Score',
             ]
-            delta_cols = ['Feature Set'] + [c for c in delta_candidates if c in table_df.columns]
-            if len(delta_cols) > 1:
-                delta_df = table_df[delta_cols]
+            label_header = header_renames.get(label_source, label_source)
+            delta_source_cols: List[str] = []
+            delta_headers: List[str] = []
+            delta_source_cols.extend(component_cols)
+            delta_headers.extend(component_cols)
+            if label_source:
+                delta_source_cols.append(label_source)
+                delta_headers.append(label_header)
+            delta_metric_cols = [c for c in delta_candidates if c in table_df.columns]
+            delta_source_cols += delta_metric_cols
+            delta_headers += delta_metric_cols
+            if len(delta_headers) > 1:
+                delta_df = table_df[delta_source_cols].copy()
+                if header_renames:
+                    delta_df = delta_df.rename(columns=header_renames)
+                delta_headers = list(delta_df.columns)
                 display_data = []
                 for _, row in delta_df.iterrows():
                     new_row = []
-                    for col in delta_cols:
+                    for col in delta_headers:
                         val = str(row[col])
                         if ' (' in val:
                             val = val.replace(' (', '\n(')
@@ -974,7 +1145,8 @@ def generate_pdf_report(metrics_df: pd.DataFrame):
                     pad=20,
                 )
 
-                delta_table = ax.table(cellText=display_data, colLabels=delta_cols, loc='center', cellLoc='center')
+                delta_col_widths = [_comp_width_fraction(col) if col in component_cols else 0.12 for col in delta_headers]
+                delta_table = ax.table(cellText=display_data, colLabels=delta_headers, loc='center', cellLoc='center', colWidths=delta_col_widths)
                 delta_table.auto_set_font_size(False)
                 delta_table.set_fontsize(10)
                 delta_table.scale(1, 2.5)
@@ -988,7 +1160,7 @@ def generate_pdf_report(metrics_df: pd.DataFrame):
                         cell.set_facecolor('#f0f0f0')
                     else:
                         df_idx = delta_df.index[row - 1]
-                        col_name = delta_cols[col]
+                        col_name = delta_headers[col]
                         bg = delta_styles.get(df_idx, {}).get(col_name, {}).get('bg')
                         if bg:
                             cell.set_facecolor(bg)

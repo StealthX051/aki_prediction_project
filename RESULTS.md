@@ -66,6 +66,12 @@ Result locations:
   tables and separate Δ tables (Δ vs reference).
 - `results/figures/`: ROC, PR, and calibration curves for each configuration.
 
+Reporting layout/styling notes:
+- Feature-set inputs render as compact component columns (Preop, AWP, CO2, ECG, Pleth) with widths scaled to the header text plus padding; metric columns stay wider for readability.
+- DOCX exports default to landscape and apply the same dynamic component widths; metric columns keep a roomy fixed width.
+- PDF tables apply matching width fractions (component vs. metric) to keep the checkbox grid tight without crowding performance columns.
+- Heatmaps use darker, more visible gradients (greens for higher-is-better, reds for lower-is-better; Brier uses the inverse palette).
+
 ## Descriptive figures bundle
 Run all descriptive artifacts (preop demographics table, cohort flow diagram,
 missingness table) with one command. The script reuses your training run's
