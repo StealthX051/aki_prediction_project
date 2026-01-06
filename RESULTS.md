@@ -78,9 +78,11 @@ paths (`DATA_DIR`, `PROCESSED_DIR`, `RESULTS_DIR`) if they are already set.
 `step_01_cohort_construction.py` into a vertical flow diagram. Provide the
 counts JSON (default: `results/metadata/cohort_flow_counts.json`) and an optional
 custom display dictionary path. The renderer skips no-op/increasing steps, shows
-per-step removals, applies friendly labels, and draws the AKI False/True split
-when `label_split` is present in the JSON. Outputs: `results/figures/cohort_flow.svg`
-and `cohort_flow.png`.
+per-step removals in rightward exclusion boxes with reason text, applies friendly
+labels, groups all waveform checks into one stage with a footnote listing channels,
+and draws a centered T-junction from the Final Cohort box to AKI vs. No AKI split
+boxes when `label_split` is present in the JSON. Outputs:
+`results/figures/cohort_flow.svg` and `cohort_flow.png`.
 
 ```bash
 python -m reporting.cohort_flow \

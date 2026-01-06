@@ -40,7 +40,7 @@ from typing import Any, Iterable, List, Mapping, MutableSequence, Optional, Sequ
 import textwrap
 
 import matplotlib.pyplot as plt
-from matplotlib.patches import FancyArrowPatch, FancyBboxPatch
+from matplotlib.patches import FancyBboxPatch
 
 from reporting.display_dictionary import DisplayDictionary, load_display_dictionary
 
@@ -58,7 +58,9 @@ class CohortStage:
 
     title: str
     count: int
+    detail: Optional[str] = None
     removed: Optional[int] = None
+    removal_reason: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -127,12 +129,36 @@ def normalize_counts(
 ) -> CohortFlowData:
     """Convert raw count metadata into ordered :class:`CohortStage` entries."""
 
+    column_label_map = {
+        "preop_cr": "Preoperative creatinine",
+        "opend": "Documented anesthesia end time",
+    }
+
     filter_label_map = {
-        "filter_preop_cr": "Preop creatinine available",
-        "ensure_sample_independence": "Sampling independence",
-        "filter_postop_cr": "Postop creatinine available",
+        "filter_preop_cr": "Baseline Renal Function Data",
+        "ensure_sample_independence": "Subject Selection",
+        "filter_postop_cr": "Outcome Data Availability",
         "add_aki_label": "AKI label derived",
     }
+
+    removal_reason_map = {
+        "mandatory_columns": "Missing mandatory data fields",
+        "waveforms": "Incomplete waveform data",
+        "filter_preop_cr": "Missing preoperative creatinine",
+        "ensure_sample_independence": "Exclusion of repeat encounters",
+        "filter_postop_cr": "Missing postoperative creatinine",
+    }
+
+    title_overrides = {
+        "mandatory_columns": "EHR Record Screening",
+        "waveforms": "High-fidelity Waveform Availability",
+        "filter_preop_cr": "Baseline Renal Function Data",
+        "ensure_sample_independence": "Subject Selection",
+        "filter_postop_cr": "Outcome Data Availability",
+    }
+
+    def _pretty_column(name: str) -> str:
+        return column_label_map.get(name, name.replace("_", " "))
 
     def _parse_outcome_split(raw_counts_inner: Mapping[str, Any]) -> Optional[OutcomeSplit]:
         split_raw = (
@@ -175,10 +201,19 @@ def normalize_counts(
         columns = []
         if isinstance(mandatory, Mapping):
             columns = [str(col) for col in mandatory.get("columns", [])]
-        title = "Mandatory columns present"
-        if columns:
-            title = _format_detail(title, columns)
-        stages.append(CohortStage(title=title, count=mandatory_count))
+        pretty_columns = [_pretty_column(col) for col in columns]
+        title = title_overrides.get("mandatory_columns", "Initial data screening")
+        detail = None
+        if pretty_columns:
+            detail = _format_detail("Mandatory data fields", pretty_columns)
+        stages.append(
+            CohortStage(
+                title=title,
+                detail=detail,
+                count=mandatory_count,
+                removal_reason=removal_reason_map.get("mandatory_columns"),
+            )
+        )
 
     waveforms = raw_counts.get("waveforms") or []
     if isinstance(waveforms, Mapping):
@@ -186,6 +221,7 @@ def normalize_counts(
             {"channel": key, "count": value} for key, value in waveforms.items()
         ]
 
+    waveform_entries: List[Tuple[str, int]] = []
     for entry in waveforms:
         if isinstance(entry, Mapping):
             channel = str(entry.get("channel") or entry.get("waveform") or entry.get("track") or "Waveform")
@@ -198,7 +234,20 @@ def normalize_counts(
             continue
 
         label = _waveform_label(channel, display_dictionary)
-        stages.append(CohortStage(title=f"Waveform availability — {label}", count=count))
+        waveform_entries.append((label, count))
+
+    if waveform_entries:
+        final_waveform_count = waveform_entries[-1][1]
+        labels = [label for label, _ in waveform_entries]
+        detail = _format_detail("Required waveforms", labels)
+        stages.append(
+            CohortStage(
+                title=title_overrides.get("waveforms", "Waveform availability"),
+                count=final_waveform_count,
+                detail=detail,
+                removal_reason=removal_reason_map.get("waveforms"),
+            )
+        )
 
     custom_filters = raw_counts.get("custom_filters") or []
     if isinstance(custom_filters, Mapping):
@@ -209,7 +258,12 @@ def normalize_counts(
     for entry in custom_filters:
         if isinstance(entry, Mapping):
             raw_name = str(entry.get("name") or "Custom filter")
-            label = str(entry.get("label") or filter_label_map.get(raw_name) or raw_name.replace("_", " ").title())
+            label = str(
+                entry.get("label")
+                or title_overrides.get(raw_name)
+                or filter_label_map.get(raw_name)
+                or raw_name.replace("_", " ").title()
+            )
             name = label
             count = _extract_count(entry)
         else:
@@ -218,7 +272,13 @@ def normalize_counts(
 
         if count is None:
             continue
-        stages.append(CohortStage(title=name, count=count))
+        stages.append(
+            CohortStage(
+                title=name,
+                count=count,
+                removal_reason=removal_reason_map.get(raw_name),
+            )
+        )
 
     final_cohort = raw_counts.get("final_cohort") or raw_counts.get("final")
     final_count = _extract_count(final_cohort)
@@ -248,7 +308,15 @@ def normalize_counts(
             logger.warning("Skipping stage %s because count increased (%s -> %s)", stage.title, prev_count, stage.count)
             continue
 
-        filtered.append(CohortStage(title=stage.title, count=stage.count, removed=delta if delta > 0 else None))
+        filtered.append(
+            CohortStage(
+                title=stage.title,
+                count=stage.count,
+                detail=stage.detail,
+                removal_reason=stage.removal_reason,
+                removed=delta if delta > 0 else None,
+            )
+        )
         prev_count = stage.count
 
     return CohortFlowData(stages=filtered, outcome_split=outcome_split)
@@ -276,114 +344,332 @@ def render_cohort_flow(
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    plt.rcParams.update(
+        {
+            "font.family": ["DejaVu Sans"],
+            "font.sans-serif": ["Arial", "Helvetica", "DejaVu Sans"],
+        }
+    )
+
+    box_width = 5.8
+    box_height = 0.9
+    box_gap = 1.05
+    extra_gap_after_waveform = 0.25
+    box_pad = 0.32
+    center_x = 0.0
+
+    removal_box_width = 3.6
+    removal_box_height = 0.82
+    removal_gap = 0.95  # wider offset for breathing room
+
+    split_box_width = 3.9
+    split_box_height = 1.0
+    split_offset = box_width * 0.72 + 1.2
+
     vertical_steps = len(stages) + (1 if outcome_split else 0)
-    fig_height = max(6.0, (1.8 * vertical_steps))
-    fig_width = 8.5
-    fig, ax = plt.subplots(figsize=(fig_width, fig_height))
+    fig_height = max(8.0, (box_height + box_gap) * (vertical_steps + 1.1))
+    fig_width = 12.0
+    fig, ax = plt.subplots(figsize=(fig_width, fig_height), dpi=300)
+    fig.patch.set_facecolor("white")
+    ax.set_facecolor("white")
     ax.axis("off")
 
-    box_width = 6.4
-    box_height = 1.0
-    gap = 0.8
-    x0 = 1.0
-    y_top = (box_height + gap) * (len(stages) - 1) + 0.5
-    lowest_y = y_top
+    def _wrap_line(text: str, width: int = 30) -> str:
+        return "\n".join(textwrap.wrap(text, width=width)) if text else ""
 
-    for idx, stage in enumerate(stages):
-        y = y_top - idx * (box_height + gap)
-        lowest_y = y
+    y_positions: List[float] = []
+    y_cursor = 0.0
+    for stage in stages:
+        y_positions.append(y_cursor)
+        gap = box_gap + (extra_gap_after_waveform if "waveform" in stage.title.lower() else 0.0)
+        y_cursor -= (box_height + gap)
+
+    lowest_y = y_positions[-1]
+    min_x = center_x - box_width / 2
+    max_x = center_x + box_width / 2
+
+    arrow_zorder = 2
+    flow_arrowprops = dict(
+        arrowstyle="-|>",
+        linewidth=1.5,
+        color="#0f172a",
+        mutation_scale=20,
+        connectionstyle="arc3,rad=0",
+        zorder=arrow_zorder,
+    )
+    exclusion_arrowprops = dict(
+        arrowstyle="-|>",
+        linewidth=1.4,
+        color="#1f2937",
+        mutation_scale=20,
+        connectionstyle="arc3,rad=0",
+        zorder=arrow_zorder,
+    )
+    split_arrowprops = dict(
+        arrowstyle="-|>",
+        linewidth=1.6,
+        color="#0f172a",
+        mutation_scale=20,
+        zorder=arrow_zorder,
+    )
+
+    def draw_connection(
+        ax_obj: plt.Axes,
+        start_box: FancyBboxPatch,
+        end_box: FancyBboxPatch,
+        *,
+        renderer: Any,
+        direction: str = "down",
+        arrow_kwargs: Mapping[str, Any],
+        connectionstyle: Optional[str] = None,
+    ) -> None:
+        """Connect two boxes using their bounds so arrows stay aligned."""
+
+        def _centers(box: FancyBboxPatch) -> Mapping[str, Tuple[float, float]]:
+            bbox = box.get_window_extent(renderer=renderer).transformed(ax_obj.transData.inverted())
+            x0, y0, x1, y1 = bbox.x0, bbox.y0, bbox.x1, bbox.y1
+            xc = (x0 + x1) / 2
+            yc = (y0 + y1) / 2
+            return {
+                "top": (xc, y1),
+                "bottom": (xc, y0),
+                "left": (x0, yc),
+                "right": (x1, yc),
+            }
+
+        start_centers = _centers(start_box)
+        end_centers = _centers(end_box)
+
+        if direction == "down":
+            start_pt, end_pt = start_centers["bottom"], end_centers["top"]
+        elif direction == "up":
+            start_pt, end_pt = start_centers["top"], end_centers["bottom"]
+        elif direction == "right":
+            start_pt, end_pt = start_centers["right"], end_centers["left"]
+        elif direction == "left":
+            start_pt, end_pt = start_centers["left"], end_centers["right"]
+        else:
+            start_pt, end_pt = start_centers["bottom"], end_centers["top"]
+
+        arrowprops = dict(arrow_kwargs)
+        if connectionstyle:
+            arrowprops["connectionstyle"] = connectionstyle
+
+        ax_obj.annotate(
+            "",
+            xy=end_pt,
+            xytext=start_pt,
+            arrowprops=arrowprops,
+        )
+
+    main_boxes: List[FancyBboxPatch] = []
+    connections: List[Tuple[FancyBboxPatch, FancyBboxPatch, str, Mapping[str, Any], Optional[str]]] = []
+
+    for idx, (stage, y_center) in enumerate(zip(stages, y_positions)):
+        left = center_x - box_width / 2
+        bottom = y_center - box_height / 2
         box = FancyBboxPatch(
-            (x0, y),
+            (left, bottom),
             box_width,
             box_height,
-            boxstyle="round,pad=0.35,rounding_size=0.15",
-            linewidth=1.2,
-            facecolor="#f8fafc",
-            edgecolor="#1f2937",
+            boxstyle=f"round,pad={box_pad},rounding_size=0.12",
+            linewidth=1.5,
+            facecolor="white",
+            edgecolor="black",
+            zorder=3,
         )
         ax.add_patch(box)
+        main_boxes.append(box)
 
-        wrapped_title = "\n".join(textwrap.wrap(stage.title, width=32)) or stage.title
-        removed_text = f"\nRemoved: {stage.removed:,}" if stage.removed else ""
-        text = f"{wrapped_title}\n n = {stage.count:,}{removed_text}"
+        lines = [_wrap_line(stage.title, 30)]
+        if stage.detail:
+            detail_line = _wrap_line(stage.detail, 34)
+            if detail_line:
+                lines.append(detail_line)
+        lines.append(f"n = {stage.count:,}")
+        box_text = "\n".join(lines)
         ax.text(
-            x0 + box_width / 2,
-            y + box_height / 2,
-            text,
+            center_x,
+            y_center,
+            box_text,
             ha="center",
             va="center",
             fontsize=11.5,
-            wrap=True,
+            linespacing=1.3,
+            zorder=4,
         )
 
-        if idx < len(stages) - 1:
-            arrow = FancyArrowPatch(
-                (x0 + box_width / 2, y - 0.05),
-                (x0 + box_width / 2, y - gap + 0.05),
-                arrowstyle="-|>",
-                mutation_scale=10,
-                linewidth=1.2,
-                color="#64748b",
-                shrinkA=4,
-                shrinkB=4,
+        if stage.removed:
+            removal_left = center_x + box_width / 2 + removal_gap
+            removal_bottom = y_center - removal_box_height / 2
+            removal_box = FancyBboxPatch(
+                (removal_left, removal_bottom),
+                removal_box_width,
+                removal_box_height,
+                boxstyle="round,pad=0.22,rounding_size=0.08",
+                linewidth=1.3,
+                facecolor="white",
+                edgecolor="black",
+                zorder=3,
             )
-            ax.add_patch(arrow)
+            ax.add_patch(removal_box)
 
-        split_box_width = 4.0
-        split_spacing = 0.75
+            exclusion_anchor = stage.removal_reason or stage.detail or stage.title
+            footnote = None
+            if "waveform" in stage.title.lower() and stage.detail:
+                footnote = stage.detail.replace("Required waveforms: ", "")
 
-    if outcome_split:
-        split_y = lowest_y - (box_height + gap + 0.2)
-        total = outcome_split.total or 1
+            base_label = f"{exclusion_anchor} (n = {stage.removed:,})"
+            removal_lines = [_wrap_line(base_label, 30)]
+            if footnote:
+                removal_lines.append(_wrap_line(f"*{footnote}", 30))
 
-        left_x = x0 - split_box_width - split_spacing
-        right_x = x0 + box_width + split_spacing
-
-        def _draw_split_box(x: float, label: str, count: int) -> None:
-            pct = (count / total) * 100
-            box = FancyBboxPatch(
-                (x, split_y),
-                split_box_width,
-                box_height,
-                boxstyle="round,pad=0.35",
-                linewidth=1.5,
-                facecolor="#f8fafc",
-                edgecolor="#0f172a",
-            )
-            ax.add_patch(box)
             ax.text(
-                x + split_box_width / 2,
-                split_y + box_height / 2,
-                f"{label}\n{count:,} ({pct:.1f}%)",
+                removal_left + removal_box_width / 2,
+                y_center,
+                "\n".join(removal_lines),
                 ha="center",
                 va="center",
-                fontsize=10.5,
+                fontsize=10.2,
+                linespacing=1.22,
+                zorder=4,
             )
+            max_x = max(max_x, removal_left + removal_box_width)
+            connections.append((box, removal_box, "right", exclusion_arrowprops, None))
 
-        _draw_split_box(left_x, f"{outcome_split.label} — False", outcome_split.false_count)
-        _draw_split_box(right_x, f"{outcome_split.label} — True", outcome_split.true_count)
+    for idx in range(len(main_boxes) - 1):
+        connections.append((main_boxes[idx], main_boxes[idx + 1], "down", flow_arrowprops, None))
 
-        # Arrows from final cohort to split boxes
-        final_center_x = x0 + box_width / 2
-        final_center_y = lowest_y
-        for target_x in (left_x + split_box_width / 2, right_x + split_box_width / 2):
-            arrow = FancyArrowPatch(
-                (final_center_x, final_center_y - 0.05),
-                (target_x, split_y + box_height + 0.05),
-                arrowstyle="-|>",
-                mutation_scale=14,
-                linewidth=1.4,
-                color="#475569",
+    split_patches: List[FancyBboxPatch] = []
+
+    if outcome_split:
+        split_y = lowest_y - (box_height / 2 + box_gap + 0.9)
+        total = outcome_split.total or 1
+
+        left_center_x = center_x - split_offset
+        right_center_x = center_x + split_offset
+
+        def _split_label(label: str, count: int) -> str:
+            pct = (count / total) * 100
+            return f"{label}\n{count:,} ({pct:.1f}%)"
+
+        label_lower = outcome_split.label.lower()
+        left_label = "No AKI" if "aki" in label_lower else f"{outcome_split.label} — False"
+        right_label = "Acute Kidney Injury (AKI)" if "aki" in label_lower else f"{outcome_split.label} — True"
+
+        for box_center_x, label_text, count in (
+            (left_center_x, left_label, outcome_split.false_count),
+            (right_center_x, right_label, outcome_split.true_count),
+        ):
+            split_left = box_center_x - split_box_width / 2
+            split_bottom = split_y - split_box_height / 2
+            split_box = FancyBboxPatch(
+                (split_left, split_bottom),
+                split_box_width,
+                split_box_height,
+                boxstyle=f"round,pad={box_pad}",
+                linewidth=1.5,
+                facecolor="white",
+                edgecolor="black",
+                zorder=3,
             )
-            ax.add_patch(arrow)
+            ax.add_patch(split_box)
+            split_patches.append(split_box)
+            ax.text(
+                box_center_x,
+                split_y,
+                _split_label(label_text, count),
+                ha="center",
+                va="center",
+                fontsize=11.0,
+                linespacing=1.25,
+                zorder=4,
+            )
+            max_x = max(max_x, split_left + split_box_width)
+            min_x = min(min_x, split_left)
+
+        final_box = main_boxes[-1]
+
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+
+    def _centers_for(box: FancyBboxPatch) -> Mapping[str, Tuple[float, float]]:
+        bbox = box.get_window_extent(renderer=renderer).transformed(ax.transData.inverted())
+        x0, y0, x1, y1 = bbox.x0, bbox.y0, bbox.x1, bbox.y1
+        xc = (x0 + x1) / 2
+        yc = (y0 + y1) / 2
+        return {
+            "top": (xc, y1),
+            "bottom": (xc, y0),
+            "left": (x0, yc),
+            "right": (x1, yc),
+        }
+
+    for start_box, end_box, direction, arrow_kwargs, conn_style in connections:
+        if start_box is None or end_box is None:
+            continue
+        draw_connection(
+            ax,
+            start_box,
+            end_box,
+            renderer=renderer,
+            direction=direction,
+            arrow_kwargs=arrow_kwargs,
+            connectionstyle=conn_style,
+        )
+
+    if outcome_split and len(split_patches) == 2:
+        final_box = main_boxes[-1]
+        left_patch, right_patch = split_patches
+
+        final_centers = _centers_for(final_box)
+        left_centers = _centers_for(left_patch)
+        right_centers = _centers_for(right_patch)
+
+        final_bottom = final_centers["bottom"]
+        split_top_y = min(left_centers["top"][1], right_centers["top"][1])
+        junction_y = (final_bottom[1] + split_top_y) / 2.0
+
+        # Vertical stem from final cohort
+        ax.plot(
+            [final_bottom[0], final_bottom[0]],
+            [final_bottom[1], junction_y],
+            color=flow_arrowprops["color"],
+            linewidth=1.6,
+            zorder=arrow_zorder,
+        )
+
+        # Horizontal bar across split targets
+        ax.plot(
+            [left_centers["top"][0], right_centers["top"][0]],
+            [junction_y, junction_y],
+            color=flow_arrowprops["color"],
+            linewidth=1.6,
+            zorder=arrow_zorder,
+        )
+
+        # Downward arrows into split boxes
+        for target_centers in (left_centers, right_centers):
+            start_pt = (target_centers["top"][0], junction_y)
+            end_pt = target_centers["top"]
+            ax.annotate(
+                "",
+                xy=end_pt,
+                xytext=start_pt,
+                arrowprops=dict(split_arrowprops, connectionstyle="arc3,rad=0"),
+            )
 
     if title:
-        ax.set_title(title, fontsize=14, fontweight="bold", pad=12)
+        ax.set_title(title, fontsize=15, fontweight="bold", pad=14)
 
-    max_x = x0 + box_width + split_box_width + 2 * split_spacing if outcome_split else x0 + box_width + 1
-    min_x = (x0 - split_box_width - split_spacing) if outcome_split else 0
-    ax.set_xlim(min_x - 0.5, max_x + 0.5)
-    ax.set_ylim(-gap - box_height, y_top + box_height + gap)
+    x_padding = 0.8
+    y_padding = 0.8
+    y_min = y_positions[-1] - box_height
+    y_max = y_positions[0] + box_height
+    if outcome_split:
+        y_min = min(y_min, split_y - split_box_height / 2 - 0.9)
+    ax.set_xlim(min_x - x_padding, max_x + x_padding)
+    ax.set_ylim(y_min - y_padding, y_max + y_padding)
 
     saved_paths: List[Path] = []
     for fmt in formats:

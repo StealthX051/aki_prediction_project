@@ -32,8 +32,11 @@ def test_normalize_counts_uses_display_dictionary(display_dict):
 
     flow = normalize_counts(counts, display_dict)
 
-    waveform_stage = next(stage for stage in flow.stages if "Waveform availability" in stage.title)
-    assert "Pleth" in waveform_stage.title or "Plethysmography" in waveform_stage.title
+    waveform_stage = next(stage for stage in flow.stages if "Waveform" in stage.title)
+    assert waveform_stage.detail is not None
+    assert "Pleth" in waveform_stage.detail or "Plethysmography" in waveform_stage.detail
+    assert waveform_stage.removed == 1
+    assert waveform_stage.removal_reason == "Incomplete waveform data"
     assert flow.stages[0].count == 10
     assert flow.stages[-1].title == "Final cohort"
 

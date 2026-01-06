@@ -64,8 +64,12 @@ python -m data_preparation.step_01_cohort_construction
 
 To regenerate a cohort flow diagram from saved counts/metadata without rerunning
 the full pipeline, supply the JSON counts file to the reporting utility. The renderer
-skips no-op steps, uses friendly labels, shows per-step removals, and draws the final
-label split (AKI False/True) when present in the counts JSON produced by step 01.
+skips no-op steps, uses friendly labels, and now renders a CONSORT-style layout:
+waveform checks are grouped into a single “High-fidelity Waveform Availability” box
+with a footnote listing required channels, exclusion reasons are drawn to the right
+with horizontal arrows, and the AKI vs. No AKI split uses a centered T-junction from
+the Final Cohort box. Per-step removals are shown in the exclusion boxes, and AKI
+False/True counts are displayed when present in the counts JSON produced by step 01.
 
 ```bash
 python -m reporting.cohort_flow --counts-file results/metadata/cohort_flow_counts.json
@@ -273,8 +277,10 @@ consistent across manuscripts and dashboards.
 
 - **Cohort flow diagram** — Recreate the consort-style flow from saved counts
   emitted by `step_01_cohort_construction.py`. The renderer skips no-op/increasing
-  steps, shows per-step removals, uses friendly labels (waveforms, filters), and
-  draws the AKI False/True split when `label_split` is present in the JSON (default:
+  steps, uses friendly labels (waveforms, filters), groups all waveform checks into
+  one stage with a footnote, and shows rightward exclusion boxes labeled with removal
+  reasons and counts. A centered T-junction connects the Final Cohort box to AKI vs.
+  No AKI split boxes when `label_split` is present in the JSON (default:
   `results/metadata/cohort_flow_counts.json`). Figures are written to SVG/PNG under
   `results/figures/`.
 
