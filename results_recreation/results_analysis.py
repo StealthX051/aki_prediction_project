@@ -35,13 +35,20 @@ from reporting.display_dictionary import load_display_dictionary
 from reporting.feature_set_display import FeatureSetDisplay
 
 # Constants
-RESULTS_DIR = Path(os.getenv("RESULTS_DIR", Path(__file__).resolve().parent.parent / 'results'))
-FIGURES_DIR = RESULTS_DIR / 'figures'
-TABLES_DIR = RESULTS_DIR / 'tables'
+EXPERIMENTS_DIR = Path(
+    os.getenv("RESULTS_DIR", Path(__file__).resolve().parent.parent / "results" / "catch22" / "experiments")
+)
+PAPER_DIR = Path(os.getenv("PAPER_DIR", EXPERIMENTS_DIR.parent / "paper"))
+FIGURES_DIR = Path(os.getenv("FIGURES_DIR", PAPER_DIR / "figures"))
+TABLES_DIR = Path(os.getenv("TABLES_DIR", PAPER_DIR / "tables"))
+REPORTS_DIR = Path(os.getenv("REPORTS_DIR", PAPER_DIR / "reports"))
+# Backwards-compatible alias used by imports in reporting.make_report
+RESULTS_DIR = EXPERIMENTS_DIR
 
 # Ensure directories exist
 FIGURES_DIR.mkdir(parents=True, exist_ok=True)
 TABLES_DIR.mkdir(parents=True, exist_ok=True)
+REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 
 logger = logging.getLogger(__name__)
 
@@ -1017,7 +1024,7 @@ def generate_docx_report(metrics_df: pd.DataFrame, renderer: FeatureSetDisplay =
                         set_cell_background(row_cells[i], bg)
             doc.add_paragraph()  # spacer
         
-    doc.save(RESULTS_DIR / 'report.docx')
+    doc.save(REPORTS_DIR / 'report.docx')
     print("DOCX report generated.")
 
 def generate_pdf_report(metrics_df: pd.DataFrame, renderer: FeatureSetDisplay = FEATURE_SET_DISPLAY):
@@ -1027,7 +1034,7 @@ def generate_pdf_report(metrics_df: pd.DataFrame, renderer: FeatureSetDisplay = 
     component_cols = renderer.component_labels if renderer.show_checkbox else []
     label_source = "Feature Set" if renderer.show_label else None
     
-    with PdfPages(RESULTS_DIR / 'report.pdf') as pdf:
+    with PdfPages(REPORTS_DIR / 'report.pdf') as pdf:
         for (outcome, branch, model_name), group in metrics_df.groupby(['Outcome', 'Branch', 'Model']):
             # Sort
             table_df = group.sort_values('AUROC_val', ascending=False)

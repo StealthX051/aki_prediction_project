@@ -15,14 +15,15 @@ PARALLEL_BACKEND=${PARALLEL_BACKEND:-processes}
 
 SMOKE_DATA_DIR="$SMOKE_ROOT/data"
 SMOKE_PROCESSED_DIR="$SMOKE_DATA_DIR/processed"
-SMOKE_RESULTS_DIR="$SMOKE_ROOT/results"
+SMOKE_RESULTS_DIR="$SMOKE_ROOT/results/catch22/experiments"
+SMOKE_PAPER_DIR="$SMOKE_ROOT/results/catch22/paper"
 RAW_SOURCE_DIR=${RAW_SOURCE_DIR:-"$ROOT_DIR/data/raw"}
 LOG_FILE="$SMOKE_ROOT/smoke_test_all_models.log"
 
 COHORT_PATH="$SMOKE_PROCESSED_DIR/aki_pleth_ecg_co2_awp.csv"
 
 rm -rf "$SMOKE_ROOT"
-mkdir -p "$SMOKE_PROCESSED_DIR" "$SMOKE_RESULTS_DIR"
+mkdir -p "$SMOKE_PROCESSED_DIR" "$SMOKE_RESULTS_DIR" "$SMOKE_PAPER_DIR"
 
 cd "$ROOT_DIR"
 
@@ -30,6 +31,7 @@ export DATA_DIR="$SMOKE_DATA_DIR"
 export PROCESSED_DIR="$SMOKE_PROCESSED_DIR"
 export RAW_DIR="$RAW_SOURCE_DIR"
 export RESULTS_DIR="$SMOKE_RESULTS_DIR"
+export PAPER_DIR="$SMOKE_PAPER_DIR"
 export GENERATE_WINDOWED_FEATURES="True"
 
 echo "=== Starting real-data smoke test (XGBoost + EBM) ===" | tee "$LOG_FILE"

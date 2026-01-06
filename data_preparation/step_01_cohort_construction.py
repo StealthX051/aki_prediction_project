@@ -6,17 +6,20 @@ import numpy as np
 import pandas as pd
 import vitaldb
 from data_preparation.inputs import (
-    INPUT_FILE, 
-    COHORT_FILE, 
-    DEPARTMENTS, 
-    MANDATORY_COLUMNS, 
-    MANDATORY_WAVEFORMS, 
-    WAVEFORM_SUBSTITUTIONS, 
+    INPUT_FILE,
+    COHORT_FILE,
+    DEPARTMENTS,
+    MANDATORY_COLUMNS,
+    MANDATORY_WAVEFORMS,
+    WAVEFORM_SUBSTITUTIONS,
     CUSTOM_FILTERS,
     RESULTS_DIR,
 )
 
-COHORT_FLOW_COUNTS_FILE = Path(os.getenv("COHORT_FLOW_COUNTS_FILE", RESULTS_DIR / "metadata" / "cohort_flow_counts.json"))
+PAPER_DIR = Path(os.getenv("PAPER_DIR", RESULTS_DIR.parent / "paper"))
+COHORT_FLOW_COUNTS_FILE = Path(
+    os.getenv("COHORT_FLOW_COUNTS_FILE", PAPER_DIR / "metadata" / "cohort_flow_counts.json")
+)
 
 
 # Load the clinical data

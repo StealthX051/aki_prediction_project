@@ -1,10 +1,9 @@
 """Aggregate prediction metrics for held-out test sets.
 
-This script crawls `results/models/**/predictions/test.csv` and
-`results/aeon/models/**/predictions/test.csv`, validates required artifacts and
-columns, computes metrics using stored thresholds, and writes consolidated
-outputs to `results/tables/metrics_summary.csv`. Optional bootstrap samples can
-also be saved to Parquet for further analysis.
+This script crawls `<results_dir>/models/**/predictions/test.csv`, validates
+required artifacts and columns, computes metrics using stored thresholds, and
+writes consolidated outputs to `<results_dir>/tables/metrics_summary.csv`.
+Optional bootstrap samples can also be saved to Parquet for further analysis.
 """
 from __future__ import annotations
 
@@ -13,6 +12,8 @@ import concurrent.futures
 import logging
 import sys
 from collections import defaultdict
+import os
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
@@ -40,8 +41,11 @@ from model_creation.prediction_io import REQUIRED_PREDICTION_COLUMNS, validate_p
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-RESULTS_DIR = Path("results")
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+RESULTS_DIR = Path(os.getenv("RESULTS_DIR", PROJECT_ROOT / "results" / "catch22" / "experiments"))
+PAPER_DIR = Path(os.getenv("PAPER_DIR", RESULTS_DIR.parent / "paper"))
 TABLES_DIR = RESULTS_DIR / "tables"
+PAPER_TABLES_DIR = PAPER_DIR / "tables"
 
 ARTIFACT_FILES = ("calibration.json", "threshold.json")
 
@@ -125,7 +129,6 @@ def crawl_predictions(results_dir: Path) -> List[PredictionSet]:
 
     patterns = [
         results_dir / "models" / "**" / "predictions" / "test.csv",
-        results_dir / "aeon" / "models" / "**" / "predictions" / "test.csv",
     ]
 
     pred_files: List[Path] = []
@@ -630,6 +633,15 @@ def write_outputs(summary_df: pd.DataFrame, bootstrap_df: Optional[pd.DataFrame]
     summary_path = TABLES_DIR / "metrics_summary.csv"
     summary_df.to_csv(summary_path, index=False)
     logger.info("Wrote summary metrics to %s", summary_path)
+
+    # Surface the publication-ready copy under the paper directory
+    try:
+        PAPER_TABLES_DIR.mkdir(parents=True, exist_ok=True)
+        paper_summary = PAPER_TABLES_DIR / "metrics_summary.csv"
+        shutil.copy2(summary_path, paper_summary)
+        logger.info("Copied summary metrics to %s", paper_summary)
+    except Exception as exc:
+        logger.warning("Unable to copy metrics summary to paper directory: %s", exc)
 
     if save_bootstrap and bootstrap_df is not None:
         bootstrap_path = (

@@ -9,13 +9,14 @@ PYTHON_BIN="${PYTHON_BIN:-python}"
 # Reuse the same dirs you used for experiments; fall back to project defaults.
 DATA_DIR="${DATA_DIR:-${SCRIPT_DIR}/data}"
 PROCESSED_DIR="${PROCESSED_DIR:-${DATA_DIR}/processed}"
-RESULTS_DIR="${RESULTS_DIR:-${SCRIPT_DIR}/results}"
+RESULTS_DIR="${RESULTS_DIR:-${SCRIPT_DIR}/results/catch22/experiments}"
+PAPER_DIR="${PAPER_DIR:-${SCRIPT_DIR}/results/catch22/paper}"
 DISPLAY_DICT="${DISPLAY_DICT:-${SCRIPT_DIR}/metadata/display_dictionary.json}"
 
 # Core inputs (override via env if your run used different filenames)
 COHORT_CSV="${COHORT_CSV:-${PROCESSED_DIR}/aki_pleth_ecg_co2_awp.csv}"
 MERGED_DATASET="${MERGED_DATASET:-${PROCESSED_DIR}/aki_features_master_wide.csv}"
-COUNTS_FILE="${COUNTS_FILE:-${RESULTS_DIR}/metadata/cohort_flow_counts.json}"
+COUNTS_FILE="${COUNTS_FILE:-${PAPER_DIR}/metadata/cohort_flow_counts.json}"
 PROCESSED_PREOP="${PROCESSED_PREOP:-${PROCESSED_DIR}/aki_preop_processed.csv}"
 
 for path in "$COHORT_CSV" "$MERGED_DATASET" "$DISPLAY_DICT" "$COUNTS_FILE"; do
@@ -32,8 +33,8 @@ else
   echo "Using processed preop dataset for continuous features: $PROCESSED_PREOP"
 fi
 
-mkdir -p "${RESULTS_DIR}/tables" "${RESULTS_DIR}/figures"
-export DISPLAY_DICTIONARY_PATH="$DISPLAY_DICT"
+mkdir -p "${PAPER_DIR}/tables" "${PAPER_DIR}/figures" "${PAPER_DIR}/metadata"
+export DISPLAY_DICTIONARY_PATH="$DISPLAY_DICT" PAPER_DIR RESULTS_DIR
 
 echo "[1/3] Generating preoperative descriptive table..."
 "$PYTHON_BIN" -m reporting.preop_descriptives \

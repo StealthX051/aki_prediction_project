@@ -3,8 +3,11 @@
 # Activate environment (if running from outside)
 # source activate aki_prediction_project
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PYTHON_EXEC="/home/exouser/.conda/envs/aki_prediction_project/bin/python"
 PARALLEL_BACKEND="${PARALLEL_BACKEND:-processes}"
+RESULTS_DIR="${RESULTS_DIR:-${SCRIPT_DIR}/results/aeon/experiments}"
+PAPER_DIR="${PAPER_DIR:-${SCRIPT_DIR}/results/aeon/paper}"
 
 # Outcomes
 OUTCOMES=("any_aki" "icu_admission")
@@ -39,6 +42,8 @@ FEATURE_SETS=(
 FUSION_MODES=("true" "false")
 
 LOG_FILE="experiment_log_aeon.txt"
+
+export RESULTS_DIR PAPER_DIR
 
 echo "Starting Aeon Experiments..." | tee -a "$LOG_FILE"
 
@@ -99,7 +104,7 @@ echo "--- Evaluating Aeon models and generating reports ---" | tee -a "$LOG_FILE
 
 echo "  > Running evaluation (results -> results directory)..." | tee -a "$LOG_FILE"
 $PYTHON_EXEC -m results_recreation.metrics_summary \
-    --results-dir results \
+    --results-dir "$RESULTS_DIR" \
     --delta-mode reference \
     --reference-feature-set preop_only \
     --parallel-backend "$PARALLEL_BACKEND" \

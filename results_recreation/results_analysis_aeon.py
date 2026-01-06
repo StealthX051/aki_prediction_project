@@ -1,3 +1,4 @@
+import os
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -22,9 +23,13 @@ from joblib import Parallel, delayed
 
 # Constants for Aeon Analysis
 # Point to 'results/aeon' instead of 'results'
-RESULTS_DIR = Path(__file__).resolve().parent.parent / 'results' / 'aeon'
-FIGURES_DIR = RESULTS_DIR / 'figures'
-TABLES_DIR = RESULTS_DIR / 'tables'
+EXPERIMENTS_DIR = Path(
+    os.getenv("RESULTS_DIR", Path(__file__).resolve().parent.parent / "results" / "aeon" / "experiments")
+)
+PAPER_DIR = Path(os.getenv("PAPER_DIR", EXPERIMENTS_DIR.parent / "paper"))
+FIGURES_DIR = Path(os.getenv("FIGURES_DIR", PAPER_DIR / "figures"))
+TABLES_DIR = Path(os.getenv("TABLES_DIR", PAPER_DIR / "tables"))
+RESULTS_DIR = EXPERIMENTS_DIR
 
 FIGURES_DIR.mkdir(parents=True, exist_ok=True)
 TABLES_DIR.mkdir(parents=True, exist_ok=True)

@@ -1,11 +1,24 @@
 # Results artifacts
 
-This repository saves publication-ready outputs under `results/` so writers and
-analysts can reuse them without rerunning the full pipeline. All reporting
-scripts respect `RESULTS_DIR` environment overrides and share the display
-dictionary at `metadata/display_dictionary.json` to keep labels synchronized.
-Artifacts from the Catch22 + XGBoost/EBM pipeline are considered the primary
-source of truth; Aeon artifacts are optional and experimental.
+This repository keeps publication-ready outputs under `results/catch22/paper/`
+and raw experiment artifacts under `results/catch22/experiments/` so writers can
+pull figures/tables without rerunning the pipeline. All reporting scripts
+respect `RESULTS_DIR` (experiments) and `PAPER_DIR` (paper surface) environment
+overrides and share the display dictionary at `metadata/display_dictionary.json`
+to keep labels synchronized. Artifacts from the Catch22 + XGBoost/EBM pipeline
+are considered the primary source of truth; Aeon artifacts are optional and
+live under `results/aeon/`.
+
+## Layout overview (Catch22)
+- `results/catch22/experiments/`: models, params, predictions, calibration artifacts. Convenience symlinks to paper tables/figures/metadata live here.
+- `results/catch22/paper/`: publication-ready bundle (`figures/`, `tables/`, `reports/`, `metadata/`, `manifest.json`).
+- `results/catch22/xai/`: symlinks to interpretability outputs
+  - `xai/ebm/<outcome>/<branch>/<feature_set>/ebm_xai` → per-model EBM explanations
+  - `xai/shap/xgboost/<outcome>/<branch>/<feature_set>/shap_summary_*.png` → SHAP bar/dot plots
+- `results/catch22/archive/legacy/`: legacy grids (kept for reference).
+
+Env overrides:
+- Set `RESULTS_DIR` to change the experiments root; set `PAPER_DIR` to change the paper surface. Aeon uses the same names but defaults to `results/aeon/...`.
 
 ## Running experiments (full or staged)
 - Use `run_experiments.sh` for the Catch22/XGBoost/EBM grid. It supports:
@@ -36,7 +49,7 @@ source of truth; Aeon artifacts are optional and experimental.
     $PYTHON_BIN -m model_creation.step_07_train_evaluate --outcome "$o" --branch "$b" --feature_set "$fs" --model_type ebm --export_ebm_explanations
   done; done; done
   ```
-  Outputs land in `results/models/ebm/<outcome>/<branch>/<feature_set>/artifacts/ebm_xai/` with `index.html` linking global, local, and per-term plots.
+  Outputs land in `results/catch22/experiments/models/ebm/<outcome>/<branch>/<feature_set>/artifacts/ebm_xai/` with `index.html` linking global, local, and per-term plots (also symlinked under `results/catch22/xai/ebm/`).
 
 ## Core model evaluation outputs
 The consolidated metrics table and plots are generated from previously trained
@@ -60,11 +73,14 @@ models without retraining:
    ```
 
 Result locations:
-- `results/tables/metrics_summary.csv`: Consolidated AUROC/AUPRC and
-  thresholded metrics with confidence intervals, plus Δ columns.
-- `results/report.docx` and `results/report.pdf`: Styled reports with main
-  tables and separate Δ tables (Δ vs reference).
-- `results/figures/`: ROC, PR, and calibration curves for each configuration.
+- `results/catch22/paper/tables/metrics_summary.csv`: Consolidated AUROC/AUPRC
+  and thresholded metrics with confidence intervals, plus Δ columns (also
+  reachable via `results/catch22/experiments/tables` symlink).
+- `results/catch22/paper/reports/report.docx` and
+  `results/catch22/paper/reports/report.pdf`: Styled reports with main tables
+  and separate Δ tables (Δ vs reference).
+- `results/catch22/paper/figures/`: ROC, PR, and calibration curves for each
+  configuration.
 
 Reporting layout/styling notes:
 - Feature-set inputs render as compact component columns (Preop, AWP, CO2, ECG, Pleth) with widths scaled to the header text plus padding; metric columns stay wider for readability.
@@ -84,17 +100,17 @@ paths (`DATA_DIR`, `PROCESSED_DIR`, `RESULTS_DIR`) if they are already set.
 ## Cohort flow diagram
 `reporting/cohort_flow.py` transforms the saved cohort counts from
 `step_01_cohort_construction.py` into a vertical flow diagram. Provide the
-counts JSON (default: `results/metadata/cohort_flow_counts.json`) and an optional
+counts JSON (default: `results/catch22/paper/metadata/cohort_flow_counts.json`) and an optional
 custom display dictionary path. The renderer skips no-op/increasing steps, shows
 per-step removals in rightward exclusion boxes with reason text, applies friendly
 labels, groups all waveform checks into one stage with a footnote listing channels,
 and draws a centered T-junction from the Final Cohort box to AKI vs. No AKI split
 boxes when `label_split` is present in the JSON. Outputs:
-`results/figures/cohort_flow.svg` and `cohort_flow.png`.
+`results/catch22/paper/figures/cohort_flow.svg` and `cohort_flow.png`.
 
 ```bash
 python -m reporting.cohort_flow \
-  --counts-file results/metadata/cohort_flow_counts.json \
+  --counts-file results/catch22/paper/metadata/cohort_flow_counts.json \
   --display-dictionary metadata/display_dictionary.json
 ```
 
@@ -107,9 +123,9 @@ variables using the raw cohort CSV (before one-hot encoding). Continuous
 features are tested for normality (Shapiro–Wilk, subsampled to 5,000) to decide
 between mean ± SD or median (IQR) reporting; categorical features are presented
 as counts with percentages. Outputs:
-- `results/tables/preop_descriptives.html`
-- `results/tables/preop_descriptives.tex`
-- `results/tables/preop_descriptives.docx`
+- `results/catch22/paper/tables/preop_descriptives.html`
+- `results/catch22/paper/tables/preop_descriptives.tex`
+- `results/catch22/paper/tables/preop_descriptives.docx`
 
 ```bash
 python -m reporting.preop_descriptives \
@@ -128,8 +144,8 @@ percentages for the merged modeling dataset
 (`data/processed/aki_features_master_wide.csv` by default), excluding
 identifiers and outcomes. Headers are human-friendly and one-hot columns resolve
 to display labels. Outputs are written to:
-- `results/tables/missingness_table.csv`
-- `results/tables/missingness_table.html`
+- `results/catch22/paper/tables/missingness_table.csv`
+- `results/catch22/paper/tables/missingness_table.html`
 
 ```bash
 python -m reporting.missingness_table \

@@ -81,4 +81,4 @@ INTRAOP_WIDE_WINDOWED_FILE = Path(os.getenv("INTRAOP_WIDE_WINDOWED_FILE", PROCES
 WIDE_FEATURES_FILE = Path(os.getenv("WIDE_FEATURES_FILE", PROCESSED_DIR / 'aki_features_master_wide.csv'))
 WIDE_FEATURES_WINDOWED_FILE = Path(os.getenv("WIDE_FEATURES_WINDOWED_FILE", PROCESSED_DIR / 'aki_features_master_wide_windowed.csv'))
 
-RESULTS_DIR = Path(os.getenv("RESULTS_DIR", PROJECT_ROOT / 'results'))
+RESULTS_DIR = Path(os.getenv("RESULTS_DIR", PROJECT_ROOT / "results" / "catch22" / "experiments"))

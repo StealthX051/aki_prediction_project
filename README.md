@@ -8,6 +8,19 @@ The pipeline consists of three main stages:
 2.  **Feature Extraction**: Extracting time-series features (Catch22) from high-frequency waveforms.
 3.  **Modeling**: Training XGBoost and Explainable Boosting Machine (EBM) classifiers to predict AKI (primary) and ICU admission (secondary).
 
+## 🗂️ Results layout (quick reference)
+- **Experiments root**: `results/catch22/experiments` (models, params, raw artifacts). Set via `RESULTS_DIR`.
+- **Paper surface**: `results/catch22/paper` (publication-ready figures/tables/reports/metadata). Set via `PAPER_DIR`. Symlinks from `experiments/{tables,figures,metadata}` point here for convenience.
+- **XAI surfacing**: `results/catch22/xai/ebm/<o>/<b>/<fs>/ebm_xai` and `results/catch22/xai/shap/xgboost/<o>/<b>/<fs>/shap_summary_*.png` (symlinks to artifacts under experiments).
+- **Archive**: `results/catch22/archive/legacy` holds legacy grids (`results/xgboost_*`).
+- **Aeon**: parallel structure under `results/aeon/experiments` and `results/aeon/paper`.
+- Key publication files (defaults):
+  - Metrics: `results/catch22/paper/tables/metrics_summary.csv`
+  - Figures: `results/catch22/paper/figures/` (ROC/PR/Calibration, cohort flow)
+  - Reports: `results/catch22/paper/reports/report.{docx,pdf}`
+  - Descriptives/Missingness: `results/catch22/paper/tables/preop_descriptives.*`, `missingness_table.*`
+  - Manifest: `results/catch22/paper/manifest.json`
+
 ## 🛠️ Prerequisites & Setup
 
 ### 1. Environment Setup
@@ -48,6 +61,10 @@ Ensure you have access to the VitalDB API. The `vitaldb` Python package is used 
 **File**: `data_preparation/inputs.py`
 Central configuration file. Defines input/output paths, mandatory waveforms/columns, and **AEON export settings** (e.g., padding policy, save formats). Verify `INPUT_FILE`, `MANDATORY_WAVEFORMS`, and `TARGET_SR`.
 
+> Results layout: by default `RESULTS_DIR` points to `results/catch22/experiments`
+> and `PAPER_DIR` to `results/catch22/paper`. Paths below assume those defaults;
+> paper-ready figures/tables/reports are written under `results/catch22/paper/`.
+
 ### Step 2: Cohort Construction
 **File**: `data_preparation/step_01_cohort_construction.py`
 Filters the raw dataset to create a valid cohort.
@@ -72,9 +89,9 @@ the Final Cohort box. Per-step removals are shown in the exclusion boxes, and AK
 False/True counts are displayed when present in the counts JSON produced by step 01.
 
 ```bash
-python -m reporting.cohort_flow --counts-file results/metadata/cohort_flow_counts.json
+python -m reporting.cohort_flow --counts-file results/catch22/paper/metadata/cohort_flow_counts.json
 ```
-Figures are written to `results/figures/` by default (SVG and PNG).
+Figures are written to `results/catch22/paper/figures/` by default (SVG and PNG).
 
 ### Step 3: Feature Extraction
 **File**: `data_preparation/step_02_catch_22.py`
@@ -152,7 +169,7 @@ python data_preparation/step_05_data_merge.py --impute-missing
 
 We have refactored the modeling pipeline into two robust scripts plus shared utilities. Both scripts accept `--model_type {xgboost,ebm}`; the default `xgboost` path matches prior behavior, while `ebm` now uses an efficiency-tuned ExplainableBoostingClassifier configuration for HPO (0 interactions, `missing="gain"`, **Frozen Bins** pre-computed from the training data, **0 inner bags**, **1 outer bag**, multi-core training, deterministic seed). Optuna tunes leaves, smoothing, learning rate, validation size, early stopping, and regularization over a narrowed search space (see below). Inputs retain NaNs by default; pass `--legacy_imputation` if you need the previous `-99` sentinel fill during training.
 
-*   **Hyperparameter Optimization** — `model_creation/step_06_run_hpo.py`: Runs Optuna sweeps (default 100 trials) to maximize AUPRC and stores the best parameters at `results/params/{model_type}/{outcome}/{branch}/{feature_set}.json`.
+*   **Hyperparameter Optimization** — `model_creation/step_06_run_hpo.py`: Runs Optuna sweeps (default 100 trials) to maximize AUPRC and stores the best parameters at `results/catch22/experiments/params/{model_type}/{outcome}/{branch}/{feature_set}.json`.
 *   **Training & Evaluation** — `model_creation/step_07_train_evaluate.py`: Trains the final model with the tuned hyperparameters, writes calibrated predictions, and exports artifacts.
 *   **Shared Utilities** — `model_creation/postprocessing.py` and `model_creation/prediction_io.py`: Implement stratified out-of-fold (OOF) prediction generation, logistic recalibration, Youden-J threshold search, prediction file validation, and JSON artifact persistence.
 
@@ -192,7 +209,7 @@ Use the provided shell script to sweep the default grid of outcomes, branches, f
 *   **Threshold Selection**: The calibrated OOF scores are searched for the **Youden-J** statistic to define a single decision threshold per (Outcome × Branch × Feature Set). That threshold is stored in `artifacts/threshold.json`.
 *   **Artifacted Outputs**: For each configuration, the script saves calibrated train/test predictions (`predictions/train.csv`, `predictions/test.csv`), the fitted recalibration parameters (`artifacts/calibration.json`), threshold metadata (`artifacts/threshold.json`), dataset/hash metadata (`artifacts/metadata.json`), and SHAP plots (XGBoost only).
 *   **Model-Type Specific Artifacts**: XGBoost runs export `model.json` plus SHAP figures, while EBM runs export `model.ebm` and can also emit calibrated explainability artifacts (`--export_ebm_explanations`).
-    *   **EBM Explainability outputs** live under `results/models/ebm/{outcome}/{branch}/{feature_set}/artifacts/ebm_xai/` and include:
+    *   **EBM Explainability outputs** live under `results/catch22/experiments/models/ebm/{outcome}/{branch}/{feature_set}/artifacts/ebm_xai/` (also symlinked at `results/catch22/xai/ebm/`) and include:
         * `global_explanation.json`: raw `interpret` global explanation payload for all learned terms.
         * `global_importances.png` and `global_importances_plotly.(html|png)`: bar plots of term importances (Matplotlib + Plotly with Kaleido fallback).
         * `interaction_importances.(json|png|html|png)`: ranked interaction terms derived from the model’s native `term_features_` and `term_importances_`.
@@ -249,18 +266,18 @@ statistics are centralized in `metadata/display_dictionary.json`. See
 `reporting/DISPLAY_DICTIONARY.md` for the schema and helper utilities that keep
 tables/figures synchronized.
 
-*   **Artifact Validation & Aggregation**: `results_recreation/metrics_summary.py` crawls `results/**/models/**/predictions/test.csv`, confirms that the paired `artifacts/calibration.json` and `artifacts/threshold.json` from Step 7 are present, and computes held-out metrics using the stored threshold for each configuration. A consolidated metrics table is written to `results/tables/metrics_summary.csv` (and optional bootstrap samples to Parquet).
+*   **Artifact Validation & Aggregation**: `results_recreation/metrics_summary.py` crawls `RESULTS_DIR/models/**/predictions/test.csv`, confirms that the paired `artifacts/calibration.json` and `artifacts/threshold.json` from Step 7 are present, and computes held-out metrics using the stored threshold for each configuration. A consolidated metrics table is written to `results/catch22/paper/tables/metrics_summary.csv` (with a copy reachable via the `results/catch22/experiments/tables` symlink; optional bootstrap samples can be saved alongside).
 *   **Calibration & Thresholds**: No report-time refitting occurs. The recalibration parameters and thresholds learned from OOF training scores in Step 7 are **fixed** and reapplied to the test predictions when computing metrics and bootstraps.
 *   **Bootstrapping**: Non-parametric, outcome-stratified bootstrap of the held-out test predictions (default 1000 reps). The stored threshold is fixed. Bootstrap samples are **paired across models within each Outcome × Branch × Pipeline group**, enabling Δ CIs. Default reference for Δ is the `preop_only` feature set.
     * Parallelization defaults to the process backend with `PARALLEL_BACKEND=processes` in the run shells; retries and timeouts are baked in (`--bootstrap-timeout 1800`, `--bootstrap-max-retries 2`) so a stuck pool falls back to threads, then sequential, instead of hanging.
 *   **Unified Reporting**: `reporting/make_report.py` consumes `metrics_summary.csv` to generate Word, PDF, and HTML tables plus ROC/PR/Calibration figures across both pipelines. Reports display distinct rows for each model type (`xgboost` vs. `ebm`) within every Outcome × Branch × Feature Set combination, and add a separate delta table (Δ vs reference) with heatmap shading only when the Δ CI excludes 0.
 *   **Outputs**:
     *   **Reports**:
-        *   `results/report.docx`: Formatted Word document containing all results tables with selective bolding and background gradients.
-        *   `results/report.pdf`: Aggregated PDF report of all tables.
-        *   `results/tables/*.html`: Individual HTML tables for each outcome/branch.
-    *   **Figures**: High-quality ROC, PR, and Calibration curves saved in `results/figures/`.
-    *   **Data**: `results/tables/metrics_summary.csv` containing all calculated metrics and confidence intervals, plus optional bootstrap Parquet files for downstream analysis.
+        *   `results/catch22/paper/reports/report.docx`: Formatted Word document containing all results tables with selective bolding and background gradients.
+        *   `results/catch22/paper/reports/report.pdf`: Aggregated PDF report of all tables.
+        *   `results/catch22/paper/tables/*.html`: Individual HTML tables for each outcome/branch (also reachable via the `results/catch22/experiments/tables` symlink).
+    *   **Figures**: High-quality ROC, PR, and Calibration curves saved in `results/catch22/paper/figures/`.
+    *   **Data**: `results/catch22/paper/tables/metrics_summary.csv` containing all calculated metrics and confidence intervals, plus optional bootstrap Parquet files for downstream analysis.
 ```bash
 python results_recreation/metrics_summary.py \
   --delta-mode reference \
@@ -284,12 +301,12 @@ consistent across manuscripts and dashboards.
   one stage with a footnote, and shows rightward exclusion boxes labeled with removal
   reasons and counts. A centered T-junction connects the Final Cohort box to AKI vs.
   No AKI split boxes when `label_split` is present in the JSON (default:
-  `results/metadata/cohort_flow_counts.json`). Figures are written to SVG/PNG under
-  `results/figures/`.
+  `results/catch22/paper/metadata/cohort_flow_counts.json`). Figures are written to
+  SVG/PNG under `results/catch22/paper/figures/`.
 
   ```bash
   python -m reporting.cohort_flow \
-    --counts-file results/metadata/cohort_flow_counts.json \
+    --counts-file results/catch22/paper/metadata/cohort_flow_counts.json \
     --display-dictionary metadata/display_dictionary.json
   ```
 
@@ -298,7 +315,7 @@ consistent across manuscripts and dashboards.
   `aki_preop_processed.csv` for continuous features. Each continuous variable
   undergoes a Shapiro–Wilk test; report mean ± SD if normal, otherwise median (IQR).
   Binary categoricals render as False/True; all labels/units come from the display
-  dictionary. Outputs: HTML/LaTeX/DOCX at `results/tables/preop_descriptives.*`.
+  dictionary. Outputs: HTML/LaTeX/DOCX at `results/catch22/paper/tables/preop_descriptives.*`.
 
   ```bash
   python -m reporting.preop_descriptives \
@@ -311,7 +328,7 @@ consistent across manuscripts and dashboards.
   merged modeling dataset (default: `data/processed/aki_features_master_wide.csv`)
   while skipping identifiers and outcomes. Columns are human-readable (friendly
   headers, one-hot labels resolved via the display dictionary) and written to
-  CSV/HTML in `results/tables/`.
+  CSV/HTML in `results/catch22/paper/tables/`.
 
   ```bash
   python -m reporting.missingness_table \

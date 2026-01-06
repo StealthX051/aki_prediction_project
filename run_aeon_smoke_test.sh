@@ -6,7 +6,7 @@
 
 # 1. Setup Environment
 export AEON_OUT_DIR="outputs/aeon_smoke"
-RESULTS_DIR="results/aeon_smoke"
+RESULTS_DIR="${RESULTS_DIR:-results/aeon/experiments/smoke}"
 LOG_FILE="smoke_test_aeon.log"
 PYTHON_EXEC="/home/exouser/.conda/envs/aki_prediction_project/bin/python"
 

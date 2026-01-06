@@ -12,7 +12,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DATA_DIR="${DATA_DIR:-${SCRIPT_DIR}/data}"
 PROCESSED_DIR="${PROCESSED_DIR:-${DATA_DIR}/processed}"
 RAW_DIR="${RAW_DIR:-${DATA_DIR}/raw}"
-RESULTS_DIR="${RESULTS_DIR:-${SCRIPT_DIR}/results}"
+RESULTS_DIR="${RESULTS_DIR:-${SCRIPT_DIR}/results/catch22/experiments}"
+PAPER_DIR="${PAPER_DIR:-${SCRIPT_DIR}/results/catch22/paper}"
 export PYTHONUNBUFFERED=1
 PYTHON_BIN="${PYTHON_BIN:-python}"
 LOG_FILE="${LOG_FILE:-experiment_log.txt}"
@@ -20,7 +21,7 @@ PREP_MODE="${PREP_MODE:-auto}" # auto|force|skip
 SMOKE_TEST_FLAG="${SMOKE_TEST_FLAG:-}"
 PARALLEL_BACKEND="${PARALLEL_BACKEND:-processes}"
 
-export DATA_DIR PROCESSED_DIR RAW_DIR RESULTS_DIR
+export DATA_DIR PROCESSED_DIR RAW_DIR RESULTS_DIR PAPER_DIR
 
 # Outcomes
 OUTCOMES=("any_aki" "icu_admission")

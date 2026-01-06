@@ -23,8 +23,11 @@ from reporting.display_dictionary import DisplayDictionary, load_display_diction
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-RESULTS_DIR = Path(os.getenv("RESULTS_DIR", Path(__file__).resolve().parent.parent / "results"))
-TABLES_DIR = RESULTS_DIR / "tables"
+EXPERIMENTS_DIR = Path(
+    os.getenv("RESULTS_DIR", Path(__file__).resolve().parent.parent / "results" / "catch22" / "experiments")
+)
+PAPER_DIR = Path(os.getenv("PAPER_DIR", EXPERIMENTS_DIR.parent / "paper"))
+TABLES_DIR = PAPER_DIR / "tables"
 
 DEFAULT_DATASET_PATH = Path(
     os.getenv(

@@ -46,9 +46,12 @@ from reporting.display_dictionary import DisplayDictionary, load_display_diction
 
 logger = logging.getLogger(__name__)
 
-RESULTS_DIR = Path(os.getenv("RESULTS_DIR", Path(__file__).resolve().parent.parent / "results"))
-FIGURES_DIR = RESULTS_DIR / "figures"
-METADATA_DIR = RESULTS_DIR / "metadata"
+EXPERIMENTS_DIR = Path(
+    os.getenv("RESULTS_DIR", Path(__file__).resolve().parent.parent / "results" / "catch22" / "experiments")
+)
+PAPER_DIR = Path(os.getenv("PAPER_DIR", EXPERIMENTS_DIR.parent / "paper"))
+FIGURES_DIR = PAPER_DIR / "figures"
+METADATA_DIR = PAPER_DIR / "metadata"
 DEFAULT_COUNTS_PATH = METADATA_DIR / "cohort_flow_counts.json"
 
 
