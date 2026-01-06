@@ -20,6 +20,16 @@ source of truth; Aeon artifacts are optional and experimental.
 - Metrics/report generation is skipped if no prediction files are present, so partial runs (only one family) are handled gracefully. All CLI flags also pass through `run_catch22_experiments.sh`.
 - `results_recreation/metrics_summary.py` validates each `predictions/test.csv`; invalid files are skipped with a warning so a single bad artifact does not halt consolidation. If no valid predictions remain, it fails fast with a clear message.
 - All run scripts (`run_experiments*.sh`, smoke tests) now invoke `metrics_summary` with stratified, paired bootstrapping, Δ vs `preop_only`, and full-core parallelism, then call `reporting/make_report` to emit the report bundle (main + Δ tables).
+- EBM explainability is auto-enabled in `run_experiments.sh` (the script injects `--export_ebm_explanations` for EBM runs). Per-term exports run in a bounded thread pool with per-term timeouts and retries; logging is unbuffered (`PYTHONUNBUFFERED=1`) to surface progress and avoid silent hangs. If you need to regenerate XAI for existing EBM models only, reuse processed data and models:  
+  ```bash
+  PYTHON_BIN=/home/exouser/.conda/envs/aki_prediction_project/bin/python
+  OUTCOMES=(any_aki icu_admission); BRANCHES=(non_windowed windowed)
+  FEATURE_SETS=(preop_only pleth_only ecg_only co2_only awp_only all_waveforms preop_and_all_waveforms preop_and_pleth preop_and_ecg preop_and_co2 preop_and_awp preop_and_all_minus_pleth preop_and_all_minus_ecg preop_and_all_minus_co2 preop_and_all_minus_awp)
+  for o in "${OUTCOMES[@]}"; do for b in "${BRANCHES[@]}"; do for fs in "${FEATURE_SETS[@]}"; do
+    $PYTHON_BIN -m model_creation.step_07_train_evaluate --outcome "$o" --branch "$b" --feature_set "$fs" --model_type ebm --export_ebm_explanations
+  done; done; done
+  ```
+  Outputs land in `results/models/ebm/<outcome>/<branch>/<feature_set>/artifacts/ebm_xai/` with `index.html` linking global, local, and per-term plots.
 
 ## Core model evaluation outputs
 The consolidated metrics table and plots are generated from previously trained

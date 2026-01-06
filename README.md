@@ -162,6 +162,14 @@ python model_creation/step_06_run_hpo.py --outcome any_aki --branch windowed --f
 python model_creation/step_07_train_evaluate.py --outcome any_aki --branch windowed --feature_set all_waveforms --model_type ebm --export_ebm_explanations
 ```
 
+**EBM explainability exports (global, local, per-term)**  
+Step 7 now emits calibrated, publication-ready EBM interpretability artifacts by default when `--export_ebm_explanations` is set (the flag is auto-applied inside `run_experiments.sh` for all EBM runs; smoke tests still skip it). Behavior:
+* Global: `global_explanation.json` plus styled term-importance plots (`global_importances.png`, `global_importances_plotly.{html,png}`) using display-dictionary labels, improved fonts, muted palettes, and light grids.
+* Interactions: `interaction_importances.{json,png,html,png}` (empty when interactions=0, the default for stability).
+* Local: `local_explanations.json` (raw + calibrated probabilities, logits, predicted labels, threshold, calibration params, case IDs), `local_attributions.csv` (reconciled table), and a diverging-color bar plot centered at zero (`local_contributions.png`).
+* Per-feature partial plots: For every term, `terms/<feature-slug>/partial_dependence.{html,png}` plus `explanation.json`. Plots show contribution curves with a density overlay (secondary axis), styled legends, fonts, and grids. An `index.html` in `ebm_xai/` links to all plots.
+* Robust export loop: per-term exports run in a thread pool with progress logs, per-term timeouts (90s), up to 2 retries, and non-blocking shutdown to avoid hangs. KeyboardInterrupt cancels outstanding tasks promptly.
+
 **EBM HPO (small-N optimized)**  
 During HPO we now prioritize speed and stability for ~2.5k rows: `inner_bags=0`, `outer_bags=1`, `max_bins∈{32,64,128,256}`, `max_leaves∈{2,3}`, `smoothing_rounds∈{0,25,50,75,100,150,200,350,500}`, `learning_rate∈{0.0025,0.005,0.01,0.015,0.02,0.03,0.04}`, `validation_size∈{0.1,0.15,0.2}`, `early_stopping_rounds∈{100,200}`, `early_stopping_tolerance∈{0,1e-5}`, `min_samples_leaf∈{2,3,4,5,10}`, `min_hessian∈{0,1e-6,1e-4,1e-2}`, `greedy_ratio∈{0,5,10}`, `cyclic_progress∈{0,1}`, `n_jobs=-2`. For very small data (<50 rows) we automatically force `n_jobs=1`, `inner_bags=0`, `outer_bags=1`, `validation_size=0.2` to avoid hangs. Final training in Step 7 still applies the heavier production defaults (`inner_bags=20`, `outer_bags=14`, `max_bins` from tuned value) so you can refit top configs with stability while keeping HPO fast.
 

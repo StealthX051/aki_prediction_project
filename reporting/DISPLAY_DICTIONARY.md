@@ -80,5 +80,11 @@ Resolution order for feature names:
 - **Data prep**: If additional derived preoperative features are created,
   register them under `features` to keep cohort tables tidy.
 
+The EBM XAI exporter (`step_07_train_evaluate.py --export_ebm_explanations`) also
+uses the display dictionary to render human-readable labels and units on term
+importances, partial dependence plots, and local contribution visuals. Update the
+dictionary before regenerating explainability artifacts to ensure consistent
+plot labeling.
+
 Additions should be reviewed during PRs to avoid drift between the dictionary
 and the data/model artifacts that reference it.

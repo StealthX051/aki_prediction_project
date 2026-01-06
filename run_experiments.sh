@@ -13,6 +13,7 @@ DATA_DIR="${DATA_DIR:-${SCRIPT_DIR}/data}"
 PROCESSED_DIR="${PROCESSED_DIR:-${DATA_DIR}/processed}"
 RAW_DIR="${RAW_DIR:-${DATA_DIR}/raw}"
 RESULTS_DIR="${RESULTS_DIR:-${SCRIPT_DIR}/results}"
+export PYTHONUNBUFFERED=1
 PYTHON_BIN="${PYTHON_BIN:-python}"
 LOG_FILE="${LOG_FILE:-experiment_log.txt}"
 PREP_MODE="${PREP_MODE:-auto}" # auto|force|skip
@@ -178,6 +179,7 @@ for model_type in "${MODEL_TYPES[@]}"; do
                     --branch "$branch" \
                     --feature_set "$feature_set" \
                     --model_type "$model_type" \
+                    $( [[ "$model_type" == "ebm" ]] && echo "--export_ebm_explanations" ) \
                     $SMOKE_TEST_FLAG 2>&1 | tee -a "$LOG_FILE"; then
                     echo "  > Training & Evaluation Complete for model_type=$model_type." | tee -a "$LOG_FILE"
                 else

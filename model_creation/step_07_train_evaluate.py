@@ -1,10 +1,14 @@
 import argparse
+import concurrent.futures
 import hashlib
 import json
 import logging
+import time
+import os
+import re
 from pathlib import Path
 import sys
-from typing import Dict, Iterable, List, Sequence
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -86,6 +90,256 @@ def _safe_logit(probabilities: np.ndarray, eps: float = 1e-15) -> np.ndarray:
     return np.log(clipped / (1 - clipped))
 
 
+def _safe_filename(name: str) -> str:
+    """Coerce an arbitrary feature name into a filesystem-friendly slug."""
+    slug = re.sub(r"[^A-Za-z0-9_.-]+", "_", name).strip("_")
+    return slug or "feature"
+
+
+def _ebm_term_metadata(model) -> Tuple[List[str], List[float]]:
+    """Return (term_names, term_importances) with best-effort fallbacks across interpret versions."""
+    names: List[str] = []
+    raw_names = getattr(model, "term_names_", None)
+    if not raw_names:
+        raw_names = getattr(model, "term_names", None)
+        if callable(raw_names):
+            try:
+                raw_names = raw_names()
+            except Exception:
+                raw_names = None
+    if raw_names:
+        try:
+            names = [str(name) for name in raw_names]
+        except Exception:
+            names = list(raw_names)
+
+    importances: List[float] = []
+    raw_importances = getattr(model, "term_importances_", None)
+    if raw_importances is None or (hasattr(raw_importances, "__len__") and len(raw_importances) == 0):
+        raw_importances = getattr(model, "term_importances", None)
+        if callable(raw_importances):
+            try:
+                raw_importances = raw_importances()
+            except Exception:
+                raw_importances = None
+
+    if raw_importances is not None:
+        try:
+            importances = np.asarray(raw_importances, dtype=float).flatten().tolist()
+        except Exception:
+            try:
+                importances = [float(value) for value in raw_importances]
+            except Exception:
+                importances = []
+
+    if names and importances and len(names) != len(importances):
+        logger.warning(
+            "Length mismatch between term names (%s) and importances (%s); clipping to match.",
+            len(names),
+            len(importances),
+        )
+        limit = min(len(names), len(importances))
+        names = names[:limit]
+        importances = importances[:limit]
+
+    return names, importances
+
+
+def _format_feature_labels(feature_names: Sequence[str], display_dict: Optional[object]) -> List[str]:
+    """Map raw feature names to human-readable labels using the display dictionary when available."""
+    if display_dict is None:
+        return list(feature_names)
+
+    labels: List[str] = []
+    for name in feature_names:
+        try:
+            # Short labels keep plots readable; include units when present.
+            label = display_dict.feature_label(name, use_short=True, include_unit=True)
+        except Exception:
+            label = str(name)
+        labels.append(label)
+    return labels
+
+
+def _is_number(value: object) -> bool:
+    try:
+        float(value)
+        return True
+    except Exception:
+        return False
+
+
+def _write_xai_index(
+    xai_dir: Path,
+    *,
+    global_section: Dict[str, str],
+    term_entries: List[Dict[str, str]],
+) -> None:
+    """Emit a lightweight index.html to navigate EBM XAI artifacts."""
+
+    lines = [
+        "<!doctype html>",
+        "<html>",
+        "<head>",
+        '<meta charset="utf-8">',
+        "<title>EBM Interpretability Index</title>",
+        "<style>",
+        "body { font-family: 'Helvetica Neue', Arial, sans-serif; margin: 2rem; max-width: 960px; color: #0f172a; }",
+        "h1 { margin-bottom: 0.25rem; }",
+        "h2 { margin-top: 1.5rem; }",
+        "ul { line-height: 1.6; padding-left: 1.1rem; }",
+        "li { margin-bottom: 0.2rem; }",
+        "a { color: #0b3c5d; text-decoration: none; }",
+        "a:hover { text-decoration: underline; }",
+        "code { background: #f3f4f6; padding: 0.1rem 0.3rem; border-radius: 3px; }",
+        "</style>",
+        "</head>",
+        "<body>",
+        "<h1>EBM Interpretability Artifacts</h1>",
+        "<p>Browse global summaries and per-feature partial plots exported by the pipeline.</p>",
+        "<h2>Global summaries</h2>",
+        "<ul>",
+    ]
+
+    for label, rel_path in global_section.items():
+        if rel_path:
+            lines.append(f'<li><a href="{rel_path}">{label}</a></li>')
+    lines.append("</ul>")
+
+    lines.append("<h2>Per-feature partial plots</h2>")
+    lines.append("<ul>")
+    for entry in term_entries:
+        label = entry.get("display_name", entry.get("slug", "feature"))
+        rel = entry.get("plot_html")
+        raw = entry.get("raw_name")
+        extra = f" <code>{raw}</code>" if raw else ""
+        if rel:
+            lines.append(f'<li><a href="{rel}">{label}</a>{extra}</li>')
+        else:
+            lines.append(f"<li>{label}{extra}</li>")
+    lines.extend(["</ul>", "</body>", "</html>"])
+
+    (xai_dir / "index.html").write_text("\n".join(lines), encoding="utf-8")
+
+
+def _export_plotly_xy(
+    x_values: Sequence,
+    y_values: Sequence[float],
+    destination: Path,
+    title: str,
+    *,
+    x_label: str,
+    y_label: str,
+    categorical: bool = False,
+    density: Optional[object] = None,
+) -> None:
+    """Export a line/bar chart for a single feature."""
+
+    try:
+        import plotly.graph_objects as go  # type: ignore
+        from plotly.subplots import make_subplots  # type: ignore
+    except ImportError:
+        logger.warning("Plotly is not installed; skipping Plotly export for %s", title)
+        return
+
+    x_list = list(x_values)
+    y_list = list(y_values)
+
+    if not x_list or not y_list:
+        logger.warning("No data available for Plotly export of %s", title)
+        return
+
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+
+    density_x: Optional[List] = None
+    density_y: Optional[List[float]] = None
+    if isinstance(density, dict):
+        dx = density.get("names")
+        dy = density.get("scores")
+        if dx is not None and dy is not None:
+            try:
+                density_x = list(dx)
+                density_y = [float(v) for v in dy]
+            except Exception:
+                density_x = None
+                density_y = None
+    elif density is not None:
+        try:
+            candidate = [float(v) for v in density]  # type: ignore
+            density_x = x_list
+            density_y = candidate
+        except Exception:
+            density_x = None
+            density_y = None
+
+    if density_y:
+        fig.add_bar(
+            x=density_x or x_list,
+            y=density_y,
+            name="Density",
+            opacity=0.35,
+            marker_color="#9aa5b1",
+            secondary_y=False,
+        )
+
+    if categorical:
+        fig.add_bar(
+            x=x_list,
+            y=y_list,
+            name="Contribution",
+            marker_color="#1f77b4",
+            secondary_y=True,
+        )
+    else:
+        fig.add_scatter(
+            x=x_list,
+            y=y_list,
+            mode="lines+markers",
+            name="Contribution",
+            line=dict(color="#1f77b4", width=2.5),
+            marker=dict(color="#1f77b4", size=6),
+            secondary_y=True,
+        )
+
+    fig.update_layout(
+        title=title,
+        xaxis_title=x_label,
+        template="plotly_white",
+        font=dict(family="DejaVu Sans", size=13),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+        margin=dict(l=10, r=10, t=60, b=10),
+    )
+    if density_y:
+        fig.update_yaxes(title_text="Density", secondary_y=False, showgrid=True, gridcolor="#e5e5e5")
+    fig.update_yaxes(
+        title_text=y_label,
+        secondary_y=True,
+        zeroline=True,
+        zerolinecolor="#cccccc",
+        showgrid=True,
+        gridcolor="#f0f0f0",
+    )
+    fig.update_xaxes(showgrid=True, gridcolor="#e5e5e5", tickfont=dict(size=11))
+
+    html_path = destination.with_suffix(".html")
+    try:
+        fig.write_html(str(html_path))
+    except Exception:
+        logger.exception("Failed to write Plotly HTML for %s; continuing without it.", title)
+
+    image_path = destination.with_suffix(".png")
+    try:
+        fig.write_image(str(image_path))
+    except ValueError as exc:
+        logger.warning(
+            "Kaleido is unavailable; saved %s HTML but skipped static image export: %s",
+            title,
+            exc,
+        )
+    except Exception:
+        logger.exception("Failed to write Plotly image for %s; continuing with HTML only.", title)
+
+
 def _plot_term_importances(
     term_names: Sequence[str],
     term_importances: Sequence[float],
@@ -93,6 +347,16 @@ def _plot_term_importances(
     title: str,
     max_terms: int = 20,
 ):
+    plt.rcParams.update(
+        {
+            "font.family": "DejaVu Sans",
+            "axes.titlesize": 16,
+            "axes.labelsize": 13,
+            "xtick.labelsize": 11,
+            "ytick.labelsize": 11,
+        }
+    )
+
     sorted_terms = sorted(
         zip(term_names, term_importances), key=lambda item: item[1], reverse=True
     )
@@ -104,17 +368,19 @@ def _plot_term_importances(
     display_terms = sorted_terms[:max_terms]
     labels, scores = zip(*display_terms)
 
-    plt.figure(figsize=(10, max(6, len(display_terms) * 0.4)))
-    plt.barh(labels[::-1], scores[::-1])
+    plt.figure(figsize=(10.5, max(6, len(display_terms) * 0.45)))
+    bar_color = "#0b3c5d"
+    plt.barh(labels[::-1], scores[::-1], color=bar_color)
     plt.xlabel("Importance")
     plt.title(title)
+    plt.grid(axis="x", alpha=0.25, linestyle="--")
     plt.tight_layout()
-    plt.savefig(destination, bbox_inches="tight")
+    plt.savefig(destination, bbox_inches="tight", dpi=200)
     plt.close()
 
 
 def _plot_local_contributions(local_payload: Dict, destination: Path, max_features: int = 20) -> None:
-    names = local_payload.get("names")
+    names = local_payload.get("display_names") or local_payload.get("names")
     scores = local_payload.get("scores")
 
     if not names or not scores:
@@ -131,12 +397,28 @@ def _plot_local_contributions(local_payload: Dict, destination: Path, max_featur
     paired = paired[:max_features]
 
     labels, contributions = zip(*paired)
-    plt.figure(figsize=(10, max(6, len(labels) * 0.4)))
-    plt.barh(labels[::-1], contributions[::-1])
+    max_abs = max(abs(c) for c in contributions) if contributions else 1.0
+    cmap = plt.cm.coolwarm
+    colors = [cmap(0.5 + 0.5 * (c / max_abs)) for c in contributions]
+
+    plt.rcParams.update(
+        {
+            "font.family": "DejaVu Sans",
+            "axes.titlesize": 16,
+            "axes.labelsize": 13,
+            "xtick.labelsize": 11,
+            "ytick.labelsize": 11,
+        }
+    )
+
+    plt.figure(figsize=(10.5, max(6, len(labels) * 0.45)))
+    plt.barh(labels[::-1], contributions[::-1], color=colors[::-1])
+    plt.axvline(0, color="#bbbbbb", linewidth=1)
     plt.xlabel("Contribution")
     plt.title("Top Local Contributions (first sample)")
+    plt.grid(axis="x", alpha=0.25, linestyle="--")
     plt.tight_layout()
-    plt.savefig(destination, bbox_inches="tight")
+    plt.savefig(destination, bbox_inches="tight", dpi=200)
     plt.close()
 
 
@@ -165,9 +447,16 @@ def _export_plotly_bar(
         )
         return
 
-    fig = go.Figure(go.Bar(x=value_list, y=label_list, orientation="h"))
-    fig.update_layout(title=title, xaxis_title="Importance")
-    fig.update_yaxes(autorange="reversed")
+    fig = go.Figure(go.Bar(x=value_list, y=label_list, orientation="h", marker_color="#0b3c5d"))
+    fig.update_layout(
+        title=title,
+        xaxis_title="Importance",
+        template="plotly_white",
+        font=dict(family="DejaVu Sans", size=13),
+        margin=dict(l=10, r=10, t=40, b=10),
+    )
+    fig.update_yaxes(autorange="reversed", tickfont=dict(size=11))
+    fig.update_xaxes(showgrid=True, gridcolor="#e5e5e5", tickfont=dict(size=11))
 
     html_path = destination.with_suffix(".html")
     try:
@@ -204,10 +493,22 @@ def export_ebm_explanations(
     calibration_model: LogisticRecalibrationModel,
 ) -> None:
     try:
-        from interpret.glassbox._ebm._explain import EBMExplanation
+        # interpret >=0.7.4 moved EBMExplanation into _ebm; older versions used _explain
+        try:
+            from interpret.glassbox._ebm._ebm import EBMExplanation  # type: ignore
+        except ImportError:
+            from interpret.glassbox._ebm._explain import EBMExplanation  # type: ignore
     except ImportError as exc:
         logger.error("interpret is required to export EBM explanations: %s", exc)
         return
+
+    display_dict = None
+    try:
+        from reporting.display_dictionary import load_display_dictionary
+
+        display_dict = load_display_dictionary()
+    except Exception as exc:
+        logger.warning("Display dictionary unavailable; falling back to raw feature names: %s", exc)
 
     xai_dir = artifacts_dir / "ebm_xai"
     xai_dir.mkdir(parents=True, exist_ok=True)
@@ -215,31 +516,43 @@ def export_ebm_explanations(
     logger.info("Generating EBM global explanations...")
     global_explanation: EBMExplanation = model.explain_global(name="EBM Global")
     global_payload = _json_safe(global_explanation.data())
+    # Attach human-readable labels for convenience in downstream use.
+    term_names, term_importances = _ebm_term_metadata(model)
+    global_payload["display_names"] = _format_feature_labels(term_names, display_dict)
     write_json(xai_dir / "global_explanation.json", global_payload)
 
-    term_names: List[str] = getattr(model, "term_names_", [])
-    term_importances: List[float] = getattr(model, "term_importances_", [])
+    display_term_names = _format_feature_labels(term_names, display_dict)
+    name_to_display = {raw: disp for raw, disp in zip(term_names, display_term_names)}
     _plot_term_importances(
-        term_names,
+        display_term_names,
         term_importances,
         xai_dir / "global_importances.png",
         title="EBM Term Importances",
     )
     _export_plotly_bar(
-        term_names,
+        display_term_names,
         term_importances,
         xai_dir / "global_importances_plotly",
         title="EBM Term Importances",
     )
 
     interactions = []
-    term_features: Sequence[Sequence[int]] = getattr(model, "term_features_", [])
+    term_features: Sequence[Sequence[int]] = getattr(model, "term_features_", []) or []
+    if not term_features:
+        fallback_term_features = getattr(model, "term_features", None)
+        if callable(fallback_term_features):
+            try:
+                term_features = fallback_term_features()
+            except Exception:
+                term_features = []
+
     for name, importance, features in zip(term_names, term_importances, term_features):
         if len(features) <= 1:
             continue
         interactions.append(
             {
                 "name": name,
+                "display_name": name_to_display.get(name, name),
                 "importance": float(importance),
                 "features": list(features),
             }
@@ -248,13 +561,13 @@ def export_ebm_explanations(
     interactions.sort(key=lambda item: item["importance"], reverse=True)
     write_json(xai_dir / "interaction_importances.json", {"interactions": interactions})
     _plot_term_importances(
-        [item["name"] for item in interactions],
+        [item["display_name"] for item in interactions],
         [item["importance"] for item in interactions],
         xai_dir / "interaction_importances.png",
         title="EBM Interaction Importances",
     )
     _export_plotly_bar(
-        [item["name"] for item in interactions],
+        [item["display_name"] for item in interactions],
         [item["importance"] for item in interactions],
         xai_dir / "interaction_importances_plotly",
         title="EBM Interaction Importances",
@@ -269,7 +582,33 @@ def export_ebm_explanations(
 
     logger.info("Generating EBM local explanations for %s test samples...", len(X_local))
     local_explanation: EBMExplanation = model.explain_local(X_local, y_local)
-    local_payload = _json_safe(local_explanation.data())
+    local_data = local_explanation.data()
+    if local_data is None:
+        # For local explanations interpret sets overall=None and stores rows under _internal_obj["specific"]
+        logger.info("EBM local explanation returned None for overall; using _internal_obj['specific'] instead.")
+        internal_specific = getattr(local_explanation, "_internal_obj", {}).get("specific") or []
+        if internal_specific:
+            names = internal_specific[0].get("names") or []
+            scores = [row.get("scores", []) for row in internal_specific]
+            values = [row.get("values", []) for row in internal_specific]
+            local_payload = {
+                "names": names,
+                "scores": scores,
+                "values": values,
+            }
+            # preserve any meta/extra from the first row if available
+            for key in ("meta", "extra"):
+                if key in internal_specific[0]:
+                    local_payload[key] = internal_specific[0][key]
+        else:
+            local_payload = {}
+        local_payload = _json_safe(local_payload)
+    else:
+        local_payload = _json_safe(local_data)
+
+    # Attach human-readable display names for plotting/tooltips.
+    if local_payload.get("names"):
+        local_payload["display_names"] = _format_feature_labels(local_payload["names"], display_dict)
     local_payload.update(
         {
             "caseid": _json_safe(caseids.tolist()),
@@ -290,8 +629,12 @@ def export_ebm_explanations(
         }
     )
 
-    names: Sequence[str] = local_payload.get("names") or []
-    scores: Sequence[Sequence[float]] = local_payload.get("scores") or []
+    names: Sequence[str] = local_payload.get("names")
+    if names is None:
+        names = []
+    scores: Sequence[Sequence[float]] = local_payload.get("scores")
+    if scores is None:
+        scores = []
     contributions: List[Dict[str, float]] = []
     if names and scores and len(scores) == len(caseids):
         for row in scores:
@@ -314,6 +657,144 @@ def export_ebm_explanations(
     write_json(xai_dir / "local_explanations.json", local_payload)
     reconciled.to_csv(xai_dir / "local_attributions.csv", index=False)
     _plot_local_contributions(local_payload, xai_dir / "local_contributions.png")
+
+    # Per-term partial plots (one folder per feature to avoid clutter)
+    term_dir = xai_dir / "terms"
+    term_dir.mkdir(parents=True, exist_ok=True)
+
+    # Snapshot term data first (interpret objects are not thread-safe).
+    term_payloads = []
+    for idx, (raw_name, display_name) in enumerate(zip(term_names, display_term_names)):
+        term_data = global_explanation.data(idx)
+        if not term_data:
+            continue
+        term_payloads.append((idx, raw_name, display_name, _json_safe(term_data)))
+
+    index_terms: List[Dict[str, str]] = []
+
+    def _export_term(payload):
+        idx, raw_name, display_name, term_data = payload
+        xs = term_data.get("names") or []
+        ys = term_data.get("scores") or []
+        if len(ys) == 0:
+            logger.debug("Skipping term %s (no scores).", raw_name)
+            return None
+
+        categorical = not all(_is_number(x) for x in xs)
+        feature_slug = _safe_filename(display_name)
+        feature_dir = term_dir / feature_slug
+        feature_dir.mkdir(exist_ok=True)
+
+        write_json(
+            feature_dir / "explanation.json",
+            {
+                "term_index": idx,
+                "raw_name": raw_name,
+                "display_name": display_name,
+                "data": term_data,
+                "plot_type": "categorical" if categorical else "continuous",
+            },
+        )
+
+        _export_plotly_xy(
+            xs,
+            ys,
+            feature_dir / "partial_dependence",
+            f"{display_name} — EBM term",
+            x_label=display_name,
+            y_label="Contribution (logit)",
+            categorical=categorical,
+            density=term_data.get("density"),
+        )
+        return {
+            "display_name": display_name,
+            "raw_name": raw_name,
+            "slug": feature_slug,
+            "plot_html": f"terms/{feature_slug}/partial_dependence.html",
+        }
+
+    cpu_total = os.cpu_count() or 4
+    max_workers = max(1, min(8, cpu_total - 2))
+    timeout_seconds = 90
+    max_retries = 2
+    in_flight: Dict[concurrent.futures.Future, Dict[str, object]] = {}
+    total_terms = len(term_payloads)
+    completed = 0
+
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
+    try:
+        # Kick off initial submissions
+        for payload in term_payloads:
+            fut = executor.submit(_export_term, payload)
+            in_flight[fut] = {"payload": payload, "start": time.time(), "retries": 0}
+
+        while in_flight:
+            done, _ = concurrent.futures.wait(
+                in_flight.keys(), timeout=5, return_when=concurrent.futures.FIRST_COMPLETED
+            )
+
+            # Check for completed futures
+            for fut in done:
+                meta = in_flight.pop(fut, None)
+                try:
+                    entry = fut.result()
+                    if entry:
+                        index_terms.append(entry)
+                except Exception as exc:
+                    payload = meta["payload"] if meta else None
+                    logger.warning("EBM term export failed (%s); skipping. Error: %s", payload, exc)
+                completed += 1
+                if completed % 10 == 0 or completed == total_terms:
+                    logger.info("EBM XAI exports: %s/%s terms complete", completed, total_terms)
+
+            # Check for timeouts on remaining futures
+            now = time.time()
+            to_resubmit = []
+            for fut, meta in list(in_flight.items()):
+                start = meta["start"]
+                retries = meta["retries"]
+                if now - start > timeout_seconds:
+                    payload = meta["payload"]
+                    fut.cancel()
+                    in_flight.pop(fut, None)
+                    if retries < max_retries:
+                        logger.warning(
+                            "EBM term export timed out (attempt %s/%s); retrying: %s",
+                            retries + 1,
+                            max_retries,
+                            payload,
+                        )
+                        to_resubmit.append((payload, retries + 1))
+                    else:
+                        logger.error("EBM term export exceeded retries; skipping: %s", payload)
+
+            for payload, new_retry in to_resubmit:
+                new_fut = executor.submit(_export_term, payload)
+                in_flight[new_fut] = {"payload": payload, "start": time.time(), "retries": new_retry}
+
+    except KeyboardInterrupt:
+        logger.warning("Received KeyboardInterrupt; cancelling remaining term exports.")
+        for fut in in_flight:
+            fut.cancel()
+        executor.shutdown(wait=False, cancel_futures=True)
+        raise
+    finally:
+        # Do not wait on worker joins to avoid hangs; cancel any remaining futures.
+        for fut in in_flight:
+            fut.cancel()
+        executor.shutdown(wait=False, cancel_futures=True)
+
+    _write_xai_index(
+        xai_dir,
+        global_section={
+            "Global importances (Plotly)": "global_importances_plotly.html",
+            "Global importances (PNG)": "global_importances.png",
+            "Interaction importances (Plotly)": "interaction_importances_plotly.html",
+            "Local contributions (PNG)": "local_contributions.png",
+            "Local explanations (JSON)": "local_explanations.json",
+        },
+        term_entries=index_terms,
+    )
 
     readme = xai_dir / "README.md"
     readme.write_text(
