@@ -124,7 +124,7 @@ This approach extracts 22 canonical time-series features (Catch22) from sliding 
 
 ---
 
-## 4. � File Manifest
+## 4. File Manifest
 
 | File | Type | Description |
 | :--- | :--- | :--- |

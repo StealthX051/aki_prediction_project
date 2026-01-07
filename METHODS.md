@@ -1,193 +1,100 @@
 # Methods
 
 ## Study Design and Data Source
-This retrospective observational study utilized high-resolution intraoperative physiological data from the **VitalDB** (Vital Signs DataBase), an open-access public dataset containing multi-parameter monitoring data from 6,388 surgical patients undergoing non-cardiac surgery at Seoul National University Hospital.
+This retrospective observational study used high-resolution intraoperative data from **VitalDB** (Vital Signs DataBase), an open-access repository of 6,388 non-cardiac surgical cases from Seoul National University Hospital.
 
 ## Cohort Selection
-Patients were included in the study if they met the following criteria:
-1.  **Data Availability**: Complete preoperative clinical data, specifically preoperative creatinine (`preop_cr`) and operation end time (`opend`).
-2.  **Waveform Availability**: Presence of at least one of the following high-frequency intraoperative waveforms:
-    *   **Photoplethysmography (PPG)**: `SNUADC/PLETH`
-    *   **Electrocardiogram (ECG)**: `SNUADC/ECG_II` (or `SNUADC/ECG_V5` as a substitute)
-    *   **Capnography (CO2)**: `Primus/CO2`
-    *   **Airway Pressure (AWP)**: `Primus/AWP`
-3.  **Clinical Criteria**:
-    *   Availability of postoperative creatinine measurements for AKI adjudication.
-    *   Exclusion of patients with pre-existing end-stage renal disease (baseline creatinine > 4.0 mg/dL).
-    *   Exclusion of extreme physical status: **ASA V–VI** cases were removed before downstream filtering.
-    *   Exclusion of cases with insufficient waveform duration or quality (>5% missing data in the signal segment).
+Patients were included when all of the following were satisfied:
+1.  **Data availability**: Preoperative creatinine (`preop_cr`) and operation end time (`opend`) were present.
+2.  **Waveform availability (strict)**: All four high-fidelity intraoperative channels were required - `SNUADC/PLETH`, `SNUADC/ECG_II` (with `SNUADC/ECG_V5` substitution when necessary), `Primus/CO2`, and `Primus/AWP`. Intersection logic across VitalDB case lists enforced a complete four-channel set, and missing channels removed the case. Each segment was drawn from `opstart`-`opend`; segments with >5% NaNs were discarded and shorter gaps were linearly interpolated.
+3.  **Clinical criteria**:
+    * At least one postoperative creatinine measurement within 7 days of surgery (filtering performed before labeling).
+    * Preoperative creatinine <= 4.0 mg/dL to exclude baseline end-stage kidney disease.
+    * ASA physical status V-VI excluded.
+    * Sample independence enforced by randomly selecting one surgery per patient (`subjectid`, seed=42).
 
-
-**Outcome Definition**:
-*   **Primary Outcome**: Postoperative Acute Kidney Injury (AKI) was defined according to the **KDIGO** (Kidney Disease: Improving Global Outcomes) criteria. The outcome was binary, comparing patients who developed AKI against those who did not.
-*   **AKI Positive**: Any increase in serum creatinine $\ge 0.3$ mg/dL within 48 hours of surgery OR $\ge 1.5$ times baseline within 3 days (72 hours) of surgery, emphasizing perioperative attribution for this anesthesiology-focused cohort.
-*   **AKI Negative**: Patients not meeting the above criteria.
-*   **Secondary Outcome (current experiments)**: **ICU Admission** — any postoperative ICU stay > 0 days (`y_icu_admit`).
-*   **Additional Derived Labels (archival only)**: The cohort retains severe AKI (`y_severe_aki`), in-hospital mortality (`y_inhosp_mortality`), and prolonged postoperative length of stay (`y_prolonged_los_postop`) for historical analyses, but these are not used in the active experiment grid.
+**Outcome Definition**
+* **Primary**: Postoperative AKI per **KDIGO** creatinine criteria - any rise >= 0.3 mg/dL within 48 hours or >= 1.5x baseline within 72 hours.
+* **Secondary (active grid)**: Postoperative ICU admission (`y_icu_admit`, length of stay > 0 days).
+* **Archival labels**: Severe AKI (`y_severe_aki`), in-hospital mortality (`y_inhosp_mortality`), and prolonged postoperative length of stay (`y_prolonged_los_postop`) remain available but are not trained in the current experiment sweep.
 
 ## Data Preprocessing
 
 ### Clinical Data
-A comprehensive set of preoperative variables was extracted from the VitalDB clinical and laboratory tables.
+Preoperative variables were drawn from VitalDB clinical and laboratory tables. Last-observation values within 30 days pre-surgery were used for labs (`preop_wbc`, `preop_crp`, `preop_lac`) via `lab_data.csv`, and merged to the cohort.
 
-#### 1. Variable Definitions
-*   **Demographics**: Age (years), Sex (Male/Female), Height (cm), Weight (kg), Body Mass Index (BMI, kg/m²).
-*   **Surgical Context**:
-    *   **Emergency Operation (`emop`)**: Binary flag.
-    *   **Department**: Surgical department (e.g., General Surgery, Thoracic). Rare departments (<30 cases) were merged into 'other'.
-    *   **Approach**: Surgical approach (e.g., Open, Laparoscopic).
-    *   **ASA Class**: American Society of Anesthesiologists physical status classification.
-    *   **Operation Type (`optype`)**: Specific type of surgery.
-    *   **Anesthesia Type (`ane_type`)**: Type of anesthesia used.
-*   **Comorbidities**:
-    *   **Hypertension (`preop_htn`)**: Binary.
-    *   **Diabetes Mellitus (`preop_dm`)**: Binary.
-    *   **ECG Abnormalities (`preop_ecg`)**: Categorical (Normal vs. various abnormalities).
-    *   **Pulmonary Function Test (`preop_pft`)**: Categorical results.
-*   **Laboratory Values**:
-    *   **Source**: Most recent value within 30 days prior to surgery.
-    *   **Hematology**: Hemoglobin (`preop_hb`), Platelets (`preop_plt`), White Blood Cells (`preop_wbc`).
-    *   **Coagulation**: Prothrombin Time (`preop_pt`, INR), aPTT (`preop_aptt`).
-    *   **Electrolytes/Metabolic**: Sodium (`preop_na`), Potassium (`preop_k`), Glucose (`preop_gluc`), Albumin (`preop_alb`), Bicarbonate (`preop_hco3`).
-    *   **Liver/Kidney**: AST (`preop_ast`), ALT (`preop_alt`), BUN (`preop_bun`), Creatinine (`preop_cr`).
-    *   **Inflammatory/Other**: C-Reactive Protein (`preop_crp`), Lactate (`preop_lac`).
-*   **Arterial Blood Gas (ABG)**: pH (`preop_ph`), Base Excess (`preop_be`), PaO2 (`preop_pao2`), PaCO2 (`preop_paco2`), SaO2 (`preop_sao2`).
+#### Variable Definitions
+* **Demographics**: Age, sex, height, weight, BMI.
+* **Surgical context**: Emergency operation (`emop`), department (rare levels <30 merged to "other" using training counts), approach, ASA class, operation type (`optype`), anesthesia type (`ane_type`).
+* **Comorbidities/tests**: Hypertension, diabetes, ECG findings, pulmonary function tests.
+* **Laboratory values**: Hemoglobin, platelets, INR (`preop_pt`), aPTT, sodium, potassium, glucose, albumin, AST, ALT, BUN, creatinine, bicarbonate, ABG components (pH, base excess, PaO2, PaCO2, SaO2), plus CRP, lactate, and WBC from `lab_data.csv`.
 
-#### 2. Derived Features
-We computed several derived features to capture clinical status more effectively:
-*   **Inpatient Status (`inpatient_preop`)**: Binary indicator that the patient was admitted prior to surgery (admission time < 0 seconds relative to case start).
-*   **Estimated GFR (`preop_egfr_ckdepi_2021`)**: Calculated using the **CKD-EPI 2021** creatinine-only, race-free equation as published by the **National Kidney Foundation**:
-    $$ eGFR = 142 \times \min(S_{cr}/\kappa, 1)^\alpha \times \max(S_{cr}/\kappa, 1)^{-1.200} \times 0.9938^{Age} \times 1.012 [if\ Female] $$
-    Where $S_{cr}$ (mg/dL) is serum creatinine, $\kappa$ is 0.7 (F) or 0.9 (M), and $\alpha$ is -0.241 (F) or -0.302 (M). Creatinine values documented in µmol/L were converted using 1 mg/dL = 88.4 µmol/L; nonpositive values were treated as missing before derivation. The raw dataset column `preop_gfr` is intentionally excluded in favor of this standardized derived measure.
-*   **Clinical Flags** (Binary indicators of abnormal physiology):
-    *   **High BUN**: `preop_bun > 27` mg/dL.
-    *   **Hypoalbuminemia**: `preop_alb < 3.5` g/dL.
-    *   **Anemia**: `preop_hb < 13.0` (Male) or `< 12.0` (Female) g/dL.
-    *   **Hyponatremia**: `preop_na < 135` mmol/L.
-    *   **Metabolic Acidosis**: `preop_hco3 < 22` mmol/L OR `preop_be < -2` mEq/L.
-    *   **Hypercapnia**: `preop_paco2 > 45` mmHg.
-    *   **Hypoxemia**: `preop_pao2 < 80` mmHg OR `preop_sao2 < 95` %.
-    *   These clinical flag helpers are computed for intermediate quality checks but are **dropped before one-hot encoding and imputation** so they do not appear in the saved preoperative dataset (`preop_processed.csv`).
+#### Derived Features
+* **Preoperative admission**: `inpatient_preop = adm < 0`.
+* **eGFR (CKD-EPI 2021)**: Creatinine converted to mg/dL with unit checks (>20 assumed umol/L/88.4); nonpositive values set missing. Formula mirrors the National Kidney Foundation specification. The raw `preop_gfr` column is excluded.
+* **Physiology flags (QA only)**: High BUN (>27), hypoalbuminemia (<3.5), sex-specific anemia (Hb <13.0 male, <12.0 female), hyponatremia (<135), metabolic acidosis (HCO3 <22 or BE < -2), hypercapnia (PaCO2 >45), hypoxemia (PaO2 <80 or SaO2 <95). These helpers are dropped before modeling.
 
-#### 3. Data Preprocessing
-*   **Train/Test Split**: An 80/20 stratified split was performed based on the primary outcome (`aki_label`) *before* any further processing to ensure strict separation.
-*   **Outlier Handling**: Continuous variables were checked for outliers. Percentiles (0.5% and 99.5%) were calculated **using only the training set**. Values outside this range in both training and test sets were replaced with random values drawn from the [0.5%, 5%] range (for low outliers) or [95%, 99.5%] range (for high outliers) to preserve distribution shape while capping extremes.
-*   **Imputation**: By default, missing values in continuous and categorical features are left as `NaN` for downstream handling. An opt-in flag (`--impute-missing` or `IMPUTE_MISSING=True` in `data_preparation/inputs.py`) restores the previous constant-value imputation (**-99**) if needed for sentinel-based workflows.
-*   **Encoding**:
-    *   Categorical variables (e.g., `department`, `approach`) were **One-Hot Encoded**.
-    *   Binary variables (e.g., `sex`, `emop`, clinical flags) were encoded as 0/1.
-    *   Rare categories in `department` (<30 occurrences in training set) were merged into an 'other' category.
+#### Split, Encoding, and Outliers
+* **Hold-out split**: A single 80/20 stratified split on `aki_label` is created before any encoding or winsorization and stored as `split_group`; all downstream merges preserve this split.
+* **Categoricals**: Departments with <30 training cases collapse to "other". One-hot encoding is fit using training levels; test columns are aligned to the training design matrix.
+* **Outlier handling**: Training-set percentiles drive winsorization. Values below the 1st percentile are replaced with draws from the [0.5th, 5th] percentile range; values above the 99.5th percentile are replaced using [95th, 99.5th] percentiles. Percentiles are computed on numeric training data only.
+* **Imputation**: Default behavior preserves `NaN`. An opt-in flag (`--impute-missing` or `IMPUTE_MISSING=True`) restores the legacy sentinel (-99) for compatibility with older workflows. Aeon fusion models invoke median imputation with missingness indicators (`SimpleImputer(add_indicator=True)`) after replacing any sentinel values with `NaN`.
+* **Outputs**: Preop processing saves `data/processed/aki_preop_processed.csv` with `split_group` retained for all downstream branches.
 
-### Waveform Signal Processing
-Raw waveforms were processed to remove artifacts and standardize sampling rates using the following specifications:
-*   **Photoplethysmography (PPG)**:
-    *   Downsampled from 500 Hz to **10 Hz** for Catch22 extraction.
-    *   Band-pass filtered (**0.1–10 Hz**, Butterworth 4th order) to preserve pulse wave morphology while removing baseline wander and high-frequency noise (Lapitan 2024, Sci Rep; Park 2022, Front Physiol).
-*   **Electrocardiogram (ECG)**:
-    *   Downsampled from 500 Hz to **10 Hz** for Catch22 extraction.
-    *   Band-pass filtered (**0.5–40 Hz**, Butterworth 4th order) (Kligfield 2007, Circulation; Pan & Tompkins 1985, IEEE TBME).
-*   **Capnography (CO2)**:
-    *   Resampled to **10 Hz** to align with other channels before feature extraction.
-    *   Low-pass filtered (**8 Hz**, Butterworth 4th order) (Gutiérrez 2018, PLoS One; Leturiondo 2017, CinC).
-*   **Airway Pressure (AWP)**:
-    *   Resampled to **10 Hz** to align with other channels before feature extraction.
-    *   Low-pass filtered (**12 Hz**, Butterworth 4th order) (de Haro 2024, Crit Care; Thome 1998, J Appl Physiol).
+### Waveform Signal Processing (Catch22 Branch)
+Filtering and resampling follow channel-specific specifications in `data_preparation/waveform_processing.py`, grounded in prior signal-processing literature:
+* **PPG (SNUADC/PLETH)**: 500 Hz native -> band-pass 0.1-10 Hz (4th-order Butterworth) -> resample to 100 Hz (Lapitan 2024 Sci Rep; Park 2022 Front Physiol).
+* **ECG (SNUADC/ECG_II or V5)**: 500 Hz native -> band-pass 0.5-40 Hz (4th-order Butterworth) -> resample to 100 Hz (Kligfield 2007 Circulation; Pan and Tompkins 1985 IEEE TBME).
+* **Capnography (Primus/CO2)**: 62.5 Hz native -> low-pass 8 Hz (4th-order Butterworth) -> retained at 62.5 Hz (Gutierrez 2018 PLoS One; Leturiondo 2017 CinC).
+* **Airway pressure (Primus/AWP)**: 62.5 Hz native -> low-pass 12 Hz (4th-order Butterworth) -> retained at 62.5 Hz (de Haro 2024 Crit Care; Thome 1998 J Appl Physiol).
 
-**Quality Control**: Segments with >5% missing values were excluded. Shorter gaps were filled using linear interpolation. All Catch22 feature extraction therefore operates on uniformly resampled 10 Hz signals.
+Segments are cut at native resolution between `opstart` and `opend`, interpolated if <=5% NaNs, and rejected otherwise. Full-case Catch24 features are computed after downsampling the filtered signal to 10 Hz for efficiency. Windowed features use the filtered/resampled signal at its channel-specific target sampling rate.
 
 ## Feature Engineering
-We utilized the **Catch24** feature set, which consists of the standard 22 **Catch22** (CAnonical Time-series CHaracteristics) features plus the **Mean** and **Standard Deviation** of the signal. This results in 24 features per waveform channel.
+We use **Catch24** (22 canonical Catch22 features plus mean and standard deviation) per channel.
+1. **Full-case (non-windowed)**: Catch24 on the entire surgery after 10 Hz downsampling.
+   * Per case, this yields 24 features per channel (96 across four channels) before merging with preop features.
+2. **Windowed**: 10-second windows with 5-second overlap; per-window Catch24 features are aggregated by mean, standard deviation, minimum, and maximum for each feature/channel, yielding fixed-length vectors.
+   * Each channel produces 24 features x 4 statistics = 96 aggregated features; with four channels this yields 384 intraoperative features prior to fusion with preop data.
+3. **Wide assembly**: Long-form waveform features are pivoted to wide format (`data_preparation/step_04_intraop_prep.py`) and merged with preop data on `caseid`, `aki_label`, and `split_group` (`step_05_data_merge.py`). Rows missing `split_group` after the merge are dropped to preserve the original split. Non-windowed and windowed branches are saved as `aki_features_master_wide.csv` and `aki_features_master_wide_windowed.csv`.
 
-Two feature extraction strategies were employed:
-1.  **Full-Case Features**: Features were extracted from the entire duration of the surgery (resampled to 10 Hz for computational efficiency).
-2.  **Windowed Features**: Waveforms were segmented into **10-second windows** with a **5-second overlap** (50% overlap). Catch24 features were calculated for each window. To generate a fixed-size input for the tabular model, these windowed features were aggregated across the entire case, calculating the **Mean**, **Standard Deviation**, **Minimum**, and **Maximum** for each of the 24 features.
+## Model Development
 
-### 3. Model Development
-Feature selection and hyperparameter optimization were performed using the training set.
+**Branches and feature sets**: Both non-windowed and windowed branches are trained. Feature grids include `preop_only`, single-waveform sets (`pleth_only`, `ecg_only`, `co2_only`, `awp_only`), `all_waveforms`, and `preop_and_all_waveforms`, plus ablations `preop_and_<waveform>` and `preop_and_all_minus_<waveform>`. Two-channel waveform-only models are intentionally excluded outside the all-waveform condition.
 
-*   **Algorithm**: XGBoost (Extreme Gradient Boosting).
-*   **Hyperparameter Optimization (HPO)**: Performed using Optuna with 5-fold stratified cross-validation on the training set to maximize the Area Under the Precision-Recall Curve (AUPRC).
-*   **Final Model Training**: The optimal hyperparameters identified were used to train the final model on the full training set.
-*   **Evaluation**: The final model was evaluated on the held-out test set. We generated 95% confidence intervals (CIs) for all performance metrics using 1000-fold bootstrapping of the test set predictions, applying the fixed calibrators and thresholds learned during training.
-*   **Feature-Set Grid**: Default study runs (triggered via `run_experiments.sh`) include preoperative-only models, single-waveform models (`pleth_only`, `ecg_only`, `co2_only`, `awp_only`), all-waveform models, and fused preoperative + all-waveform models. Ablations pair preoperative data with each single waveform (`preop_and_<waveform>`) and with all waveforms minus one (`preop_and_all_minus_<waveform>`). Two-channel waveform-only configurations such as **AWP+CO2** or **ECG+PLETH** are excluded from the default grid, except insofar as those channels appear together within the full all-waveform configuration.
+**XGBoost**:
+* Objective `binary:logistic`, `tree_method=hist`, `eval_metric=aucpr`.
+* Optuna HPO on the training set with stratified CV (up to 5 folds; reduced when the minority class is small) and early stopping (50 rounds). `scale_pos_weight` is derived from the training split. Default HPO budget is 100 trials unless smoke-test mode is invoked.
+* Final models refit on full training data. SHAP summary plots are produced for test sets.
 
-#### Explainable Boosting Machines (EBM)
-To complement the tree-based models, we added interpretable **ExplainableBoostingClassifier** runs using the `interpret` library. HPO is small-N optimized by using lightweight bagging during screening (0 pairwise interactions, `missing="gain"`, **inner_bags=0**, **outer_bags=1**, `n_jobs=-2`, Frozen Bins pre-computed from the training data) and a narrowed hyperparameter space: `max_bins∈{32,64,128,256}`, `max_leaves∈{2,3}`, `smoothing_rounds∈{0,25,50,75,100,150,200,350,500}`, `learning_rate∈{0.0025,0.005,0.01,0.015,0.02,0.03,0.04}`, `validation_size∈{0.1,0.15,0.2}`, `early_stopping_rounds∈{100,200}`, `early_stopping_tolerance∈{0,1e-5}`, `min_samples_leaf∈{2,3,4,5,10}`, `min_hessian∈{0,1e-6,1e-4,1e-2}`, `greedy_ratio∈{0,5,10}`, `cyclic_progress∈{0,1}`. For very small datasets (<50 rows) we automatically set `n_jobs=1`, `inner_bags=0`, `outer_bags=1`, and `validation_size=0.2` to avoid hangs. Final training (Step 7) applies production-stable defaults (`inner_bags=20`, `outer_bags=14`, tuned `max_bins`, `n_jobs=-2`) with the same out-of-fold logistic recalibration and Youden-J threshold selection used for XGBoost. When `step_07_train_evaluate.py` is invoked with `--export_ebm_explanations`, the calibrated test predictions are paired with:
-* Global term importances and interaction rankings from the trained model (`global_importances.{png,html,png}`, `interaction_importances.{json,png,html,png}`).
-* Local explanations augmented with case IDs, raw logits/probabilities, calibrated probabilities, predicted labels, and calibration parameters (`local_explanations.json`, `local_attributions.csv`, diverging-color plot `local_contributions.png`).
-* Per-term partial plots under `artifacts/ebm_xai/terms/`, each with contribution curves, density overlays on a secondary axis, and human-readable labels from `metadata/display_dictionary.json` (`partial_dependence.{html,png}` plus `explanation.json`).
-* An `index.html` linking all plots, styled with consistent fonts, muted palettes, and light grids.
-Exports run in a bounded thread pool with per-term timeouts (90 s), up to two retries, and non-blocking shutdown so a hung Plotly/Kaleido call cannot stall the run. Keyboard interrupts cleanly cancel outstanding tasks.
+**Explainable Boosting Machines**:
+* Optuna search space: `max_bins in {32,64,128,256}`, `max_leaves in {2,3}`, `smoothing_rounds in {0,25,50,75,100,150,200,350,500}`, `learning_rate in {0.0025-0.04}`, `validation_size in {0.1,0.15,0.2}`, `early_stopping_rounds in {100,200}`, `early_stopping_tolerance in {0,1e-5}`, `min_samples_leaf in {2,3,4,5,10}`, `min_hessian in {0,1e-6,1e-4,1e-2}`, `greedy_ratio in {0,5,10}`, `cyclic_progress in {0,1}` with `interactions=0`, `missing="gain"`, `inner_bags=0`, `outer_bags=1`, `n_jobs=-2`. Datasets with <50 rows force single-threaded, low-bag settings to avoid hangs.
+* Final training uses `inner_bags=20`, `outer_bags=14`, `max_bins=1024`, `n_jobs=-2` (or reduced for very small data). Optional EBM XAI exports include global/interaction plots, local attributions, per-term partial dependence, and an HTML index with display-dictionary labels; term exports run in a bounded thread pool with timeouts and retries.
 
-## Statistical Analysis
-Model performance was evaluated on the independent hold-out test set.
-*   **Metrics**: The primary performance metric was **AUPRC**, given the class imbalance. Secondary metrics included AUROC, F1-score, Sensitivity, Specificity, Accuracy, and Brier Score.
-*   **Interpretability**: SHapley Additive exPlanations (**SHAP**) values were calculated for XGBoost models to quantify feature contributions. EBM runs rely on the model's native additive terms; SHAP is skipped, and interpretability is provided by calibrated EBM exports (global, local, per-term) that align logits, probabilities, thresholds, and calibration parameters in the saved artifacts.
-*   **Reporting visuals (defaults)**: Calibration plots use quantile bins (10 by default), annotate per-bin counts, include a probability histogram beneath the curve, and auto-zoom the x-axis with a small inset showing the full [0,1] range. Precision–recall plots render as step curves with a prevalence baseline; class-count annotations are disabled by default but can be enabled via environment flags when regenerating reports.
-*   **Execution safeguards**: Bootstrapping runs on a process pool by default (`PARALLEL_BACKEND=processes` in the run shells) with bounded retries and wall-clock timeouts; if a pool hangs or exceeds the timeout it cleanly falls back to threads, then sequential, ensuring reporting completes rather than stalling.
+## Post-hoc Analysis and Statistical Evaluation
+* **Calibration and thresholding**: Stratified out-of-fold predictions on the training split feed a logistic recalibration model (`calibration.json`). Calibrated OOF probabilities are thresholded by Youden's J statistic (`threshold.json`). The same calibrator and threshold are applied to held-out test predictions; no test-time refitting occurs.
+* **Test metrics**: Primary metric AUPRC; secondary metrics AUROC, F1, sensitivity, specificity, accuracy, precision, and Brier score computed on calibrated test probabilities.
+* **Bootstrapping**: `results_recreation/metrics_summary.py` validates artifacts, then runs 1,000 stratified, non-parametric bootstrap resamples of test predictions (configurable). Stored thresholds remain fixed. Percentile (2.5, 97.5) CIs are attached per Outcome x Branch x Feature Set x Model, with paired delta-CIs against a reference (default `preop_only`) when predictions share identical case sets. Joblib process pools are used with guarded fallbacks to threads/sequential execution and retryable timeouts.
+* **Interpretability**: XGBoost SHAP summaries are saved for test data. EBM relies on native additive explanations when exports are enabled; SHAP is not run for EBMs.
 
-## Post-hoc Analysis
-To ensure robust and clinically applicable performance estimates, a rigorous post-hoc analysis pipeline was implemented:
+## Reporting Artifacts
+All figures and tables regenerate from saved artifacts using `metadata/display_dictionary.json` for consistent labels/units.
+* **Cohort flow**: `reporting/cohort_flow.py` converts `results/metadata/cohort_flow_counts.json` into SVG/PNG consort diagrams, consolidating waveform checks into a single availability box and rendering the terminal AKI split when present.
+* **Baseline table**: `reporting/preop_descriptives.py` uses raw cohort data (pre-encoding) and winsorized continuous variables; Shapiro-Wilk testing guides mean+/-SD vs. median[IQR] display. Outputs: HTML/LaTeX/DOCX at `results/tables/preop_descriptives.*`.
+* **Missingness table**: `reporting/missingness_table.py` summarizes feature-level missingness from `data/processed/aki_features_master_wide.csv` to CSV/HTML for supplements and QA.
 
-1.  **Training-Only Logistic Recalibration**: Within `model_creation/step_07_train_evaluate.py`, stratified out-of-fold predictions are generated on the training set. A logistic recalibration model (fitted intercept and slope) is trained **only** on these OOF scores and serialized to `artifacts/calibration.json` per (Outcome × Branch × Feature Set). The same parameters are reapplied to both OOF and held-out test scores; no recalibration occurs on the test set or during reporting.
+## Experimental Pipeline: Time-Series Classification (Aeon)
+This parallel pipeline benchmarks modern time-series classifiers against the Catch22/XGBoost baseline.
 
-2.  **Fixed Threshold Selection**: Using the calibrated OOF probabilities, a single decision threshold is selected via **Youden's J statistic** and written to `artifacts/threshold.json`, alongside its associated sensitivity and specificity. This threshold is fixed for all downstream evaluation, including bootstrap resampling.
+### Data Preprocessing (Aeon)
+* Waveforms are filtered as above, resampled to channel-specific targets, then downsampled to **1 Hz** per case; cases with >5% NaNs are dropped, and remaining gaps are interpolated.
+* Series are right-padded with zeros to **57,600 samples (16 hours)** with a strict four-channel requirement; longer cases are truncated. Labels and channels are saved to `outputs/aeon/X_nonwindowed.npz` and `y_nonwindowed.csv`.
+* Preoperative features for Aeon are aligned to the retained cases, augmented with `anesthesia_duration_minutes`, and median-imputed with missingness indicators before linear heads are trained.
 
-3.  **Bootstrapped Statistical Inference**: All reported metrics (AUROC, AUPRC, Brier Score, Sensitivity, Specificity, F1, Precision, Accuracy) are computed on the held-out test predictions with the stored calibrator and threshold applied. **Non-parametric bootstrapping** (1000 iterations) resamples the test predictions with replacement while keeping the Step-7 threshold constant to derive 95% Confidence Intervals. Consolidated metrics and optional bootstrap samples are produced by `results_recreation/metrics_summary.py` and visualized in `results_recreation/results_analysis.py`.
+### Modeling Strategy (Early Fusion)
+* **MiniRocket/MultiRocket**: 10,000 convolutional kernels (Aeon implementations) produce fixed embeddings. Embeddings are concatenated with imputed preoperative vectors when `--include_preop` is set (early fusion), scaled with `StandardScaler`, and fed to a balanced logistic regression head. Optuna (100 trials, 5-fold stratified CV) tunes `C` over [1e-3, 10] to maximize AUPRC.
+* **FreshPRINCE**: TSFresh-based feature extraction with a 200-tree Rotation Forest head for fused inputs (no HPO).
+* **Calibration and inference**: Out-of-fold predictions undergo the same logistic recalibration and Youden-J thresholding as the primary pipeline. Test predictions are fixed-calibrated; no test-time recalibration.
 
-## Reporting artifacts
-Publication figures and tables are regenerated from saved artifacts rather than recomputing the full pipeline. All reporting scripts consume the shared `metadata/display_dictionary.json` so labels and units remain synchronized across outputs.
-
-### Cohort flow diagram
-`reporting/cohort_flow.py` converts the stage counts saved during `step_01_cohort_construction.py` into a consort-style flow figure. The script expects a JSON file (default: `results/metadata/cohort_flow_counts.json`) containing counts for each filter stage and writes SVG/PNG outputs to `results/figures/`. Waveform labels are pulled from the display dictionary (fallback to raw channel names). No-op or increasing steps are skipped. All waveform checks are consolidated into one “High-fidelity Waveform Availability” box with a footnote listing the required channels; per-step removals are drawn in right-aligned exclusion boxes with horizontal arrows; and the terminal AKI vs. No AKI split uses a centered T-junction from the Final Cohort box. Friendly labels are applied to custom filters, and the split renders when `label_split` is present in the counts JSON.
-
-### Preoperative descriptive table
-`reporting/preop_descriptives.py` summarizes baseline characteristics using the raw cohort CSV (prior to one-hot encoding) so categorical levels are preserved and the winsorized preoperative dataset for continuous variables. Continuous features are individually tested for normality with the Shapiro–Wilk test (subsampled to 5,000 observations when needed). Normally distributed variables are reported as mean ± SD; non-normal variables are reported as median with interquartile range. Binary categoricals render as False/True, and categorical features are presented as counts with percentages using display-dictionary labels. Tables are emitted to HTML, LaTeX, and DOCX under `results/tables/preop_descriptives.*`.
-
-### Model-feature missingness table
-`reporting/missingness_table.py` reads the merged modeling dataset (`data/processed/aki_features_master_wide.csv` by default), excludes identifiers and outcome columns, and computes per-feature missing counts and percentages. Headers are human-readable and one-hot columns resolve to display labels with units where available. CSV and HTML outputs are written to `results/tables/missingness_table.*` for manuscript supplements and QA checks.
-
-## Experimental Pipeline: Time Series Classification (Aeon)
-
-> **Note**: This section describes the methodology for the experimental parallel pipeline designed to benchmark State-of-the-Art (SOTA) time series classifiers against the primary Catch22/XGBoost approach.
-
-### 1. Data Preprocessing (Aeon Branch)
-To accommodate fixed-input classifiers (e.g., Rocket), a distinct preprocessing strategy was employed:
-*   **1 Hz Resampling**: All intraoperative waveforms (`SNUADC/PLETH`, `SNUADC/ECG_II`, `Primus/CO2`, `Primus/AWP`) were resampled to a uniform frequency of 1 Hz.
-*   **Fixed-Length Padding**: To facilitate batch processing and compatibility with certain classifiers, all series were right-padded with zeros to a fixed maximum duration of 16 hours (57,600 timepoints). Sequences longer than 16 hours were truncated.
-*   **Anesthesia Duration**: To compensate for the loss of absolute time information due to resampling, `anesthesia_duration_minutes` was explicitly added as a tabular feature.
-*   **Imputation**:
-    *   **Waveforms**: Cases with >5% missing data were dropped. Remaining gaps were linearly interpolated to prevent zero-padding artifacts which can distort convolution kernels.
-*   **Tabular Data**: Unlike the tree-based pipeline (which now preserves `NaN` by default), tabular features for linear heads (Ridge/Logistic) are imputed using **Median Imputation** and augmented with **Binary Missingness Indicators**.
-
-### 2. Modeling Strategy (Early Fusion)
-We implemented an **Early Fusion** architecture where waveform features and preoperative tabular features are concatenated into a single vector before being passed to the final classifier.
-
-*   **Convolutional Models (MultiRocket / MiniRocket)**:
-    *   **Transform**: We utilized `MultiRocket` and `MiniRocket` (Aeon implementations) to extract features. `MultiRocket` applies **10,000** random convolutional kernels (dilated, padded) to the raw 3D input `(N, Channels, 8000)`.
-    *   **Fusion**: The resulting feature map (approx. 50k features for MultiRocket) is concatenated with the processed preoperative vector (Median imputed).
-    *   **Scaling**: A global `StandardScaler` is applied to the combined feature matrix to normalize scales between waveform embeddings and clinical variables.
-    *   **Head**: A **Logistic Regression** classifier is trained on the fused, standardized feature set.
-    *   **Optimization (HPO)**: We optimize the linear head using **Optuna** with 5-fold stratified cross-validation on the training set.
-        *   **Objective**: Maximize **AUPRC**.
-        *   **Search Space**:
-            *   Regularization Strength (`C`): Log-uniform distribution [1e-3, 10.0].
-            *   Class Weight (`class_weight`): Fixed to 'balanced'.
-        *   **Scaling**: A `StandardScaler` is fitted within each CV fold to prevent data leakage.
-        *   **Trials**: 100 trials.
-*   **FreshPRINCE** (FreshPRince Is Not a Clustered Ensemble):
-    *   **Transform**: Extracts comprehensive time-series features using **TSFresh** (relevant features selected via FDR control).
-    *   **Head**: A **Rotation Forest** classifier (an ensemble of **200** PCA-based decision trees) is trained on the fused features.
-
-### 3. Software and Libraries
-The experimental pipeline relies on the **`aeon`** toolkit (v1.1.0+) for time series learning, **`tsfresh`** for feature extraction, and **`scikit-learn`** for underlying classifier implementations (Logistic Regression).
-
-### 4. Experimental Design and Evaluation
-The Aeon pipeline mirrors the rigorous design of the primary pipeline:
-*   **Outcomes**: Current Aeon experiments align with the maintained scope of the primary pipeline and train on `any_aki` and `icu_admission`. Additional labels remain available in the cohort for archival work but are not part of the active Aeon runs.
-*   **Ablation Studies**: To quantify feature importance, we conduct systematic ablations:
-    *   **Single Channel**: Performance of each waveform individually (ECG, PLETH, CO2, AWP).
-    *   **Leave-One-Out**: Performance impact of removing a single waveform from the full set.
-    *   **Fusion Impact**: Comparison of "Waveform Only" vs. "Early Fusion" (Waveform + Preop) performance.
-*   **Bootstrapping**: 1000-fold, outcome-stratified non-parametric bootstrap on held-out **test predictions only**, with fixed Step-7 calibration and thresholds. Bootstrap samples are paired across models within each Outcome × Branch × Pipeline group so Δ CIs can be derived against a prespecified reference (default: preoperative-only feature set). 95% percentile CIs are reported; no BCa.
-*   **Calibration**: Logistic calibration (Platt Scaling) is fitted on training folds and the learned parameters are **fixed** when applied to held-out validation/test scores; no recalibration is performed on the full prediction set.
+### Evaluation
+Outcomes mirror the main pipeline (`any_aki`, `icu_admission`). Ablations cover single-channel, leave-one-out, and fusion vs. waveform-only comparisons. Test-set metrics and 1,000-rep stratified bootstraps (paired when case sets match) are produced via `results_recreation/metrics_summary.py`, enabling delta-CIs against the preoperative-only reference feature set. No BCa adjustments are applied.

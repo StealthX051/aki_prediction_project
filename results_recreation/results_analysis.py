@@ -4,7 +4,7 @@ import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Sequence, Set, Tuple
 
 import matplotlib.pyplot as plt
 import pandas as pd
@@ -880,10 +880,28 @@ def get_delta_style_info(df: pd.DataFrame, display_to_key: Dict[str, str]) -> Di
 
     return style_info
 
+
+def _order_metrics_for_reporting(
+    metrics_df: pd.DataFrame, model_priority: Sequence[str] = ("EBM", "XGBoost")
+) -> pd.DataFrame:
+    """Order metrics so preferred models render first in reports."""
+
+    order_lookup = {name: idx for idx, name in enumerate(model_priority)}
+    default_rank = len(order_lookup)
+    ordered = metrics_df.copy()
+    ordered["_model_rank"] = ordered["Model"].map(lambda name: order_lookup.get(name, default_rank))
+
+    ordered = ordered.sort_values(
+        by=["_model_rank", "Model", "Outcome", "Branch"],
+        kind="mergesort",  # stable to preserve feature set ordering within groups
+    )
+    return ordered.drop(columns=["_model_rank"])
+
 def generate_docx_report(metrics_df: pd.DataFrame, renderer: FeatureSetDisplay = FEATURE_SET_DISPLAY):
     """
     Generates a DOCX report with all tables.
     """
+    ordered_metrics = _order_metrics_for_reporting(metrics_df)
     doc = Document()
     # Default to landscape orientation to give tables more horizontal space
     for section in doc.sections:
@@ -898,7 +916,7 @@ def generate_docx_report(metrics_df: pd.DataFrame, renderer: FeatureSetDisplay =
     component_cols = renderer.component_labels if renderer.show_checkbox else []
     label_source = "Feature Set" if renderer.show_label else None
     
-    for (outcome, branch, model_name), group in metrics_df.groupby(['Outcome', 'Branch', 'Model']):
+    for (outcome, branch, model_name), group in ordered_metrics.groupby(['Outcome', 'Branch', 'Model'], sort=False):
         doc.add_heading(f'Outcome: {outcome} | Branch: {branch} | Model: {model_name}', level=1)
         
         # Sort
@@ -1031,11 +1049,12 @@ def generate_pdf_report(metrics_df: pd.DataFrame, renderer: FeatureSetDisplay = 
     """
     Generates an aggregated PDF report using Matplotlib.
     """
+    ordered_metrics = _order_metrics_for_reporting(metrics_df)
     component_cols = renderer.component_labels if renderer.show_checkbox else []
     label_source = "Feature Set" if renderer.show_label else None
     
     with PdfPages(REPORTS_DIR / 'report.pdf') as pdf:
-        for (outcome, branch, model_name), group in metrics_df.groupby(['Outcome', 'Branch', 'Model']):
+        for (outcome, branch, model_name), group in ordered_metrics.groupby(['Outcome', 'Branch', 'Model'], sort=False):
             # Sort
             table_df = group.sort_values('AUROC_val', ascending=False)
             display_cols: List[str] = []

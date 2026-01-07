@@ -411,15 +411,15 @@ This branch implements an end-to-end Deep Learning/State-of-the-Art Time Series 
 
 | Component | Script | Description |
 | :--- | :--- | :--- |
-| **Export** | `data_preparation/step_02_aeon_export.py` | Loads waveforms, resamples to `L=8000` (fixed length), exports to `.npz`. <br> **Args**: `--limit` (debug) |
+| **Export** | `data_preparation/step_02_aeon_export.py` | Loads waveforms, rescales to 1 Hz, and writes per-case sequences padded/truncated to **57,600** samples (16 hours) in `.npz` format. <br> **Args**: `--limit` (debug) |
 | **Preop Prep** | `data_preparation/step_04_aeon_prep.py` | Prepares tabular data: preserves `NaN` by default; add `--impute-missing` to apply median imputation with missingness indicators. |
 | **Training** | `model_creation_aeon/step_06_aeon_train.py` | Trains separate or fused models. <br> **Models**: `multirocket` (default `n_kernels=10000`), `minirocket`, `freshprince`. <br> **HPO**: Optuna optimization (100 trials) for linear head (`C`) maximizing AUPRC. Class weight is fixed to 'balanced'. <br> **Fusion**: Concatenates preop features with Rocket embeddings. <br> **Outputs**: Saves `predictions.csv` for unified analysis. |
 | **Reference** | `model_creation_aeon/classifiers.py` | Contains `RocketFused` and `FreshPrinceFused` class definitions. |
-| **Analysis** | `results_recreation/results_analysis.py` | Unified 1000-fold bootstrapping and report generation for both pipelines. |
+| **Analysis** | `results_recreation/metrics_summary.py` | Aggregates saved `predictions/test.csv` from the Aeon runs (same schema as Catch22), then feeds `reporting/make_report.py` for tables/figures. |
 
 ### Technical Specifications
 *   **Library**: `aeon` (Sktime fork), `tsfresh`.
-*   **Input Shape**: `(N_samples, N_channels=4, Length=8000)`.
+*   **Input Shape**: `(N_samples, N_channels=4, Length=57,600)` after 1 Hz resampling with right-padding/truncation to 16 hours.
 *   **Fusion Type**: Early Fusion (Preop features concatenated to transform embeddings).
 *   **Evaluation**:
     *   **Outcomes**: `any_aki` (primary) and `icu_admission` (secondary), matching the maintained Catch22 pipeline scope. Other labels in the cohort are not part of current Aeon runs.
