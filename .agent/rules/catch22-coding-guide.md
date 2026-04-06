@@ -13,20 +13,27 @@ These rules apply when working in the `aki_prediction_project` repository.
 - Keep `inputs.py` as the single source of truth for input/output paths and configuration; prefer extending it rather than hardcoding new paths.
 - When adding new functionality, prefer new, clearly named modules over large modifications to existing ones.
 
-## 2. Environment and execution
+## 2. Change strategy
+
+- Prefer minimal, local edits over broad refactors.
+- Reuse existing helpers, utilities, and CLI paths before creating new abstractions.
+- Do not rename, move, or reorganize pipeline modules unless the task explicitly requires it.
+- Avoid touching generated outputs, experiment logs, or results trees unless the task is specifically about those artifacts.
+
+## 3. Environment and execution
 
 - Assume the Conda environment defined in `environment.yml` is the default runtime.
 - When writing “how to run” instructions or automation, use that environment name and file rather than ad-hoc installations.
 - Avoid adding dependencies that are not reflected in `environment.yml`; if necessary, update that file and mention the change in the README.
 
-## 3. Coding style and logging
+## 4. Coding style and logging
 
 - Follow the global Python style rules (PEP 8, type hints, docstrings).
 - For data pipeline steps and model training, use the standard Python `logging` module with informative messages at key steps:
   - dataset loading, train/test split application, feature extraction, model training, evaluation.
 - Keep logging concise; focus on shapes, counts, and key configuration, not every loop iteration.
 
-## 4. Inputs, outputs, and CLI contracts
+## 5. Inputs, outputs, and CLI contracts
 
 - Treat the current CLI and function signatures of `data_preparation` scripts and training scripts as an API.
 - When modifying scripts, preserve:
@@ -38,7 +45,7 @@ These rules apply when working in the `aki_prediction_project` repository.
   - how to migrate,
   - which downstream steps are affected.
 
-## 5. Tests, smoke checks, and reproducibility
+## 6. Tests, smoke checks, and reproducibility
 
 - Whenever feasible, add or update smoke checks that:
   - verify non-empty outputs,

@@ -6,6 +6,12 @@ trigger: always_on
 
 These rules ensure code changes remain aligned with the study’s scientific methods.
 
+## 0. Treat this as scientific software
+
+- This repository supports a scientific study, so correctness is not only a software concern; it also includes validity of cohort logic, feature construction, evaluation, and interpretation.
+- Favor conservative, reviewable method changes over clever rewrites.
+- When implementing a new method, make the comparison to the primary pipeline explicit and preserve a path back to the existing baseline.
+
 ## 1. Treat METHODS.md as the source of truth
 
 - Consider the definitions and preprocessing described in `METHODS.md` to be authoritative for the study.
