@@ -33,12 +33,20 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from reporting.display_dictionary import load_display_dictionary
 from reporting.feature_set_display import FeatureSetDisplay
+from artifact_paths import enforce_storage_policy, get_paper_dir, get_results_dir
+from reporting.manuscript_assets import (
+    export_dataframe_bundle,
+    export_table_bundle,
+    refresh_paper_bundle,
+    save_figure_bundle,
+    write_docx_sections,
+    write_markdown_sections,
+    write_pdf_sections,
+)
 
 # Constants
-EXPERIMENTS_DIR = Path(
-    os.getenv("RESULTS_DIR", Path(__file__).resolve().parent.parent / "results" / "catch22" / "experiments")
-)
-PAPER_DIR = Path(os.getenv("PAPER_DIR", EXPERIMENTS_DIR.parent / "paper"))
+EXPERIMENTS_DIR = get_results_dir(PROJECT_ROOT)
+PAPER_DIR = get_paper_dir(PROJECT_ROOT)
 FIGURES_DIR = Path(os.getenv("FIGURES_DIR", PAPER_DIR / "figures"))
 TABLES_DIR = Path(os.getenv("TABLES_DIR", PAPER_DIR / "tables"))
 REPORTS_DIR = Path(os.getenv("REPORTS_DIR", PAPER_DIR / "reports"))
@@ -46,6 +54,13 @@ REPORTS_DIR = Path(os.getenv("REPORTS_DIR", PAPER_DIR / "reports"))
 RESULTS_DIR = EXPERIMENTS_DIR
 
 # Ensure directories exist
+enforce_storage_policy(
+    {
+        "paper_figures_dir": FIGURES_DIR,
+        "paper_tables_dir": TABLES_DIR,
+        "paper_reports_dir": REPORTS_DIR,
+    }
+)
 FIGURES_DIR.mkdir(parents=True, exist_ok=True)
 TABLES_DIR.mkdir(parents=True, exist_ok=True)
 REPORTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -311,144 +326,141 @@ def prepare_metrics_for_display(
 
     return metrics_df
 
-def generate_html_tables(metrics_df: pd.DataFrame, renderer: FeatureSetDisplay = FEATURE_SET_DISPLAY):
-    """
-    Generates styled HTML tables for each Outcome/Branch.
-    """
+
+def _report_display_columns(renderer: FeatureSetDisplay) -> tuple[List[str], Optional[str]]:
     component_cols = renderer.component_labels if renderer.show_checkbox else []
     label_col = "Feature Set" if renderer.show_label else None
+    return component_cols, label_col
 
-    for (outcome, branch, model_name), group in metrics_df.groupby(['Outcome', 'Branch', 'Model']):
-        table_df = group.sort_values('AUROC_val', ascending=False)
 
-        display_cols: List[str] = []
-        display_cols.extend(component_cols)
-        if label_col:
-            display_cols.append(label_col)
-        display_cols.extend(
-            [
-                'AUROC',
-                'AUPRC',
-                'Brier Score',
-                'Sensitivity',
-                'Specificity',
-                'F1 Score',
-            ]
-        )
-        table_df_display = table_df[display_cols].copy()
+def _build_report_tables(
+    group: pd.DataFrame,
+    renderer: FeatureSetDisplay,
+) -> tuple[pd.DataFrame, pd.DataFrame, Optional[pd.DataFrame], List[str], Optional[str]]:
+    component_cols, label_col = _report_display_columns(renderer)
+    table_df = group.sort_values("AUROC_val", ascending=False)
+
+    display_cols: List[str] = []
+    display_cols.extend(component_cols)
+    if label_col:
+        display_cols.append(label_col)
+    display_cols.extend(["AUROC", "AUPRC", "Brier Score", "Sensitivity", "Specificity", "F1 Score"])
+    table_df_display = table_df[display_cols].copy()
+
+    delta_candidates = ["Δ AUROC", "Δ AUPRC", "Δ Brier Score", "Δ Sensitivity", "Δ Specificity", "Δ F1 Score"]
+    delta_cols: List[str] = []
+    delta_cols.extend(component_cols)
+    if label_col:
+        delta_cols.append(label_col)
+    delta_cols += [column for column in delta_candidates if column in table_df.columns]
+    delta_df = table_df[delta_cols].copy() if len(delta_cols) > 1 else None
+    return table_df, table_df_display, delta_df, component_cols, label_col
+
+
+def generate_html_tables(metrics_df: pd.DataFrame, renderer: FeatureSetDisplay = FEATURE_SET_DISPLAY):
+    """Generate styled HTML tables and manuscript-ready per-table bundles."""
+
+    for (outcome, branch, model_name), group in metrics_df.groupby(["Outcome", "Branch", "Model"]):
+        table_df, table_df_display, delta_df, component_cols, _label_col = _build_report_tables(group, renderer)
 
         cmap = LinearSegmentedColormap.from_list("soft_teal", ["#ffffff", "#b7dfc4"])
         cmap_r = LinearSegmentedColormap.from_list("soft_teal_r", ["#f5c2c7", "#ffffff"])
 
         styler = table_df_display.style
-        component_indices = [table_df_display.columns.get_loc(col) for col in component_cols if col in table_df_display.columns]
+        component_indices = [
+            table_df_display.columns.get_loc(col) for col in component_cols if col in table_df_display.columns
+        ]
         if component_indices:
             component_styles = []
             for idx in component_indices:
                 col_name = table_df_display.columns[idx]
                 label_len = max(len(str(col_name)), 3)
-                width_ch = min(12, max(5, label_len + 2))  # dynamic width with padding
-                component_styles.append(
-                    {'selector': f'col.col{idx}', 'props': [('width', f'{width_ch}ch')]}
-                )
+                width_ch = min(12, max(5, label_len + 2))
+                component_styles.append({"selector": f"col.col{idx}", "props": [("width", f"{width_ch}ch")]})
                 component_styles.append(
                     {
-                        'selector': f'th.col_heading.level0.col{idx}',
-                        'props': [
-                            ('width', f'{width_ch}ch'),
-                            ('padding', '1px 3px'),
-                            ('text-align', 'center'),
-                            ('white-space', 'nowrap'),
-                            ('font-size', '10px'),
+                        "selector": f"th.col_heading.level0.col{idx}",
+                        "props": [
+                            ("width", f"{width_ch}ch"),
+                            ("padding", "1px 3px"),
+                            ("text-align", "center"),
+                            ("white-space", "nowrap"),
+                            ("font-size", "10px"),
                         ],
                     }
                 )
                 component_styles.append(
                     {
-                        'selector': f'td.col{idx}',
-                        'props': [
-                            ('width', f'{width_ch}ch'),
-                            ('padding', '1px 3px'),
-                            ('text-align', 'center'),
-                            ('white-space', 'nowrap'),
-                            ('font-size', '10px'),
+                        "selector": f"td.col{idx}",
+                        "props": [
+                            ("width", f"{width_ch}ch"),
+                            ("padding", "1px 3px"),
+                            ("text-align", "center"),
+                            ("white-space", "nowrap"),
+                            ("font-size", "10px"),
                         ],
                     }
                 )
             styler.set_table_styles(component_styles, overwrite=False)
 
-        def apply_gradient(s, val_col, cmap):
-            vals = table_df.loc[s.index, val_col]
+        def apply_gradient(series, val_col, color_map):
+            vals = table_df.loc[series.index, val_col]
             min_v, max_v = vals.min(), vals.max()
             if max_v == min_v:
-                return ['' for _ in s]
+                return ["" for _ in series]
             norm = plt.Normalize(min_v, max_v)
-            colors = [cmap(norm(v)) for v in vals]
-            from matplotlib.colors import to_hex
-            return [f'background-color: {to_hex(c)}' for c in colors]
+            colors = [color_map(norm(v)) for v in vals]
+            return [f"background-color: {to_hex(color)}" for color in colors]
 
-        def highlight_best(s, val_col, mode='max'):
-            vals = table_df.loc[s.index, val_col]
-            is_best = vals == (vals.max() if mode == 'max' else vals.min())
-            return ['font-weight: bold' if v else '' for v in is_best]
+        def highlight_best(series, val_col, mode="max"):
+            vals = table_df.loc[series.index, val_col]
+            is_best = vals == (vals.max() if mode == "max" else vals.min())
+            return ["font-weight: bold" if value else "" for value in is_best]
 
-        if 'AUROC_val' in table_df.columns:
-            styler.apply(apply_gradient, val_col='AUROC_val', cmap=cmap, subset=['AUROC'])
-            styler.apply(highlight_best, val_col='AUROC_val', mode='max', subset=['AUROC'])
-        if 'AUPRC_val' in table_df.columns:
-            styler.apply(apply_gradient, val_col='AUPRC_val', cmap=cmap, subset=['AUPRC'])
-            styler.apply(highlight_best, val_col='AUPRC_val', mode='max', subset=['AUPRC'])
-        if 'Brier Score_val' in table_df.columns:
-            styler.apply(apply_gradient, val_col='Brier Score_val', cmap=cmap_r, subset=['Brier Score'])
-            styler.apply(highlight_best, val_col='Brier Score_val', mode='min', subset=['Brier Score'])
-        for col in ['Sensitivity', 'Specificity', 'F1 Score']:
-            val_col = f'{col}_val'
+        if "AUROC_val" in table_df.columns:
+            styler.apply(apply_gradient, val_col="AUROC_val", color_map=cmap, subset=["AUROC"])
+            styler.apply(highlight_best, val_col="AUROC_val", mode="max", subset=["AUROC"])
+        if "AUPRC_val" in table_df.columns:
+            styler.apply(apply_gradient, val_col="AUPRC_val", color_map=cmap, subset=["AUPRC"])
+            styler.apply(highlight_best, val_col="AUPRC_val", mode="max", subset=["AUPRC"])
+        if "Brier Score_val" in table_df.columns:
+            styler.apply(apply_gradient, val_col="Brier Score_val", color_map=cmap_r, subset=["Brier Score"])
+            styler.apply(highlight_best, val_col="Brier Score_val", mode="min", subset=["Brier Score"])
+        for col in ["Sensitivity", "Specificity", "F1 Score"]:
+            val_col = f"{col}_val"
             if val_col in table_df.columns:
-                styler.apply(apply_gradient, val_col=val_col, cmap=cmap, subset=[col])
-                styler.apply(highlight_best, val_col=val_col, mode='max', subset=[col])
+                styler.apply(apply_gradient, val_col=val_col, color_map=cmap, subset=[col])
+                styler.apply(highlight_best, val_col=val_col, mode="max", subset=[col])
 
         styler.hide(axis="index")
 
-        def format_cell(v):
-            if isinstance(v, str) and ' (' in v:
-                return v.replace(' (', '<br>(')
-            return v
+        def format_cell(value):
+            if isinstance(value, str) and " (" in value:
+                return value.replace(" (", "<br>(")
+            return value
 
         styler.format(format_cell)
-        styler.set_properties(**{'text-align': 'center'})
+        styler.set_properties(**{"text-align": "center"})
 
         html_table = styler.to_html(table_id=f"results_{outcome}_{branch}_{model_name}", escape=False)
 
-        # Optional delta table
-        delta_candidates = [
-            'Δ AUROC',
-            'Δ AUPRC',
-            'Δ Brier Score',
-            'Δ Sensitivity',
-            'Δ Specificity',
-            'Δ F1 Score',
-        ]
-        delta_cols: List[str] = []
-        delta_cols.extend(component_cols)
-        if label_col:
-            delta_cols.append(label_col)
-        delta_cols += [c for c in delta_candidates if c in table_df.columns]
         delta_html = ""
-        if len(delta_cols) > 1:
-            delta_df = table_df[delta_cols].copy()
+        if delta_df is not None and not delta_df.empty:
             delta_styler = delta_df.style.hide(axis="index")
-            delta_styler.set_properties(**{'text-align': 'center'})
+            delta_styler.set_properties(**{"text-align": "center"})
             delta_styler.format(format_cell)
 
-            # Heatmap only if CI excludes 0
-            display_to_key = {col: f"delta_{col.split('Δ ')[-1].lower().replace(' ', '_')}" for col in delta_candidates}
+            delta_candidates = ["Δ AUROC", "Δ AUPRC", "Δ Brier Score", "Δ Sensitivity", "Δ Specificity", "Δ F1 Score"]
+            display_to_key = {
+                col: f"delta_{col.split('Δ ')[-1].lower().replace(' ', '_')}" for col in delta_candidates
+            }
             delta_styles = get_delta_style_info(table_df, display_to_key)
 
-            def apply_delta_background(s, col_name):
+            def apply_delta_background(series, col_name):
                 styles = []
-                for idx in s.index:
-                    bg = delta_styles.get(idx, {}).get(col_name, {}).get('bg')
-                    styles.append(f'background-color: {bg}' if bg else '')
+                for idx in series.index:
+                    bg = delta_styles.get(idx, {}).get(col_name, {}).get("bg")
+                    styles.append(f"background-color: {bg}" if bg else "")
                 return styles
 
             for col in delta_candidates:
@@ -456,9 +468,7 @@ def generate_html_tables(metrics_df: pd.DataFrame, renderer: FeatureSetDisplay =
                     continue
                 delta_styler.apply(apply_delta_background, col_name=col, subset=[col])
 
-            delta_html = delta_styler.to_html(
-                table_id=f"delta_{outcome}_{branch}_{model_name}", escape=False
-            )
+            delta_html = delta_styler.to_html(table_id=f"delta_{outcome}_{branch}_{model_name}", escape=False)
 
         full_html = f"""
         <!DOCTYPE html>
@@ -479,10 +489,34 @@ def generate_html_tables(metrics_df: pd.DataFrame, renderer: FeatureSetDisplay =
         </html>
         """
 
-        with open(TABLES_DIR / f'results_{outcome}_{branch}_{model_name}.html', 'w') as f:
-            f.write(full_html)
+        base_path = TABLES_DIR / f"results_{outcome}_{branch}_{model_name}"
+        base_path.with_suffix(".html").write_text(full_html, encoding="utf-8")
+        export_table_bundle(
+            base_path,
+            title=f"Model Performance Analysis: {outcome} | {branch} | {model_name}",
+            main_dataframe=table_df_display,
+            delta_dataframe=delta_df,
+            summary_text=f"Outcome: {outcome} | Branch: {branch} | Model: {model_name}",
+        )
 
+    refresh_paper_bundle(PAPER_DIR)
     print("Tables generated.")
+
+
+def generate_markdown_report(metrics_df: pd.DataFrame, renderer: FeatureSetDisplay = FEATURE_SET_DISPLAY):
+    """Generate a consolidated Markdown report with all model tables."""
+
+    ordered_metrics = _order_metrics_for_reporting(metrics_df)
+    sections: List[Dict[str, object]] = []
+    for (outcome, branch, model_name), group in ordered_metrics.groupby(["Outcome", "Branch", "Model"], sort=False):
+        _table_df, table_df_display, delta_df, _component_cols, _label_col = _build_report_tables(group, renderer)
+        heading = f"Outcome: {outcome} | Branch: {branch} | Model: {model_name}"
+        sections.append({"heading": heading, "dataframe": table_df_display})
+        if delta_df is not None and not delta_df.empty:
+            sections.append({"heading": f"{heading} | Delta vs Reference", "dataframe": delta_df})
+
+    write_markdown_sections(REPORTS_DIR / "report.md", title="AKI Prediction Project - Results Report", sections=sections)
+    refresh_paper_bundle(PAPER_DIR)
 
 def _select_prob_column(model_group: pd.DataFrame, config: PlotConfig) -> str:
     """Choose probability column based on preference and availability."""
@@ -612,8 +646,7 @@ def plot_curves(df: pd.DataFrame, config: Optional[PlotConfig] = None) -> None:
 
         # Helper to save and close figures consistently
         def _save_fig(fig_obj: plt.Figure, path: Path) -> None:
-            fig_obj.savefig(path, dpi=300, bbox_inches='tight')
-            plt.close(fig_obj)
+            save_figure_bundle(fig_obj, path, formats=("svg", "png"), close=True)
 
         # 1. ROC Curve
         fig, ax = plt.subplots(figsize=(8, 6), constrained_layout=True)
@@ -772,6 +805,7 @@ def plot_curves(df: pd.DataFrame, config: Optional[PlotConfig] = None) -> None:
         _save_fig(fig, FIGURES_DIR / f'calibration_{outcome}_{branch}_{model_name}.png')
 
     Parallel(n_jobs=cfg.n_jobs)(delayed(_plot_group)(key, group) for key, group in tasks)
+    refresh_paper_bundle(PAPER_DIR)
 
 def set_cell_background(cell, color_hex):
     """
@@ -1043,6 +1077,7 @@ def generate_docx_report(metrics_df: pd.DataFrame, renderer: FeatureSetDisplay =
             doc.add_paragraph()  # spacer
         
     doc.save(REPORTS_DIR / 'report.docx')
+    refresh_paper_bundle(PAPER_DIR)
     print("DOCX report generated.")
 
 def generate_pdf_report(metrics_df: pd.DataFrame, renderer: FeatureSetDisplay = FEATURE_SET_DISPLAY):
@@ -1194,6 +1229,7 @@ def generate_pdf_report(metrics_df: pd.DataFrame, renderer: FeatureSetDisplay = 
                 pdf.savefig(fig, bbox_inches='tight')
                 plt.close()
             
+    refresh_paper_bundle(PAPER_DIR)
     print("PDF report generated.")
 
 def main():

@@ -6,17 +6,19 @@ import logging
 from typing import Tuple, List, Dict, Optional
 from sklearn.model_selection import StratifiedGroupKFold, train_test_split
 
+from artifact_paths import get_paper_dir, get_processed_dir, get_results_dir
+
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 # Constants
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-DATA_DIR = Path(os.getenv("PROCESSED_DIR", PROJECT_ROOT / 'data' / 'processed'))
+DATA_DIR = get_processed_dir(PROJECT_ROOT)
 
 # Results layout (defaults to the reorganized Catch22 tree)
-RESULTS_ROOT = Path(os.getenv("RESULTS_DIR", PROJECT_ROOT / "results" / "catch22" / "experiments"))
-PAPER_ROOT = Path(os.getenv("PAPER_DIR", RESULTS_ROOT.parent / "paper"))
+RESULTS_ROOT = get_results_dir(PROJECT_ROOT)
+PAPER_ROOT = get_paper_dir(PROJECT_ROOT)
 XAI_ROOT = Path(os.getenv("XAI_DIR", RESULTS_ROOT.parent / "xai"))
 
 # Backwards-compatible alias used throughout the codebase for experiment outputs

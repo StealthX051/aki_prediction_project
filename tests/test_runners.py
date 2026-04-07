@@ -27,6 +27,7 @@ def test_run_experiments_exits_nonzero_and_skips_reporting_on_validation_failure
             "RESULTS_DIR": str(results_dir),
             "PAPER_DIR": str(paper_dir),
             "LOG_FILE": str(tmp_path / "experiment.log"),
+            "AKI_STORAGE_POLICY": "off",
             "PYTHON_BIN": "env PYTHONUNBUFFERED=1 false",
         }
     )
@@ -56,6 +57,7 @@ def test_run_smoke_test_accepts_multiword_python_bin_prefix(tmp_path: Path):
     env.update(
         {
             "SMOKE_ROOT": str(smoke_root),
+            "AKI_STORAGE_POLICY": "off",
             "PYTHON_BIN": "env PYTHONUNBUFFERED=1 false",
         }
     )
@@ -74,3 +76,30 @@ def test_run_smoke_test_accepts_multiword_python_bin_prefix(tmp_path: Path):
     assert "Python runner: env PYTHONUNBUFFERED=1 false" in combined_output
     assert "command not found" not in combined_output
     assert "--- Step 01: Cohort construction ---" in combined_output
+
+
+def test_run_experiments_fails_fast_when_generated_paths_are_off_media(tmp_path: Path):
+    env = os.environ.copy()
+    env.update(
+        {
+            "RESULTS_DIR": str(tmp_path / "results" / "catch22" / "experiments"),
+            "PAPER_DIR": str(tmp_path / "results" / "catch22" / "paper"),
+            "PROCESSED_DIR": str(tmp_path / "data" / "processed"),
+            "LOG_FILE": str(tmp_path / "experiment.log"),
+            "PYTHON_BIN": "env PYTHONUNBUFFERED=1 false",
+        }
+    )
+
+    proc = subprocess.run(
+        ["bash", "run_experiments.sh", "--prep", "skip", "--only-xgboost", "--no-resume"],
+        cwd=PROJECT_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+
+    combined_output = f"{proc.stdout}\n{proc.stderr}"
+    assert proc.returncode == 1
+    assert "Generated artifact path must live under /media/volume/catch22" in combined_output
+    assert "Starting Experiments" not in combined_output

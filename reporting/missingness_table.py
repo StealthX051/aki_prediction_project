@@ -18,23 +18,19 @@ from typing import Sequence
 
 import pandas as pd
 
+from artifact_paths import enforce_storage_policy, get_paper_dir, get_processed_dir, get_results_dir
 from reporting.display_dictionary import DisplayDictionary, load_display_dictionary
+from reporting.manuscript_assets import export_dataframe_bundle, refresh_paper_bundle
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-EXPERIMENTS_DIR = Path(
-    os.getenv("RESULTS_DIR", Path(__file__).resolve().parent.parent / "results" / "catch22" / "experiments")
-)
-PAPER_DIR = Path(os.getenv("PAPER_DIR", EXPERIMENTS_DIR.parent / "paper"))
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+EXPERIMENTS_DIR = get_results_dir(PROJECT_ROOT)
+PAPER_DIR = get_paper_dir(PROJECT_ROOT)
 TABLES_DIR = PAPER_DIR / "tables"
 
-DEFAULT_DATASET_PATH = Path(
-    os.getenv(
-        "MERGED_DATASET_PATH",
-        Path(__file__).resolve().parent.parent / "data" / "processed" / "aki_features_master_wide.csv",
-    )
-)
+DEFAULT_DATASET_PATH = Path(os.getenv("MERGED_DATASET_PATH", get_processed_dir(PROJECT_ROOT) / "aki_features_master_wide.csv"))
 OUTCOME_COLUMNS = (
     "aki_label",
     "y_severe_aki",
@@ -107,17 +103,28 @@ def compute_missingness_table(
 
 
 def _save_table(table: pd.DataFrame, output_prefix: str) -> tuple[Path, Path]:
-    """Persist the missingness table to CSV and HTML formats."""
+    """Persist the missingness table to manuscript-facing formats."""
 
+    enforce_storage_policy({"paper_tables_dir": TABLES_DIR})
     TABLES_DIR.mkdir(parents=True, exist_ok=True)
 
     csv_path = TABLES_DIR / f"{output_prefix}.csv"
     html_path = TABLES_DIR / f"{output_prefix}.html"
+    base_path = TABLES_DIR / output_prefix
 
     table.to_csv(csv_path, index=False)
     table.to_html(html_path, index=False, float_format=lambda x: f"{x:.2f}")
+    export_dataframe_bundle(base_path, title="Missingness Table", dataframe=table, include_csv=False)
+    refresh_paper_bundle(PAPER_DIR)
 
-    logger.info("Saved missingness table to %s and %s", csv_path, html_path)
+    logger.info(
+        "Saved missingness table to %s, %s, %s, %s, and %s",
+        csv_path,
+        html_path,
+        base_path.with_suffix(".md"),
+        base_path.with_suffix(".docx"),
+        base_path.with_suffix(".pdf"),
+    )
     return csv_path, html_path
 
 

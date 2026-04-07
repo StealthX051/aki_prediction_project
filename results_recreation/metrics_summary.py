@@ -39,15 +39,17 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from artifact_paths import enforce_storage_policy, get_paper_dir, get_results_dir
 from data_preparation.inputs import COHORT_FILE, INPUT_FILE
 from model_creation.prediction_io import REQUIRED_PREDICTION_COLUMNS, validate_prediction_dataframe
+from reporting.manuscript_assets import export_dataframe_bundle, refresh_paper_bundle
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-RESULTS_DIR = Path(os.getenv("RESULTS_DIR", PROJECT_ROOT / "results" / "catch22" / "experiments"))
-PAPER_DIR = Path(os.getenv("PAPER_DIR", RESULTS_DIR.parent / "paper"))
+RESULTS_DIR = get_results_dir(PROJECT_ROOT)
+PAPER_DIR = get_paper_dir(PROJECT_ROOT)
 TABLES_DIR = RESULTS_DIR / "tables"
 PAPER_TABLES_DIR = PAPER_DIR / "tables"
 
@@ -785,6 +787,13 @@ def _attach_delta_cis(
 
 
 def write_outputs(summary_df: pd.DataFrame, bootstrap_df: Optional[pd.DataFrame], save_bootstrap: Optional[Path]) -> None:
+    enforce_storage_policy(
+        {
+            "results_tables_dir": TABLES_DIR,
+            "paper_tables_dir": PAPER_TABLES_DIR,
+            **({"bootstrap_output": save_bootstrap} if save_bootstrap is not None else {}),
+        }
+    )
     TABLES_DIR.mkdir(parents=True, exist_ok=True)
     summary_path = TABLES_DIR / "metrics_summary.csv"
     summary_df.to_csv(summary_path, index=False)
@@ -798,6 +807,17 @@ def write_outputs(summary_df: pd.DataFrame, bootstrap_df: Optional[pd.DataFrame]
         logger.info("Copied summary metrics to %s", paper_summary)
     except Exception as exc:
         logger.warning("Unable to copy metrics summary to paper directory: %s", exc)
+    else:
+        from results_recreation.results_analysis import prepare_metrics_for_display
+
+        display_df = prepare_metrics_for_display(summary_df)
+        export_dataframe_bundle(
+            PAPER_TABLES_DIR / "metrics_summary",
+            title="Metrics Summary",
+            dataframe=display_df,
+            include_csv=False,
+        )
+        refresh_paper_bundle(PAPER_DIR)
 
     if save_bootstrap and bootstrap_df is not None:
         bootstrap_path = (

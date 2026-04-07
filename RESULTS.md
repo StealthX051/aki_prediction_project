@@ -2,12 +2,16 @@
 
 This repository keeps publication-ready outputs under `results/catch22/paper/`
 and raw experiment artifacts under `results/catch22/experiments/` so writers can
-pull figures/tables without rerunning the pipeline. All reporting scripts
-respect `RESULTS_DIR` (experiments) and `PAPER_DIR` (paper surface) environment
-overrides and share the display dictionary at `metadata/display_dictionary.json`
-to keep labels synchronized. Artifacts from the Catch22 + XGBoost/EBM pipeline
-are considered the primary source of truth; Aeon artifacts are optional and
-live under `results/aeon/`.
+pull figures/tables without rerunning the pipeline. Catch22 generated artifacts
+now default to the attached media root
+`/media/volume/catch22/data/aki_prediction_project` via `AKI_ARTIFACT_ROOT`.
+Heavy generated outputs fail fast off `/media/volume/catch22` by default
+(`AKI_STORAGE_POLICY=enforce`). All reporting scripts respect `RESULTS_DIR`
+(experiments) and `PAPER_DIR` (paper surface) environment overrides and share
+the display dictionary at `metadata/display_dictionary.json` to keep labels
+synchronized. Artifacts from the Catch22 + XGBoost/EBM pipeline are considered
+the primary source of truth; Aeon artifacts are optional and live under
+`results/aeon/`.
 
 ## Layout overview (Catch22)
 - `results/catch22/experiments/`: models, params, predictions, calibration artifacts. Convenience symlinks to paper tables/figures/metadata live here.
@@ -18,7 +22,9 @@ live under `results/aeon/`.
 - `results/catch22/archive/legacy/`: legacy grids (kept for reference).
 
 Env overrides:
-- Set `RESULTS_DIR` to change the experiments root; set `PAPER_DIR` to change the paper surface. Aeon uses the same names but defaults to `results/aeon/...`.
+- `AKI_ARTIFACT_ROOT` sets the canonical generated-artifact root (default: `/media/volume/catch22/data/aki_prediction_project`).
+- `AKI_STORAGE_POLICY` controls off-media enforcement for heavy outputs: `enforce` (default), `warn`, or `off`.
+- `RESULTS_DIR` and `PAPER_DIR` still override the Catch22 experiments root and paper surface explicitly. Aeon uses the same names but defaults to `results/aeon/...`.
 
 ## Running experiments (full or staged)
 - Use `run_experiments.sh` for the Catch22/XGBoost/EBM grid. It supports:
@@ -66,21 +72,23 @@ models without retraining:
      --n-jobs -1
    ```
 
-2. Render styled tables, ROC/PR/calibration plots, and Word/PDF reports (with
-   separate delta tables and heatmap shading where the Δ CI excludes 0):
+2. Render styled tables, ROC/PR/calibration plots, and Markdown/Word/PDF reports
+   (with separate delta tables and heatmap shading where the Δ CI excludes 0):
    ```bash
    python reporting/make_report.py
    ```
 
 Result locations:
-- `results/catch22/paper/tables/metrics_summary.csv`: Consolidated AUROC/AUPRC
-  and thresholded metrics with confidence intervals, plus Δ columns (also
-  reachable via `results/catch22/experiments/tables` symlink).
-- `results/catch22/paper/reports/report.docx` and
-  `results/catch22/paper/reports/report.pdf`: Styled reports with main tables
-  and separate Δ tables (Δ vs reference).
-- `results/catch22/paper/figures/`: ROC, PR, and calibration curves for each
-  configuration.
+- `results/catch22/paper/tables/metrics_summary.{csv,md,docx,pdf}`:
+  consolidated AUROC/AUPRC and thresholded metrics with confidence intervals,
+  plus Δ columns (CSV also reachable via the `results/catch22/experiments/tables`
+  symlink).
+- `results/catch22/paper/reports/report.{md,docx,pdf}`: consolidated report
+  bundle with main tables and separate Δ tables.
+- `results/catch22/paper/tables/results_*.{html,md,docx,pdf}` plus
+  `results_*_{main,delta}.csv`: per-outcome/branch/model table bundles.
+- `results/catch22/paper/figures/`: ROC, PR, calibration, and cohort-flow
+  figures saved as `.svg` and publication `.png`.
 
 Reporting layout/styling notes:
 - Feature-set inputs render as compact component columns (Preop, AWP, CO2, ECG, Pleth) with widths scaled to the header text plus padding; metric columns stay wider for readability.
@@ -123,9 +131,12 @@ variables using the raw cohort CSV (before one-hot encoding). Continuous
 features are tested for normality (Shapiro–Wilk, subsampled to 5,000) to decide
 between mean ± SD or median (IQR) reporting; categorical features are presented
 as counts with percentages. Outputs:
+- `results/catch22/paper/tables/preop_descriptives.csv`
+- `results/catch22/paper/tables/preop_descriptives.md`
+- `results/catch22/paper/tables/preop_descriptives.docx`
+- `results/catch22/paper/tables/preop_descriptives.pdf`
 - `results/catch22/paper/tables/preop_descriptives.html`
 - `results/catch22/paper/tables/preop_descriptives.tex`
-- `results/catch22/paper/tables/preop_descriptives.docx`
 
 ```bash
 python -m reporting.preop_descriptives \
@@ -145,6 +156,9 @@ percentages for the merged modeling dataset
 identifiers and outcomes. Headers are human-friendly and one-hot columns resolve
 to display labels. Outputs are written to:
 - `results/catch22/paper/tables/missingness_table.csv`
+- `results/catch22/paper/tables/missingness_table.md`
+- `results/catch22/paper/tables/missingness_table.docx`
+- `results/catch22/paper/tables/missingness_table.pdf`
 - `results/catch22/paper/tables/missingness_table.html`
 
 ```bash
@@ -160,4 +174,5 @@ artifacts:
 ./run_smoke_test.sh
 ```
 This generates a miniature set of `data/processed/` and `results/` outputs under
-the directory specified by `SMOKE_ROOT` (default: `smoke_test_outputs/`).
+the directory specified by `SMOKE_ROOT` (default:
+`/media/volume/catch22/data/aki_prediction_project/smoke_test_outputs/`).

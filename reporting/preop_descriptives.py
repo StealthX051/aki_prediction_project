@@ -24,17 +24,18 @@ from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from scipy.stats import shapiro
 
+from artifact_paths import enforce_storage_policy, get_paper_dir, get_results_dir
 from data_preparation.inputs import COHORT_FILE, PREOP_PROCESSED_FILE
 from data_preparation.step_03_preop_prep import CATEGORICAL_COLS, CONTINUOUS_COLS
 from reporting.display_dictionary import DisplayDictionary, load_display_dictionary
+from reporting.manuscript_assets import refresh_paper_bundle, write_markdown_sections, write_pdf_sections
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-EXPERIMENTS_DIR = Path(
-    os.getenv("RESULTS_DIR", Path(__file__).resolve().parent.parent / "results" / "catch22" / "experiments")
-)
-PAPER_DIR = Path(os.getenv("PAPER_DIR", EXPERIMENTS_DIR.parent / "paper"))
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+EXPERIMENTS_DIR = get_results_dir(PROJECT_ROOT)
+PAPER_DIR = get_paper_dir(PROJECT_ROOT)
 TABLES_DIR = PAPER_DIR / "tables"
 ORDERED_CATEGORICALS: Dict[str, Sequence[str]] = {
     # Preserve clinical severity ordering rather than frequency sorting.
@@ -230,19 +231,35 @@ def _build_descriptive_table(
 
 
 def _save_table(table: pd.DataFrame, output_prefix: str) -> Tuple[Path, Path, Path]:
-    """Persist the table to HTML, LaTeX, and DOCX formats."""
+    """Persist the table to manuscript-facing formats."""
 
+    enforce_storage_policy({"paper_tables_dir": TABLES_DIR})
     TABLES_DIR.mkdir(parents=True, exist_ok=True)
 
+    csv_path = TABLES_DIR / f"{output_prefix}.csv"
     html_path = TABLES_DIR / f"{output_prefix}.html"
     latex_path = TABLES_DIR / f"{output_prefix}.tex"
+    md_path = TABLES_DIR / f"{output_prefix}.md"
     docx_path = TABLES_DIR / f"{output_prefix}.docx"
+    pdf_path = TABLES_DIR / f"{output_prefix}.pdf"
 
+    table.to_csv(csv_path, index=False)
     table.to_html(html_path, index=False, escape=False)
     table.to_latex(latex_path, index=False, escape=False, longtable=True)
     _save_docx(table, docx_path)
+    write_markdown_sections(md_path, title="Preoperative Descriptive Statistics", sections=[{"heading": output_prefix, "dataframe": table}])
+    write_pdf_sections(pdf_path, title="Preoperative Descriptive Statistics", sections=[{"heading": output_prefix, "dataframe": table}])
+    refresh_paper_bundle(PAPER_DIR)
 
-    logger.info("Saved descriptive table to %s, %s, and %s", html_path, latex_path, docx_path)
+    logger.info(
+        "Saved descriptive table to %s, %s, %s, %s, %s, and %s",
+        csv_path,
+        html_path,
+        latex_path,
+        md_path,
+        docx_path,
+        pdf_path,
+    )
     return html_path, latex_path, docx_path
 
 

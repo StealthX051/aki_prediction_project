@@ -6,12 +6,13 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "${ROOT_DIR}/artifact_paths.sh"
 
-SMOKE_ROOT=${SMOKE_ROOT:-"$ROOT_DIR/smoke_test_outputs"}
 CASE_LIMIT=${CASE_LIMIT:-10}
 HPO_TRIALS=${HPO_TRIALS:-2}
 PYTHON_BIN=${PYTHON_BIN:-python}
 PARALLEL_BACKEND=${PARALLEL_BACKEND:-processes}
+USER_LOG_FILE="${LOG_FILE:-}"
 
 read -r -a PYTHON_CMD <<< "$PYTHON_BIN"
 if [[ ${#PYTHON_CMD[@]} -eq 0 ]]; then
@@ -23,17 +24,28 @@ run_python() {
     "${PYTHON_CMD[@]}" "$@"
 }
 
+aki_configure_catch22_env "$ROOT_DIR" "smoke_test_all_models.log"
+if [[ -z "$USER_LOG_FILE" ]]; then
+    LOG_FILE="${SMOKE_ROOT}/smoke_test_all_models.log"
+fi
+
 SMOKE_DATA_DIR="$SMOKE_ROOT/data"
 SMOKE_PROCESSED_DIR="$SMOKE_DATA_DIR/processed"
 SMOKE_RESULTS_DIR="$SMOKE_ROOT/results/catch22/experiments"
 SMOKE_PAPER_DIR="$SMOKE_ROOT/results/catch22/paper"
 RAW_SOURCE_DIR=${RAW_SOURCE_DIR:-"$ROOT_DIR/data/raw"}
-LOG_FILE="$SMOKE_ROOT/smoke_test_all_models.log"
 
 COHORT_PATH="$SMOKE_PROCESSED_DIR/aki_pleth_ecg_co2_awp.csv"
 
+aki_enforce_generated_paths \
+    "smoke_root::${SMOKE_ROOT}" \
+    "smoke_processed_dir::${SMOKE_PROCESSED_DIR}" \
+    "smoke_results_dir::${SMOKE_RESULTS_DIR}" \
+    "smoke_paper_dir::${SMOKE_PAPER_DIR}" \
+    "log_file::${LOG_FILE}"
+
 rm -rf "$SMOKE_ROOT"
-mkdir -p "$SMOKE_PROCESSED_DIR" "$SMOKE_RESULTS_DIR" "$SMOKE_PAPER_DIR"
+mkdir -p "$SMOKE_PROCESSED_DIR" "$SMOKE_RESULTS_DIR" "$SMOKE_PAPER_DIR" "$(dirname "$LOG_FILE")"
 
 cd "$ROOT_DIR"
 
@@ -43,6 +55,8 @@ export RAW_DIR="$RAW_SOURCE_DIR"
 export RESULTS_DIR="$SMOKE_RESULTS_DIR"
 export PAPER_DIR="$SMOKE_PAPER_DIR"
 export GENERATE_WINDOWED_FEATURES="True"
+
+aki_refresh_repo_symlinks "$ROOT_DIR"
 
 echo "=== Starting real-data smoke test (XGBoost + EBM) ===" | tee "$LOG_FILE"
 echo "Smoke root: $SMOKE_ROOT" | tee -a "$LOG_FILE"

@@ -7,16 +7,10 @@
 set -o pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/artifact_paths.sh"
 
-# Defaults (override via env if needed)
-DATA_DIR="${DATA_DIR:-${SCRIPT_DIR}/data}"
-PROCESSED_DIR="${PROCESSED_DIR:-${DATA_DIR}/processed}"
-RAW_DIR="${RAW_DIR:-${DATA_DIR}/raw}"
-RESULTS_DIR="${RESULTS_DIR:-${SCRIPT_DIR}/results/catch22/experiments}"
-PAPER_DIR="${PAPER_DIR:-${SCRIPT_DIR}/results/catch22/paper}"
 export PYTHONUNBUFFERED=1
 PYTHON_BIN="${PYTHON_BIN:-python}"
-LOG_FILE="${LOG_FILE:-experiment_log.txt}"
 PREP_MODE="${PREP_MODE:-auto}" # auto|force|skip
 SMOKE_TEST_FLAG="${SMOKE_TEST_FLAG:-}"
 PARALLEL_BACKEND="${PARALLEL_BACKEND:-processes}"
@@ -29,8 +23,6 @@ THREADS_PER_MODEL="${THREADS_PER_MODEL:-8}"
 N_TRIALS="${N_TRIALS:-100}"
 SAVE_FINAL_REFIT_FLAG="${SAVE_FINAL_REFIT_FLAG:-}"
 RESUME_FLAG="${RESUME_FLAG:---resume}"
-
-export DATA_DIR PROCESSED_DIR RAW_DIR RESULTS_DIR PAPER_DIR
 
 read -r -a PYTHON_CMD <<< "$PYTHON_BIN"
 if [[ ${#PYTHON_CMD[@]} -eq 0 ]]; then
@@ -78,6 +70,8 @@ Options:
   -h, --help      Show this help
 
 Environment:
+  AKI_ARTIFACT_ROOT  Canonical generated-artifact root (default: /media/volume/catch22/data/aki_prediction_project)
+  AKI_STORAGE_POLICY Storage enforcement for heavy outputs: enforce (default), warn, or off
   PYTHON_BIN      Whitespace-separated command prefix used for every Python invocation
                   (default: python). Example:
                   PYTHON_BIN='conda run -n aki_prediction_project python'
@@ -198,6 +192,15 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+aki_configure_catch22_env "$SCRIPT_DIR" "experiment_log.txt"
+aki_enforce_generated_paths \
+    "processed_dir::${PROCESSED_DIR}" \
+    "results_dir::${RESULTS_DIR}" \
+    "paper_dir::${PAPER_DIR}" \
+    "log_file::${LOG_FILE}" || exit 1
+mkdir -p "${PROCESSED_DIR}" "${RESULTS_DIR}" "${PAPER_DIR}" "$(dirname "${LOG_FILE}")"
+aki_refresh_repo_symlinks "$SCRIPT_DIR"
 
 # Feature Sets
 # 1. Primary Models

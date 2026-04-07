@@ -1,14 +1,16 @@
 import os
 from pathlib import Path
 
+from artifact_paths import get_data_dir, get_processed_dir, get_raw_dir, get_results_dir
+
 # --- Project Paths ---
 # Resolve project root relative to this file (data_preparation/inputs.py)
 # This file is in <root>/data_preparation, so we go up two levels.
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
-DATA_DIR = Path(os.getenv("DATA_DIR", PROJECT_ROOT / 'data'))
-RAW_DIR = Path(os.getenv("RAW_DIR", DATA_DIR / 'raw'))
-PROCESSED_DIR = Path(os.getenv("PROCESSED_DIR", DATA_DIR / 'processed'))
+DATA_DIR = get_data_dir(PROJECT_ROOT)
+RAW_DIR = get_raw_dir(PROJECT_ROOT)
+PROCESSED_DIR = get_processed_dir(PROJECT_ROOT)
 
 # --- User Parameters ---
 INPUT_FILE = Path(os.getenv("INPUT_FILE", RAW_DIR / 'clinical_data.csv'))
@@ -80,4 +82,4 @@ INTRAOP_WIDE_WINDOWED_FILE = Path(os.getenv("INTRAOP_WIDE_WINDOWED_FILE", PROCES
 WIDE_FEATURES_FILE = Path(os.getenv("WIDE_FEATURES_FILE", PROCESSED_DIR / 'aki_features_master_wide.csv'))
 WIDE_FEATURES_WINDOWED_FILE = Path(os.getenv("WIDE_FEATURES_WINDOWED_FILE", PROCESSED_DIR / 'aki_features_master_wide_windowed.csv'))
 
-RESULTS_DIR = Path(os.getenv("RESULTS_DIR", PROJECT_ROOT / "results" / "catch22" / "experiments"))
+RESULTS_DIR = get_results_dir(PROJECT_ROOT)

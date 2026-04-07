@@ -4,6 +4,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/artifact_paths.sh"
 PYTHON_BIN="${PYTHON_BIN:-python}"
 
 read -r -a PYTHON_CMD <<< "$PYTHON_BIN"
@@ -16,11 +17,15 @@ run_python() {
   "${PYTHON_CMD[@]}" "$@"
 }
 
-# Reuse the same dirs you used for experiments; fall back to project defaults.
-DATA_DIR="${DATA_DIR:-${SCRIPT_DIR}/data}"
-PROCESSED_DIR="${PROCESSED_DIR:-${DATA_DIR}/processed}"
-RESULTS_DIR="${RESULTS_DIR:-${SCRIPT_DIR}/results/catch22/experiments}"
-PAPER_DIR="${PAPER_DIR:-${SCRIPT_DIR}/results/catch22/paper}"
+aki_configure_catch22_env "$SCRIPT_DIR" "descriptive_figures.log"
+aki_enforce_generated_paths \
+  "processed_dir::${PROCESSED_DIR}" \
+  "results_dir::${RESULTS_DIR}" \
+  "paper_dir::${PAPER_DIR}" \
+  "log_file::${LOG_FILE}"
+mkdir -p "${PAPER_DIR}/tables" "${PAPER_DIR}/figures" "${PAPER_DIR}/metadata" "$(dirname "${LOG_FILE}")"
+aki_refresh_repo_symlinks "$SCRIPT_DIR"
+
 DISPLAY_DICT="${DISPLAY_DICT:-${SCRIPT_DIR}/metadata/display_dictionary.json}"
 
 # Core inputs (override via env if your run used different filenames)
@@ -43,7 +48,6 @@ else
   echo "Using processed preop dataset for continuous features: $PROCESSED_PREOP"
 fi
 
-mkdir -p "${PAPER_DIR}/tables" "${PAPER_DIR}/figures" "${PAPER_DIR}/metadata"
 export DISPLAY_DICTIONARY_PATH="$DISPLAY_DICT" PAPER_DIR RESULTS_DIR
 
 echo "[1/3] Generating preoperative descriptive table..."

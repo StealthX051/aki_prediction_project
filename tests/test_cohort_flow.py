@@ -41,7 +41,8 @@ def test_normalize_counts_uses_display_dictionary(display_dict):
     assert flow.stages[-1].title == "Final cohort"
 
 
-def test_render_creates_files(tmp_path: Path):
+def test_render_creates_files(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("AKI_STORAGE_POLICY", "off")
     flow = normalize_counts(
         {
             "total_cases": 4,
@@ -55,12 +56,12 @@ def test_render_creates_files(tmp_path: Path):
         flow,
         output_dir=tmp_path,
         output_name="test_flow",
-        formats=("png",),
+        formats=("png", "svg"),
         title=None,
     )
 
     assert output_paths[0].exists()
-    assert output_paths[0].suffix == ".png"
+    assert {path.suffix for path in output_paths} == {".png", ".svg"}
 
 
 def test_normalize_counts_inserts_pre_waveform_custom_filter_before_waveform_stage():

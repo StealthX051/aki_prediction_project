@@ -36,20 +36,21 @@ import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, List, Mapping, MutableSequence, Optional, Sequence, Tuple, Union
 import textwrap
+from typing import Any, Iterable, List, Mapping, MutableSequence, Optional, Sequence, Tuple, Union
 
 import matplotlib.pyplot as plt
 from matplotlib.patches import FancyBboxPatch
 
+from artifact_paths import enforce_storage_policy, get_paper_dir, get_results_dir
 from reporting.display_dictionary import DisplayDictionary, load_display_dictionary
+from reporting.manuscript_assets import refresh_paper_bundle, save_figure_bundle
 
 logger = logging.getLogger(__name__)
 
-EXPERIMENTS_DIR = Path(
-    os.getenv("RESULTS_DIR", Path(__file__).resolve().parent.parent / "results" / "catch22" / "experiments")
-)
-PAPER_DIR = Path(os.getenv("PAPER_DIR", EXPERIMENTS_DIR.parent / "paper"))
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+EXPERIMENTS_DIR = get_results_dir(PROJECT_ROOT)
+PAPER_DIR = get_paper_dir(PROJECT_ROOT)
 FIGURES_DIR = PAPER_DIR / "figures"
 METADATA_DIR = PAPER_DIR / "metadata"
 DEFAULT_COUNTS_PATH = METADATA_DIR / "cohort_flow_counts.json"
@@ -433,6 +434,7 @@ def render_cohort_flow(
     if not stages:
         raise ValueError("At least one stage is required to render a flow diagram.")
 
+    enforce_storage_policy({"paper_figures_dir": output_dir})
     output_dir.mkdir(parents=True, exist_ok=True)
 
     plt.rcParams.update(
@@ -762,14 +764,10 @@ def render_cohort_flow(
     ax.set_xlim(min_x - x_padding, max_x + x_padding)
     ax.set_ylim(y_min - y_padding, y_max + y_padding)
 
-    saved_paths: List[Path] = []
-    for fmt in formats:
-        path = output_dir / f"{output_name}.{fmt}"
-        fig.savefig(path, bbox_inches="tight")
-        saved_paths.append(path)
+    saved_paths = save_figure_bundle(fig, output_dir / output_name, formats=formats, close=True)
+    for path in saved_paths:
         logger.info("Saved cohort flow diagram to %s", path)
-
-    plt.close(fig)
+    refresh_paper_bundle(PAPER_DIR)
     return saved_paths
 
 

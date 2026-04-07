@@ -27,6 +27,7 @@ from results_recreation.results_analysis import (
     TABLES_DIR,
     generate_docx_report,
     generate_html_tables,
+    generate_markdown_report,
     generate_pdf_report,
     plot_curves,
     prepare_metrics_for_display,
@@ -73,6 +74,7 @@ def main() -> None:
 
     logger.info("Generating styled tables and reports from %s", metrics_path)
     generate_html_tables(metrics_df)
+    generate_markdown_report(metrics_df)
     generate_docx_report(metrics_df)
     generate_pdf_report(metrics_df)
 

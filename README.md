@@ -9,15 +9,17 @@ The pipeline consists of three main stages:
 3.  **Modeling**: Training XGBoost and Explainable Boosting Machine (EBM) classifiers to predict AKI (primary) and ICU admission (secondary).
 
 ## 🗂️ Results layout (quick reference)
-- **Experiments root**: `results/catch22/experiments` (models, params, raw artifacts). Set via `RESULTS_DIR`.
-- **Paper surface**: `results/catch22/paper` (publication-ready figures/tables/reports/metadata). Set via `PAPER_DIR`. Symlinks from `experiments/{tables,figures,metadata}` point here for convenience.
+- **Canonical generated-artifact root**: `/media/volume/catch22/data/aki_prediction_project` by default. Set via `AKI_ARTIFACT_ROOT`.
+- **Storage policy**: heavy generated outputs fail fast off the attached media volume by default (`AKI_STORAGE_POLICY=enforce`; override with `warn` or `off`).
+- **Experiments root**: derived from `AKI_ARTIFACT_ROOT` as `results/catch22/experiments` unless `RESULTS_DIR` is set explicitly.
+- **Paper surface**: derived from `AKI_ARTIFACT_ROOT` as `results/catch22/paper` unless `PAPER_DIR` is set explicitly. Symlinks from `experiments/{tables,figures,metadata}` point here for convenience.
 - **XAI surfacing**: `results/catch22/xai/ebm/<o>/<b>/<fs>/ebm_xai` and `results/catch22/xai/shap/xgboost/<o>/<b>/<fs>/shap_summary_*.png` (symlinks to artifacts under experiments).
 - **Archive**: `results/catch22/archive/legacy` holds legacy grids (`results/xgboost_*`).
 - **Aeon**: parallel structure under `results/aeon/experiments` and `results/aeon/paper`.
 - Key publication files (defaults):
-  - Metrics: `results/catch22/paper/tables/metrics_summary.csv`
-  - Figures: `results/catch22/paper/figures/` (ROC/PR/Calibration, cohort flow)
-  - Reports: `results/catch22/paper/reports/report.{docx,pdf}`
+  - Metrics: `results/catch22/paper/tables/metrics_summary.{csv,md,docx,pdf}`
+  - Figures: `results/catch22/paper/figures/` (Catch22 paper figures emitted as `.svg` + publication `.png`)
+  - Reports: `results/catch22/paper/reports/report.{md,docx,pdf}`
   - Descriptives/Missingness: `results/catch22/paper/tables/preop_descriptives.*`, `missingness_table.*`
   - Manifest: `results/catch22/paper/manifest.json`
 
@@ -56,6 +58,10 @@ shell first, invoke them with
 `PYTHON_BIN='conda run -n aki_prediction_project python' ...` so the smoke and
 experiment paths run inside the pinned project environment.
 
+Generated Catch22 artifacts default to the attached media volume. The runners
+derive `PROCESSED_DIR`, `RESULTS_DIR`, `PAPER_DIR`, `SMOKE_ROOT`, and log-file
+locations from `AKI_ARTIFACT_ROOT` unless you override them explicitly.
+
 ### 2. VitalDB Access
 Ensure you have access to the VitalDB API. The `vitaldb` Python package is used to download waveforms on-demand.
 
@@ -72,9 +78,11 @@ Ensure you have access to the VitalDB API. The `vitaldb` Python package is used 
 **File**: `data_preparation/inputs.py`
 Central configuration file. Defines input/output paths, mandatory waveforms/columns, and **AEON export settings** (e.g., padding policy, save formats). Verify `INPUT_FILE`, `MANDATORY_WAVEFORMS`, and `TARGET_SR`.
 
-> Results layout: by default `RESULTS_DIR` points to `results/catch22/experiments`
-> and `PAPER_DIR` to `results/catch22/paper`. Paths below assume those defaults;
-> paper-ready figures/tables/reports are written under `results/catch22/paper/`.
+> Results layout: by default Catch22 generated outputs are rooted at
+> `/media/volume/catch22/data/aki_prediction_project`. `RESULTS_DIR` and
+> `PAPER_DIR` can still be overridden explicitly, but the runners now fail fast
+> if heavy generated outputs resolve off `/media/volume/catch22` unless
+> `AKI_STORAGE_POLICY` is relaxed.
 
 ### Step 2: Cohort Construction
 **File**: `data_preparation/step_01_cohort_construction.py`
@@ -300,18 +308,19 @@ statistics are centralized in `metadata/display_dictionary.json`. See
 `reporting/DISPLAY_DICTIONARY.md` for the schema and helper utilities that keep
 tables/figures synchronized.
 
-*   **Artifact Validation & Aggregation**: `results_recreation/metrics_summary.py` crawls `RESULTS_DIR/models/**/predictions/test.csv`, confirms that the paired validation artifacts from Step 7 are present, and computes metrics directly from stored probabilities plus stored `y_pred_label`. In nested mode this means pooled outer-fold OOF predictions rather than a single held-out cohort. A consolidated metrics table is written to `results/catch22/paper/tables/metrics_summary.csv` (with a copy reachable via the `results/catch22/experiments/tables` symlink; optional bootstrap samples can be saved alongside).
+*   **Artifact Validation & Aggregation**: `results_recreation/metrics_summary.py` crawls `RESULTS_DIR/models/**/predictions/test.csv`, confirms that the paired validation artifacts from Step 7 are present, and computes metrics directly from stored probabilities plus stored `y_pred_label`. In nested mode this means pooled outer-fold OOF predictions rather than a single held-out cohort. A consolidated metrics table is written to `results/catch22/paper/tables/metrics_summary.csv`; manuscript-ready companion exports are emitted as `metrics_summary.{md,docx,pdf}` (with the CSV still reachable via the `results/catch22/experiments/tables` symlink; optional bootstrap samples can be saved alongside).
 *   **Calibration & Thresholds**: No report-time refitting occurs. Holdout runs use one frozen calibrator/threshold pair; nested runs preserve the per-fold calibrator/threshold decisions already applied in Step 7 and report from the stored row-level outputs.
 *   **Uncertainty Estimation**: When prediction files include `subjectid`, bootstrap confidence intervals are computed with patient-clustered resampling so all operations from a sampled patient stay together within each replicate.
 *   **Bootstrapping**: Non-parametric, outcome-stratified bootstrap of the saved evaluation predictions (default 1000 reps). Bootstrap samples are **paired across models within each Outcome × Branch × Pipeline group**, enabling Δ CIs. Default reference for Δ is the `preop_only` feature set.
     * Parallelization defaults to the process backend with `PARALLEL_BACKEND=processes` in the run shells; retries and timeouts are baked in (`--bootstrap-timeout 1800`, `--bootstrap-max-retries 2`) so a stuck pool falls back to threads, then sequential, instead of hanging.
-*   **Unified Reporting**: `reporting/make_report.py` consumes `metrics_summary.csv` to generate Word, PDF, and HTML tables plus ROC/PR/Calibration figures across both pipelines. Reports display distinct rows for each model type (`xgboost` vs. `ebm`) within every Outcome × Branch × Feature Set combination, and add a separate delta table (Δ vs reference) with heatmap shading only when the Δ CI excludes 0.
+*   **Unified Reporting**: `reporting/make_report.py` consumes `metrics_summary.csv` to generate Markdown, Word, PDF, and HTML tables plus ROC/PR/Calibration figures across both pipelines. Reports display distinct rows for each model type (`xgboost` vs. `ebm`) within every Outcome × Branch × Feature Set combination, and add a separate delta table (Δ vs reference) with heatmap shading only when the Δ CI excludes 0.
 *   **Outputs**:
     *   **Reports**:
+        *   `results/catch22/paper/reports/report.md`: Scan-friendly manuscript index of all consolidated result tables.
         *   `results/catch22/paper/reports/report.docx`: Formatted Word document containing all results tables with selective bolding and background gradients.
         *   `results/catch22/paper/reports/report.pdf`: Aggregated PDF report of all tables.
-        *   `results/catch22/paper/tables/*.html`: Individual HTML tables for each outcome/branch (also reachable via the `results/catch22/experiments/tables` symlink).
-    *   **Figures**: High-quality ROC, PR, and Calibration curves saved in `results/catch22/paper/figures/`.
+        *   `results/catch22/paper/tables/results_*.{html,md,docx,pdf}` plus `results_*_{main,delta}.csv`: Individual table bundles for each outcome/branch/model.
+    *   **Figures**: High-quality ROC, PR, and Calibration curves saved in `results/catch22/paper/figures/` as `.svg` and publication `.png`.
     *   **Data**: `results/catch22/paper/tables/metrics_summary.csv` containing all calculated metrics and confidence intervals, plus optional bootstrap Parquet files for downstream analysis.
 ```bash
 python results_recreation/metrics_summary.py \
@@ -350,7 +359,8 @@ consistent across manuscripts and dashboards.
   raw categorical columns needed for counts. Each continuous variable
   undergoes a Shapiro–Wilk test; report mean ± SD if normal, otherwise median (IQR).
   Binary categoricals render as False/True; all labels/units come from the display
-  dictionary. Outputs: HTML/LaTeX/DOCX at `results/catch22/paper/tables/preop_descriptives.*`.
+  dictionary. Outputs: CSV/Markdown/DOCX/PDF plus preserved HTML/LaTeX at
+  `results/catch22/paper/tables/preop_descriptives.*`.
 
   ```bash
   python -m reporting.preop_descriptives \
@@ -363,7 +373,7 @@ consistent across manuscripts and dashboards.
   merged modeling dataset (default: `data/processed/aki_features_master_wide.csv`)
   while skipping identifiers and outcomes. Columns are human-readable (friendly
   headers, one-hot labels resolved via the display dictionary) and written to
-  CSV/HTML in `results/catch22/paper/tables/`.
+  CSV/Markdown/DOCX/PDF plus preserved HTML in `results/catch22/paper/tables/`.
 
   ```bash
   python -m reporting.missingness_table \
