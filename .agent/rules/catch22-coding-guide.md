@@ -15,8 +15,19 @@ These rules apply when working in the `aki_prediction_project` repository.
 
 ## 2. Change strategy
 
+- Follow KISS: prefer the simplest design that satisfies the requirement.
 - Prefer minimal, local edits over broad refactors.
 - Reuse existing helpers, utilities, and CLI paths before creating new abstractions.
+- Prefer extending an existing module with a small, explicit change over
+  adding new layers, wrappers, or configuration surfaces.
+- Treat new abstractions as a last resort; add one only when it removes clear,
+  repeated complexity that already exists in the codebase.
+- Delete stale code when a replacement is clearly in place; do not leave dead
+  helpers, unused branches, or shadow implementations behind just to feel
+  safe.
+- Keep diffs auditable: make control flow easy to follow and avoid
+  speculative generalization for future use cases that are not part of the
+  task.
 - Do not rename, move, or reorganize pipeline modules unless the task explicitly requires it.
 - Avoid touching generated outputs, experiment logs, or results trees unless the task is specifically about those artifacts.
 
@@ -32,6 +43,8 @@ These rules apply when working in the `aki_prediction_project` repository.
 ## 4. Coding style and logging
 
 - Follow the global Python style rules (PEP 8, type hints, docstrings).
+- Prefer explicit, boring code over clever or heavily abstracted code when
+  both are correct.
 - For data pipeline steps and model training, use the standard Python `logging` module with informative messages at key steps:
   - dataset loading, train/test split application, feature extraction, model training, evaluation.
 - Keep logging concise; focus on shapes, counts, and key configuration, not every loop iteration.
@@ -53,6 +66,9 @@ These rules apply when working in the `aki_prediction_project` repository.
 - Whenever feasible, add or update smoke checks that:
   - verify non-empty outputs,
   - check key columns (`caseid`, outcome labels, `split_group`) exist and have reasonable distributions.
+- When removing or consolidating code paths, run the smallest targeted check
+  that proves the surviving path works and that the touched interface still
+  behaves as expected.
 - Use fixed seeds where the underlying libraries support them (e.g., model training, data splitting) to maintain reproducibility of results.
 - Do not delete or disable existing tests or checks without a clear stated reason.
 

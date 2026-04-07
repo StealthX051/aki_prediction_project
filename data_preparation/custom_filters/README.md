@@ -6,7 +6,8 @@ applied inside `step_01_cohort_construction.py`. Each helper should take a
 Current filters include:
 
 - `add_aki_label`: Derives `aki_label` from postoperative creatinine trends.
-- `filter_preop_cr`: Drops cases with missing or extreme baseline creatinine.
+- `filter_preop_cr`: Drops AKI-ineligible cases with baseline creatinine above
+  the `4.0 mg/dL` threshold after the earlier mandatory-field completeness check.
 - `filter_postop_cr`: Removes cases lacking postoperative creatinine needed for
   adjudication.
 - `ensure_sample_independence`: Enforces sampling independence before the

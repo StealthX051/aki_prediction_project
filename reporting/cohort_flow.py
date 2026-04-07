@@ -3,7 +3,8 @@
 The flow diagram visualizes how many cases remain after each filtering step in
 ``data_preparation.step_01_cohort_construction``. The module accepts structured
 counts saved to JSON (for example by persisting print statements from
-``step_01``) and renders a simple vertical flow chart to ``results/figures``.
+``step_01``) and renders a Graphviz CONSORT-style flow chart to
+``results/figures``.
 
 Expected JSON structure (flexible):
 
@@ -34,17 +35,16 @@ import argparse
 import json
 import logging
 import os
+import shutil
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 import textwrap
 from typing import Any, Iterable, List, Mapping, MutableSequence, Optional, Sequence, Tuple, Union
 
-import matplotlib.pyplot as plt
-from matplotlib.patches import FancyBboxPatch
-
 from artifact_paths import enforce_storage_policy, get_paper_dir, get_results_dir
 from reporting.display_dictionary import DisplayDictionary, load_display_dictionary
-from reporting.manuscript_assets import refresh_paper_bundle, save_figure_bundle
+from reporting.manuscript_assets import PNG_DPI, refresh_paper_bundle
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +54,11 @@ PAPER_DIR = get_paper_dir(PROJECT_ROOT)
 FIGURES_DIR = PAPER_DIR / "figures"
 METADATA_DIR = PAPER_DIR / "metadata"
 DEFAULT_COUNTS_PATH = METADATA_DIR / "cohort_flow_counts.json"
+MISSING_DOT_MESSAGE = (
+    "Graphviz 'dot' binary not found. Activate the 'aki_prediction_project' "
+    "Conda environment and run 'conda env update -f environment.yml --prune', "
+    "then rerun the cohort flow renderer."
+)
 
 
 @dataclass(frozen=True)
@@ -139,7 +144,7 @@ def normalize_counts(
     }
 
     filter_label_map = {
-        "filter_preop_cr": "Baseline Renal Function Data",
+        "filter_preop_cr": "Baseline Creatinine Eligibility",
         "ensure_sample_independence": "Subject Selection",
         "filter_postop_cr": "Outcome Data Availability",
         "add_aki_label": "AKI label derived",
@@ -149,7 +154,7 @@ def normalize_counts(
         "mandatory_columns": "Missing mandatory data fields",
         "waveforms": "Incomplete waveform data",
         "Exclude ASA V/VI": "ASA class V/VI excluded",
-        "filter_preop_cr": "Missing preoperative creatinine",
+        "filter_preop_cr": "Baseline creatinine > 4.0 mg/dL",
         "ensure_sample_independence": "Exclusion of repeat encounters",
         "filter_postop_cr": "Missing postoperative creatinine",
     }
@@ -158,7 +163,7 @@ def normalize_counts(
         "mandatory_columns": "EHR Record Screening",
         "waveforms": "High-fidelity Waveform Availability",
         "Exclude ASA V/VI": "ASA Class Exclusion",
-        "filter_preop_cr": "Baseline Renal Function Data",
+        "filter_preop_cr": "Baseline Creatinine Eligibility",
         "ensure_sample_independence": "Subject Selection",
         "filter_postop_cr": "Outcome Data Availability",
     }
@@ -414,6 +419,160 @@ def normalize_counts(
     return CohortFlowData(stages=filtered, outcome_split=outcome_split)
 
 
+def _format_n(count: int) -> str:
+    return f"{count:,}"
+
+
+def _wrap_lines(lines: Sequence[str], *, width: int) -> List[str]:
+    wrapped: List[str] = []
+    for line in lines:
+        if not line:
+            wrapped.append("")
+            continue
+        if line.startswith("- "):
+            fragments = textwrap.wrap(line[2:], width=width, subsequent_indent="  ")
+            if not fragments:
+                wrapped.append(line)
+                continue
+            wrapped.append(f"- {fragments[0]}")
+            wrapped.extend(fragments[1:])
+            continue
+        wrapped.extend(textwrap.wrap(line, width=width) or [line])
+    return wrapped
+
+
+def _escape_dot(text: str) -> str:
+    return text.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _dot_label(lines: Sequence[str], *, left_aligned: bool) -> str:
+    escaped = [_escape_dot(line) for line in lines]
+    if left_aligned:
+        return "\\l".join(escaped) + "\\l"
+    return "\\n".join(escaped)
+
+
+def _stage_node_lines(stage: CohortStage) -> List[str]:
+    lines = _wrap_lines([stage.title], width=28)
+    if stage.detail:
+        lines.extend(_wrap_lines([stage.detail], width=34))
+    lines.append(f"n = {_format_n(stage.count)}")
+    return lines
+
+
+def _exclusion_node_lines(stage: CohortStage) -> List[str]:
+    if not stage.removed:
+        return []
+
+    heading = stage.removal_reason or stage.title
+    lines = [f"{heading} (n = {_format_n(stage.removed)})"]
+    if "waveform" in stage.title.lower() and stage.detail:
+        lines.append(f"- {stage.detail}")
+    return _wrap_lines(lines, width=34)
+
+
+def _split_node_lines(label: str, count: int) -> List[str]:
+    return _wrap_lines([label], width=24) + [f"n = {_format_n(count)}"]
+
+
+def _split_labels(outcome_split: OutcomeSplit) -> Tuple[str, str]:
+    label_lower = outcome_split.label.lower()
+    if "aki" in label_lower:
+        return "No AKI", "Acute Kidney Injury (AKI)"
+    return f"{outcome_split.label} - False", f"{outcome_split.label} - True"
+
+
+def _graph_attrs(title: Optional[str]) -> str:
+    attrs = [
+        'rankdir="TB"',
+        'splines=polyline',
+        'newrank=true',
+        'ordering="out"',
+        'pad="0.18"',
+        'nodesep="0.55"',
+        'ranksep="0.9"',
+        'fontname="Times New Roman"',
+    ]
+    if title:
+        attrs.extend(
+            [
+                'labelloc="t"',
+                'labeljust="c"',
+                'fontsize=20',
+                f'label="{_escape_dot(title)}"',
+            ]
+        )
+    return ", ".join(attrs)
+
+
+def _cohort_flow_dot(stages: Sequence[CohortStage], outcome_split: Optional[OutcomeSplit], title: Optional[str]) -> str:
+    stage_ids = [f"stage_{idx}" for idx in range(len(stages))]
+    exclusion_ids: List[Optional[str]] = []
+    lines = [
+        "digraph cohort_flow {",
+        f"  graph [{_graph_attrs(title)}];",
+        '  node [shape=box, style="rounded,filled", fontname="Times New Roman", fontsize=12, penwidth=1.5, color="#667d93", fillcolor="#f8fafc", margin="0.20,0.14"];',
+        '  edge [color="#667d93", penwidth=1.5, arrowsize=0.75];',
+    ]
+
+    for idx, stage in enumerate(stages):
+        stage_id = stage_ids[idx]
+        fillcolor = "#f2f7fb" if idx == len(stages) - 1 else "#f8fafc"
+        lines.append(
+            f'  {stage_id} [label="{_dot_label(_stage_node_lines(stage), left_aligned=False)}", '
+            f'width=4.0, height=1.0, fillcolor="{fillcolor}"];'
+        )
+
+        exclusion_id = None
+        if stage.removed:
+            exclusion_id = f"excluded_{idx}"
+            lines.append(
+                f'  {exclusion_id} [label="{_dot_label(_exclusion_node_lines(stage), left_aligned=True)}", '
+                'width=3.55, fontsize=10.5, style="rounded,filled,dashed", '
+                'color="#7b8b99", fillcolor="#fbfcfd", margin="0.16,0.12"];'
+            )
+        exclusion_ids.append(exclusion_id)
+
+    for idx in range(len(stage_ids) - 1):
+        lines.append(f"  {stage_ids[idx]}:s -> {stage_ids[idx + 1]}:n;")
+
+    previous_exclusion_id: Optional[str] = None
+    for idx, exclusion_id in enumerate(exclusion_ids):
+        if not exclusion_id:
+            continue
+        lines.append(
+            f'  {stage_ids[idx]}:e -> {exclusion_id}:w [style=dashed, color="#7b8b99", '
+            'constraint=false, minlen=2];'
+        )
+        lines.append(f"  {{ rank=same; {stage_ids[idx]}; {exclusion_id}; }}")
+        if previous_exclusion_id:
+            lines.append(f"  {previous_exclusion_id} -> {exclusion_id} [style=invis, weight=20];")
+        previous_exclusion_id = exclusion_id
+
+    if outcome_split:
+        negative_label, positive_label = _split_labels(outcome_split)
+        lines.extend(
+            [
+                f'  final_negative [label="{_dot_label(_split_node_lines(negative_label, outcome_split.false_count), left_aligned=False)}", width=3.0, height=0.95, fillcolor="#f8fafc"];',
+                f'  final_positive [label="{_dot_label(_split_node_lines(positive_label, outcome_split.true_count), left_aligned=False)}", width=3.0, height=0.95, fillcolor="#edf5fb"];',
+                f'  {stage_ids[-1]}:s -> final_negative:n [minlen=1];',
+                f'  {stage_ids[-1]}:s -> final_positive:n [minlen=1];',
+                "  { rank=same; final_negative; final_positive; }",
+                "  final_negative -> final_positive [style=invis, weight=20];",
+            ]
+        )
+
+    lines.append("}")
+    return "\n".join(lines) + "\n"
+
+
+def _dot_binary() -> str:
+    dot_binary = shutil.which("dot")
+    if dot_binary is None:
+        raise RuntimeError(MISSING_DOT_MESSAGE)
+    return dot_binary
+
+
 def render_cohort_flow(
     flow: Union[Sequence[CohortStage], CohortFlowData],
     *,
@@ -437,336 +596,30 @@ def render_cohort_flow(
     enforce_storage_policy({"paper_figures_dir": output_dir})
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    plt.rcParams.update(
-        {
-            "font.family": ["DejaVu Sans"],
-            "font.sans-serif": ["Arial", "Helvetica", "DejaVu Sans"],
-        }
-    )
+    base_path = (output_dir / output_name).with_suffix("")
+    dot_path = base_path.with_suffix(".dot")
+    dot_path.write_text(_cohort_flow_dot(stages, outcome_split, title), encoding="utf-8")
 
-    box_width = 5.8
-    box_height = 0.9
-    box_gap = 1.05
-    extra_gap_after_waveform = 0.25
-    box_pad = 0.32
-    center_x = 0.0
-
-    removal_box_width = 3.6
-    removal_box_height = 0.82
-    removal_gap = 0.95  # wider offset for breathing room
-
-    split_box_width = 3.9
-    split_box_height = 1.0
-    split_offset = box_width * 0.72 + 1.2
-
-    vertical_steps = len(stages) + (1 if outcome_split else 0)
-    fig_height = max(8.0, (box_height + box_gap) * (vertical_steps + 1.1))
-    fig_width = 12.0
-    fig, ax = plt.subplots(figsize=(fig_width, fig_height), dpi=300)
-    fig.patch.set_facecolor("white")
-    ax.set_facecolor("white")
-    ax.axis("off")
-
-    def _wrap_line(text: str, width: int = 30) -> str:
-        return "\n".join(textwrap.wrap(text, width=width)) if text else ""
-
-    y_positions: List[float] = []
-    y_cursor = 0.0
-    for stage in stages:
-        y_positions.append(y_cursor)
-        gap = box_gap + (extra_gap_after_waveform if "waveform" in stage.title.lower() else 0.0)
-        y_cursor -= (box_height + gap)
-
-    lowest_y = y_positions[-1]
-    min_x = center_x - box_width / 2
-    max_x = center_x + box_width / 2
-
-    arrow_zorder = 2
-    flow_arrowprops = dict(
-        arrowstyle="-|>",
-        linewidth=1.5,
-        color="#0f172a",
-        mutation_scale=20,
-        connectionstyle="arc3,rad=0",
-        zorder=arrow_zorder,
-    )
-    exclusion_arrowprops = dict(
-        arrowstyle="-|>",
-        linewidth=1.4,
-        color="#1f2937",
-        mutation_scale=20,
-        connectionstyle="arc3,rad=0",
-        zorder=arrow_zorder,
-    )
-    split_arrowprops = dict(
-        arrowstyle="-|>",
-        linewidth=1.6,
-        color="#0f172a",
-        mutation_scale=20,
-        zorder=arrow_zorder,
-    )
-
-    def draw_connection(
-        ax_obj: plt.Axes,
-        start_box: FancyBboxPatch,
-        end_box: FancyBboxPatch,
-        *,
-        renderer: Any,
-        direction: str = "down",
-        arrow_kwargs: Mapping[str, Any],
-        connectionstyle: Optional[str] = None,
-    ) -> None:
-        """Connect two boxes using their bounds so arrows stay aligned."""
-
-        def _centers(box: FancyBboxPatch) -> Mapping[str, Tuple[float, float]]:
-            bbox = box.get_window_extent(renderer=renderer).transformed(ax_obj.transData.inverted())
-            x0, y0, x1, y1 = bbox.x0, bbox.y0, bbox.x1, bbox.y1
-            xc = (x0 + x1) / 2
-            yc = (y0 + y1) / 2
-            return {
-                "top": (xc, y1),
-                "bottom": (xc, y0),
-                "left": (x0, yc),
-                "right": (x1, yc),
-            }
-
-        start_centers = _centers(start_box)
-        end_centers = _centers(end_box)
-
-        if direction == "down":
-            start_pt, end_pt = start_centers["bottom"], end_centers["top"]
-        elif direction == "up":
-            start_pt, end_pt = start_centers["top"], end_centers["bottom"]
-        elif direction == "right":
-            start_pt, end_pt = start_centers["right"], end_centers["left"]
-        elif direction == "left":
-            start_pt, end_pt = start_centers["left"], end_centers["right"]
-        else:
-            start_pt, end_pt = start_centers["bottom"], end_centers["top"]
-
-        arrowprops = dict(arrow_kwargs)
-        if connectionstyle:
-            arrowprops["connectionstyle"] = connectionstyle
-
-        ax_obj.annotate(
-            "",
-            xy=end_pt,
-            xytext=start_pt,
-            arrowprops=arrowprops,
-        )
-
-    main_boxes: List[FancyBboxPatch] = []
-    connections: List[Tuple[FancyBboxPatch, FancyBboxPatch, str, Mapping[str, Any], Optional[str]]] = []
-
-    for idx, (stage, y_center) in enumerate(zip(stages, y_positions)):
-        left = center_x - box_width / 2
-        bottom = y_center - box_height / 2
-        box = FancyBboxPatch(
-            (left, bottom),
-            box_width,
-            box_height,
-            boxstyle=f"round,pad={box_pad},rounding_size=0.12",
-            linewidth=1.5,
-            facecolor="white",
-            edgecolor="black",
-            zorder=3,
-        )
-        ax.add_patch(box)
-        main_boxes.append(box)
-
-        lines = [_wrap_line(stage.title, 30)]
-        if stage.detail:
-            detail_line = _wrap_line(stage.detail, 34)
-            if detail_line:
-                lines.append(detail_line)
-        lines.append(f"n = {stage.count:,}")
-        box_text = "\n".join(lines)
-        ax.text(
-            center_x,
-            y_center,
-            box_text,
-            ha="center",
-            va="center",
-            fontsize=11.5,
-            linespacing=1.3,
-            zorder=4,
-        )
-
-        if stage.removed:
-            removal_left = center_x + box_width / 2 + removal_gap
-            removal_bottom = y_center - removal_box_height / 2
-            removal_box = FancyBboxPatch(
-                (removal_left, removal_bottom),
-                removal_box_width,
-                removal_box_height,
-                boxstyle="round,pad=0.22,rounding_size=0.08",
-                linewidth=1.3,
-                facecolor="white",
-                edgecolor="black",
-                zorder=3,
-            )
-            ax.add_patch(removal_box)
-
-            exclusion_anchor = stage.removal_reason or stage.detail or stage.title
-            footnote = None
-            if "waveform" in stage.title.lower() and stage.detail:
-                footnote = stage.detail.replace("Required waveforms: ", "")
-
-            base_label = f"{exclusion_anchor} (n = {stage.removed:,})"
-            removal_lines = [_wrap_line(base_label, 30)]
-            if footnote:
-                removal_lines.append(_wrap_line(f"*{footnote}", 30))
-
-            ax.text(
-                removal_left + removal_box_width / 2,
-                y_center,
-                "\n".join(removal_lines),
-                ha="center",
-                va="center",
-                fontsize=10.2,
-                linespacing=1.22,
-                zorder=4,
-            )
-            max_x = max(max_x, removal_left + removal_box_width)
-            connections.append((box, removal_box, "right", exclusion_arrowprops, None))
-
-    for idx in range(len(main_boxes) - 1):
-        connections.append((main_boxes[idx], main_boxes[idx + 1], "down", flow_arrowprops, None))
-
-    split_patches: List[FancyBboxPatch] = []
-
-    if outcome_split:
-        split_y = lowest_y - (box_height / 2 + box_gap + 0.9)
-        total = outcome_split.total or 1
-
-        left_center_x = center_x - split_offset
-        right_center_x = center_x + split_offset
-
-        def _split_label(label: str, count: int) -> str:
-            pct = (count / total) * 100
-            return f"{label}\n{count:,} ({pct:.1f}%)"
-
-        label_lower = outcome_split.label.lower()
-        left_label = "No AKI" if "aki" in label_lower else f"{outcome_split.label} — False"
-        right_label = "Acute Kidney Injury (AKI)" if "aki" in label_lower else f"{outcome_split.label} — True"
-
-        for box_center_x, label_text, count in (
-            (left_center_x, left_label, outcome_split.false_count),
-            (right_center_x, right_label, outcome_split.true_count),
-        ):
-            split_left = box_center_x - split_box_width / 2
-            split_bottom = split_y - split_box_height / 2
-            split_box = FancyBboxPatch(
-                (split_left, split_bottom),
-                split_box_width,
-                split_box_height,
-                boxstyle=f"round,pad={box_pad}",
-                linewidth=1.5,
-                facecolor="white",
-                edgecolor="black",
-                zorder=3,
-            )
-            ax.add_patch(split_box)
-            split_patches.append(split_box)
-            ax.text(
-                box_center_x,
-                split_y,
-                _split_label(label_text, count),
-                ha="center",
-                va="center",
-                fontsize=11.0,
-                linespacing=1.25,
-                zorder=4,
-            )
-            max_x = max(max_x, split_left + split_box_width)
-            min_x = min(min_x, split_left)
-
-        final_box = main_boxes[-1]
-
-    fig.canvas.draw()
-    renderer = fig.canvas.get_renderer()
-
-    def _centers_for(box: FancyBboxPatch) -> Mapping[str, Tuple[float, float]]:
-        bbox = box.get_window_extent(renderer=renderer).transformed(ax.transData.inverted())
-        x0, y0, x1, y1 = bbox.x0, bbox.y0, bbox.x1, bbox.y1
-        xc = (x0 + x1) / 2
-        yc = (y0 + y1) / 2
-        return {
-            "top": (xc, y1),
-            "bottom": (xc, y0),
-            "left": (x0, yc),
-            "right": (x1, yc),
-        }
-
-    for start_box, end_box, direction, arrow_kwargs, conn_style in connections:
-        if start_box is None or end_box is None:
+    saved_paths = [dot_path]
+    dot_binary = _dot_binary()
+    requested_formats: List[str] = []
+    seen_formats = set()
+    for fmt in formats:
+        normalized = str(fmt).lower().lstrip(".")
+        if normalized == "dot" or normalized in seen_formats:
             continue
-        draw_connection(
-            ax,
-            start_box,
-            end_box,
-            renderer=renderer,
-            direction=direction,
-            arrow_kwargs=arrow_kwargs,
-            connectionstyle=conn_style,
-        )
+        requested_formats.append(normalized)
+        seen_formats.add(normalized)
 
-    if outcome_split and len(split_patches) == 2:
-        final_box = main_boxes[-1]
-        left_patch, right_patch = split_patches
+    for fmt in requested_formats:
+        output_path = base_path.with_suffix(f".{fmt}")
+        command = [dot_binary, f"-T{fmt}", str(dot_path), "-o", str(output_path)]
+        if fmt == "png":
+            command.insert(1, f"-Gdpi={PNG_DPI}")
+        subprocess.run(command, check=True)
+        saved_paths.append(output_path)
+        logger.info("Saved cohort flow diagram to %s", output_path)
 
-        final_centers = _centers_for(final_box)
-        left_centers = _centers_for(left_patch)
-        right_centers = _centers_for(right_patch)
-
-        final_bottom = final_centers["bottom"]
-        split_top_y = min(left_centers["top"][1], right_centers["top"][1])
-        junction_y = (final_bottom[1] + split_top_y) / 2.0
-
-        # Vertical stem from final cohort
-        ax.plot(
-            [final_bottom[0], final_bottom[0]],
-            [final_bottom[1], junction_y],
-            color=flow_arrowprops["color"],
-            linewidth=1.6,
-            zorder=arrow_zorder,
-        )
-
-        # Horizontal bar across split targets
-        ax.plot(
-            [left_centers["top"][0], right_centers["top"][0]],
-            [junction_y, junction_y],
-            color=flow_arrowprops["color"],
-            linewidth=1.6,
-            zorder=arrow_zorder,
-        )
-
-        # Downward arrows into split boxes
-        for target_centers in (left_centers, right_centers):
-            start_pt = (target_centers["top"][0], junction_y)
-            end_pt = target_centers["top"]
-            ax.annotate(
-                "",
-                xy=end_pt,
-                xytext=start_pt,
-                arrowprops=dict(split_arrowprops, connectionstyle="arc3,rad=0"),
-            )
-
-    if title:
-        ax.set_title(title, fontsize=15, fontweight="bold", pad=14)
-
-    x_padding = 0.8
-    y_padding = 0.8
-    y_min = y_positions[-1] - box_height
-    y_max = y_positions[0] + box_height
-    if outcome_split:
-        y_min = min(y_min, split_y - split_box_height / 2 - 0.9)
-    ax.set_xlim(min_x - x_padding, max_x + x_padding)
-    ax.set_ylim(y_min - y_padding, y_max + y_padding)
-
-    saved_paths = save_figure_bundle(fig, output_dir / output_name, formats=formats, close=True)
-    for path in saved_paths:
-        logger.info("Saved cohort flow diagram to %s", path)
     refresh_paper_bundle(PAPER_DIR)
     return saved_paths
 

@@ -23,6 +23,7 @@ dependencies:
 
   # Pip for installing remaining packages
   - pip
+  - graphviz
 
   # Python packages to be installed with pip
   - pip:

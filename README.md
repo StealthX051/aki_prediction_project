@@ -103,19 +103,23 @@ python -m data_preparation.step_01_cohort_construction
 
 To regenerate a cohort flow diagram from saved counts/metadata without rerunning
 the full pipeline, supply the JSON counts file to the reporting utility. The renderer
-skips no-op steps, uses friendly labels, and now renders a CONSORT-style layout:
+now requires Graphviz (`dot`); keep the Conda environment in sync with
+`conda env update -f environment.yml --prune` before running it. The diagram
+skips no-op steps, uses friendly labels, and renders a CONSORT-style layout:
 waveform checks are grouped into a single “High-fidelity Waveform Availability” box
-with a footnote listing required channels, exclusion reasons are drawn to the right
-with horizontal arrows, and the AKI vs. No AKI split uses a centered T-junction from
+with a required-channel footnote, exclusion reasons are drawn to the right in dashed
+boxes, and the AKI vs. No AKI split uses two direct arrows from the bottom center of
 the Final Cohort box. The default counts JSON remains AKI-specific even though the
-saved cohort now contains the broader shared outer cohort. Per-step removals are
-shown in the exclusion boxes, and AKI False/True counts are displayed when present
-in the counts JSON produced by step 01.
+saved cohort now contains the broader shared outer cohort. Per-step removals are shown
+in the exclusion boxes, and AKI False/True counts are displayed when present in the
+counts JSON produced by step 01. The baseline creatinine eligibility stage reflects the
+AKI cohort rule `preop_cr <= 4.0 mg/dL`, not a second missingness check.
 
 ```bash
 python -m reporting.cohort_flow --counts-file results/catch22/paper/metadata/cohort_flow_counts.json
 ```
-Figures are written to `results/catch22/paper/figures/` by default (SVG and PNG).
+Outputs are written to `results/catch22/paper/figures/` by default as
+`cohort_flow.dot`, `cohort_flow.svg`, and `cohort_flow.png`.
 
 ### Step 3: Feature Extraction
 **File**: `data_preparation/step_02_catch_22.py`
@@ -346,13 +350,17 @@ These helpers live under `reporting/` and reuse the shared display dictionary
 consistent across manuscripts and dashboards.
 
 - **Cohort flow diagram** — Recreate the consort-style flow from saved counts
-  emitted by `step_01_cohort_construction.py`. The renderer skips no-op/increasing
+  emitted by `step_01_cohort_construction.py`. The renderer requires Graphviz
+  (`dot`); keep the project environment synced with
+  `conda env update -f environment.yml --prune`. It skips no-op/increasing
   steps, uses friendly labels (waveforms, filters), groups all waveform checks into
-  one stage with a footnote, and shows rightward exclusion boxes labeled with removal
-  reasons and counts. A centered T-junction connects the Final Cohort box to AKI vs.
-  No AKI split boxes when `label_split` is present in the JSON (default:
-  `results/catch22/paper/metadata/cohort_flow_counts.json`). Figures are written to
-  SVG/PNG under `results/catch22/paper/figures/`.
+  one stage with a footnote, and shows rightward dashed exclusion boxes labeled with
+  removal reasons and counts. Two direct arrows connect the Final Cohort box to the
+  AKI vs. No AKI split boxes when `label_split` is present in the JSON (default:
+  `results/catch22/paper/metadata/cohort_flow_counts.json`). The `filter_preop_cr`
+  stage is labeled as baseline creatinine eligibility because it excludes
+  `preop_cr > 4.0 mg/dL`. Outputs are written as DOT/SVG/PNG under
+  `results/catch22/paper/figures/`.
 
   ```bash
   python -m reporting.cohort_flow \

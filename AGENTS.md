@@ -27,13 +27,27 @@ Read the smallest relevant document first.
 
 ## Working style
 
+- Follow KISS: choose the simplest implementation that satisfies the
+  scientific and operational requirement.
 - Prefer minimal, targeted changes over broad refactors.
 - Reuse and extend existing functions/modules before introducing new
   abstractions.
+- Prefer a small parameter, helper, or conditional in an existing module over
+  adding new layers, frameworks, or configuration surfaces.
+- When a change makes prior code paths, helpers, or flags obsolete, prefer
+  deleting them instead of leaving dead or parallel code behind.
 - Preserve current CLI contracts, filenames, column names, and result layout
   unless the task explicitly requires a change.
 - Keep code professional and reliable: deterministic seeds where supported,
   clear stage-level logging, and comments only where the logic is non-obvious.
+- Optimize for low churn and auditability: keep control flow explicit, avoid
+  speculative generalization, and make it easy to trace a result back to a
+  small set of functions and files.
+- Prefer straightforward validation, clear errors, and local fault handling
+  over complex orchestration when making code more robust.
+- Do not keep compatibility code, fallback branches, or duplicated
+  implementations unless the repository actually needs them for a current
+  interface or study path.
 - Prefer environment-variable overrides (`SMOKE_ROOT`, `DATA_DIR`,
   `PROCESSED_DIR`, `RESULTS_DIR`, `PAPER_DIR`) when experimenting so
   exploratory work does not pollute canonical outputs.
@@ -75,6 +89,8 @@ Read the smallest relevant document first.
 - This is a scientific repository, not just an application codebase. When
   implementing new methods or changing analytical behavior, optimize for
   scientific rigor, reproducibility, and defensible interpretation.
+- Scientific rigor should still be implemented simply: if two approaches are
+  equally correct, prefer the one that is easier to audit, review, and rerun.
 - Treat `METHODS.md` as authoritative for cohort definitions, AKI labeling,
   waveform requirements, preprocessing, and evaluation.
 - Keep `split_group` semantics intact. The train/test split is created once in
@@ -91,6 +107,9 @@ Read the smallest relevant document first.
 ## Verification
 
 - Prefer the smallest check that exercises the changed behavior.
+- When simplifying or deleting code, run a targeted check that confirms the
+  new path works and that previously supported behavior in the touched area has
+  not regressed.
 - For utilities, postprocessing, or reporting changes, run targeted `pytest`
   tests from `tests/`.
 - For production pipeline changes, prefer `./run_smoke_test.sh` before

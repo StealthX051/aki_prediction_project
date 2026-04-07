@@ -91,7 +91,7 @@ We use **Catch24** (22 canonical Catch22 features plus mean and standard deviati
 
 ## Reporting Artifacts
 All figures and tables regenerate from saved artifacts using `metadata/display_dictionary.json` for consistent labels/units.
-* **Cohort flow**: `reporting/cohort_flow.py` converts `results/metadata/cohort_flow_counts.json` into SVG/PNG consort diagrams, consolidating waveform checks into a single availability box and rendering the terminal AKI split when present.
+* **Cohort flow**: `reporting/cohort_flow.py` converts `results/metadata/cohort_flow_counts.json` into Graphviz-backed DOT/SVG/PNG consort diagrams, consolidating waveform checks into a single availability box, labeling the baseline creatinine eligibility step as `preop_cr <= 4.0 mg/dL`, and rendering the terminal AKI split as two direct arrows from the final cohort box when present.
 * **Baseline table**: `reporting/preop_descriptives.py` uses raw cohort data or `aki_preop_processed.csv`, both of which retain raw categorical variables after Step 03; Shapiro-Wilk testing guides mean+/-SD vs. median[IQR] display. The default `--report-cohort paper_default` view matches the AKI paper cohort rather than the broader shared outer cohort. Outputs: HTML/LaTeX/DOCX at `results/tables/preop_descriptives.*`.
 * **Missingness table**: `reporting/missingness_table.py` summarizes feature-level missingness from `data/processed/aki_features_master_wide.csv` to CSV/HTML for supplements and QA.
 

@@ -10,6 +10,10 @@ These rules ensure code changes remain aligned with the study’s scientific met
 
 - This repository supports a scientific study, so correctness is not only a software concern; it also includes validity of cohort logic, feature construction, evaluation, and interpretation.
 - Favor conservative, reviewable method changes over clever rewrites.
+- Prefer the simplest implementation that preserves cohort semantics, leakage
+  protections, reproducibility, and the existing study design.
+- When removing analytical code, confirm it is truly obsolete or duplicated
+  and that the retained path still preserves the primary study workflow.
 - When implementing a new method, make the comparison to the primary pipeline explicit and preserve a path back to the existing baseline.
 
 ## 1. Treat METHODS.md as the source of truth
