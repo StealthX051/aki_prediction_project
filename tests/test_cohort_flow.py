@@ -92,10 +92,13 @@ def test_render_creates_files(tmp_path: Path, monkeypatch):
     assert ":s -> final_negative:n" in dot_text
     assert ":s -> final_positive:n" in dot_text
     assert any("-Gdpi=600" in command for command in commands)
+    assert (tmp_path / "primary_figures" / "test_flow.png").exists()
+    assert (tmp_path / "primary_figures" / "test_flow.svg").exists()
 
 
-def test_render_raises_clear_error_when_graphviz_missing(tmp_path: Path, monkeypatch):
+def test_render_uses_matplotlib_fallback_when_graphviz_missing(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("AKI_STORAGE_POLICY", "off")
+    monkeypatch.setattr("reporting.cohort_flow.refresh_paper_bundle", lambda _paper_dir: {})
     monkeypatch.setattr("reporting.cohort_flow.shutil.which", lambda _name: None)
 
     flow = normalize_counts(
@@ -107,16 +110,20 @@ def test_render_raises_clear_error_when_graphviz_missing(tmp_path: Path, monkeyp
         }
     )
 
-    with pytest.raises(RuntimeError, match="conda env update -f environment.yml --prune"):
-        render_cohort_flow(
-            flow,
-            output_dir=tmp_path,
-            output_name="missing_dot",
-            formats=("png",),
-            title=None,
-        )
+    output_paths = render_cohort_flow(
+        flow,
+        output_dir=tmp_path,
+        output_name="missing_dot",
+        formats=("png", "svg"),
+        title=None,
+    )
 
+    assert all(path.exists() for path in output_paths)
     assert (tmp_path / "missing_dot.dot").exists()
+    assert (tmp_path / "missing_dot.png").exists()
+    assert (tmp_path / "missing_dot.svg").exists()
+    assert (tmp_path / "primary_figures" / "missing_dot.png").exists()
+    assert (tmp_path / "primary_figures" / "missing_dot.svg").exists()
 
 
 def test_normalize_counts_inserts_pre_waveform_custom_filter_before_waveform_stage():

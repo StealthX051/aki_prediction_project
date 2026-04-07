@@ -330,7 +330,8 @@ tables/figures synchronized.
         *   `results/catch22/paper/reports/report.docx`: Formatted Word document containing all results tables with selective bolding and background gradients.
         *   `results/catch22/paper/reports/report.pdf`: Aggregated PDF report of all tables.
         *   `results/catch22/paper/tables/results_*.{html,md,docx,pdf}` plus `results_*_{main,delta}.csv`: Individual table bundles for each outcome/branch/model.
-    *   **Figures**: High-quality ROC, PR, and Calibration curves saved in `results/catch22/paper/figures/` as `.svg` and publication `.png`.
+    *   **Figures**: High-quality ROC, PR, and Calibration curves saved in `results/catch22/paper/figures/` as `.svg` and publication `.png`. Primary manuscript figures are also mirrored into `results/catch22/paper/figures/primary_figures/`.
+    *   **Optional XGBoost SHAP figures**: `python -m reporting.make_shap_figures` rebuilds report-time SHAP beeswarms and raw-value scatter plots from saved `model.json`, `preprocessor.pkl`, and stored test predictions without retraining. Scatter plots are written under `results/catch22/paper/figures/shap_scatter/`, with a curated featured subset mirrored into `results/catch22/paper/figures/shap_scatter_featured/`.
     *   **Data**: `results/catch22/paper/tables/metrics_summary.csv` containing all calculated metrics and confidence intervals, plus optional bootstrap Parquet files for downstream analysis.
 ```bash
 python results_recreation/metrics_summary.py \
@@ -341,7 +342,8 @@ python results_recreation/metrics_summary.py \
   --bootstrap-max-retries 2 \
   --n-jobs -1       # Precompute consolidated metrics + Δs using all cores
 
-python reporting/make_report.py  # Build figures and reports from the precomputed CSV
+python reporting/make_report.py        # Build figures and reports from the precomputed CSV
+python -m reporting.make_shap_figures  # Optional: rebuild richer XGBoost SHAP figures from saved bundles
 ```
 
 ### Additional reporting utilities
@@ -350,13 +352,14 @@ These helpers live under `reporting/` and reuse the shared display dictionary
 consistent across manuscripts and dashboards.
 
 - **Cohort flow diagram** — Recreate the consort-style flow from saved counts
-  emitted by `step_01_cohort_construction.py`. The renderer requires Graphviz
-  (`dot`); keep the project environment synced with
-  `conda env update -f environment.yml --prune`. It skips no-op/increasing
-  steps, uses friendly labels (waveforms, filters), groups all waveform checks into
-  one stage with a footnote, and shows rightward dashed exclusion boxes labeled with
-  removal reasons and counts. Two direct arrows connect the Final Cohort box to the
-  AKI vs. No AKI split boxes when `label_split` is present in the JSON (default:
+  emitted by `step_01_cohort_construction.py`. When Graphviz (`dot`) is
+  available the renderer emits the DOT-driven layout; otherwise it falls back to
+  a Matplotlib renderer and still writes `.svg`/`.png` outputs. It skips
+  no-op/increasing steps, uses friendly labels (waveforms, filters), groups all
+  waveform checks into one stage with a footnote, and shows rightward dashed
+  exclusion boxes labeled with removal reasons and counts. Two direct arrows
+  connect the Final Cohort box to the AKI vs. No AKI split boxes when
+  `label_split` is present in the JSON (default:
   `results/catch22/paper/metadata/cohort_flow_counts.json`). The `filter_preop_cr`
   stage is labeled as baseline creatinine eligibility because it excludes
   `preop_cr > 4.0 mg/dL`. Outputs are written as DOT/SVG/PNG under

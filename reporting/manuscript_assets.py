@@ -303,6 +303,18 @@ def _title_from_asset_id(asset_id: str, asset_type: str) -> str:
     return asset_id.replace("_", " ").title()
 
 
+def _prefer_manifest_path(current: str, candidate: str) -> tuple[str, str]:
+    current_parts = Path(current).parts
+    candidate_parts = Path(candidate).parts
+    if len(candidate_parts) < len(current_parts):
+        return candidate, current
+    if len(candidate_parts) > len(current_parts):
+        return current, candidate
+    if candidate < current:
+        return candidate, current
+    return current, candidate
+
+
 def refresh_paper_bundle(paper_dir: Path) -> dict:
     """Scan the paper directory and regenerate the manifest + README index."""
 
@@ -331,7 +343,16 @@ def refresh_paper_bundle(paper_dir: Path) -> dict:
         if csv_variant is not None and relative.suffix == ".csv":
             entry.setdefault("csv_variants", {})[csv_variant] = rel_text
         else:
-            entry["paths"][relative.suffix.lstrip(".")] = rel_text
+            fmt = relative.suffix.lstrip(".")
+            current = entry["paths"].get(fmt)
+            if current is None:
+                entry["paths"][fmt] = rel_text
+            elif current != rel_text:
+                preferred, alternate = _prefer_manifest_path(current, rel_text)
+                entry["paths"][fmt] = preferred
+                alt_list = entry.setdefault("alternate_paths", {}).setdefault(fmt, [])
+                if alternate not in alt_list:
+                    alt_list.append(alternate)
 
     ordered_assets = sorted(assets.values(), key=lambda item: (item["group"], item["title"], item["id"]))
     manifest = {
@@ -374,6 +395,9 @@ def refresh_paper_bundle(paper_dir: Path) -> dict:
             continue
         for asset in items:
             format_bits = [f"{fmt}: `{path}`" for fmt, path in sorted(asset["paths"].items())]
+            alternate_paths = asset.get("alternate_paths", {})
+            for fmt, paths in sorted(alternate_paths.items()):
+                format_bits.extend(f"{fmt}-alt: `{path}`" for path in sorted(paths))
             csv_variants = asset.get("csv_variants", {})
             format_bits.extend(f"csv-{variant}: `{path}`" for variant, path in sorted(csv_variants.items()))
             lines.append(f"- {asset['title']} ({asset['id']}): " + ", ".join(format_bits))

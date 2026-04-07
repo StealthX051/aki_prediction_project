@@ -33,12 +33,16 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from reporting.display_dictionary import load_display_dictionary
 from reporting.feature_set_display import FeatureSetDisplay
+from reporting.figure_rendering import (
+    feature_set_color,
+    report_figure_style_context,
+    save_report_figure_bundle,
+)
 from artifact_paths import enforce_storage_policy, get_paper_dir, get_results_dir
 from reporting.manuscript_assets import (
     export_dataframe_bundle,
     export_table_bundle,
     refresh_paper_bundle,
-    save_figure_bundle,
     write_docx_sections,
     write_markdown_sections,
     write_pdf_sections,
@@ -581,6 +585,94 @@ def _calibration_bins(
     return mean_pred, frac_pos, counts
 
 
+def _style_plot_axes(ax: plt.Axes) -> None:
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.spines["left"].set_color("#52606d")
+    ax.spines["bottom"].set_color("#52606d")
+    ax.spines["left"].set_linewidth(1.05)
+    ax.spines["bottom"].set_linewidth(1.05)
+
+
+def _fold_curve_columns(model_group: pd.DataFrame) -> Optional[List[str]]:
+    columns = [column for column in ("repeat_id", "outer_fold_id") if column in model_group.columns]
+    if len(columns) != 2:
+        return None
+    if model_group[columns].isna().any().any():
+        return None
+    return columns
+
+
+def _foldwise_curve_stats(model_group: pd.DataFrame, cfg: PlotConfig, curve_kind: str) -> Optional[Dict[str, object]]:
+    fold_columns = _fold_curve_columns(model_group)
+    if fold_columns is None:
+        return None
+
+    mean_x = np.linspace(0.0, 1.0, 101)
+    curves: List[np.ndarray] = []
+    scores: List[float] = []
+    for _, fold_df in model_group.groupby(fold_columns, sort=False):
+        y_true = fold_df["y_true"]
+        if y_true.nunique() < 2:
+            continue
+        prob_col = _select_prob_column(fold_df, cfg)
+        y_prob = fold_df[prob_col]
+        if curve_kind == "roc":
+            fpr, tpr, _ = roc_curve(y_true, y_prob)
+            interp_curve = np.interp(mean_x, fpr, tpr)
+            interp_curve[0] = 0.0
+            interp_curve[-1] = 1.0
+            score = roc_auc_score(y_true, y_prob)
+        else:
+            precision, recall, _ = precision_recall_curve(y_true, y_prob)
+            order = np.argsort(recall)
+            interp_curve = np.interp(mean_x, recall[order], precision[order])
+            score = average_precision_score(y_true, y_prob)
+        curves.append(np.clip(interp_curve, 0.0, 1.0))
+        scores.append(float(score))
+
+    if not curves:
+        return None
+
+    stacked = np.vstack(curves)
+    return {
+        "x": mean_x,
+        "y": stacked.mean(axis=0),
+        "lower": np.clip(stacked.mean(axis=0) - stacked.std(axis=0), 0.0, 1.0),
+        "upper": np.clip(stacked.mean(axis=0) + stacked.std(axis=0), 0.0, 1.0),
+        "score": float(np.mean(scores)),
+        "score_std": float(np.std(scores, ddof=0)),
+        "band": len(curves) > 1,
+    }
+
+
+def _pooled_curve_stats(model_group: pd.DataFrame, cfg: PlotConfig, curve_kind: str) -> Dict[str, object]:
+    y_true = model_group["y_true"]
+    prob_col = _select_prob_column(model_group, cfg)
+    y_prob = model_group[prob_col]
+    if curve_kind == "roc":
+        x_axis, y_axis, _ = roc_curve(y_true, y_prob)
+        score = roc_auc_score(y_true, y_prob)
+    else:
+        precision, recall, _ = precision_recall_curve(y_true, y_prob)
+        order = np.argsort(recall)
+        x_axis, y_axis = recall[order], precision[order]
+        score = average_precision_score(y_true, y_prob)
+    return {
+        "x": np.asarray(x_axis),
+        "y": np.asarray(y_axis),
+        "lower": None,
+        "upper": None,
+        "score": float(score),
+        "score_std": None,
+        "band": False,
+    }
+
+
+def _curve_stats(model_group: pd.DataFrame, cfg: PlotConfig, curve_kind: str) -> Dict[str, object]:
+    return _foldwise_curve_stats(model_group, cfg, curve_kind) or _pooled_curve_stats(model_group, cfg, curve_kind)
+
+
 def plot_curves(df: pd.DataFrame, config: Optional[PlotConfig] = None) -> None:
     """Generate ROC, PR, and calibration plots for each model grouping."""
     cfg = config or PlotConfig.from_env()
@@ -589,21 +681,6 @@ def plot_curves(df: pd.DataFrame, config: Optional[PlotConfig] = None) -> None:
     if df.empty:
         logger.warning("No data left to plot after applying plot filters.")
         return
-
-    # Set Style for NeurIPS (Serif, Academic)
-    plt.style.use('seaborn-v0_8-whitegrid')
-    plt.rcParams['font.family'] = 'serif'
-    plt.rcParams['font.serif'] = ['Times New Roman', 'Times', 'DejaVu Serif']
-    plt.rcParams['axes.labelsize'] = 12
-    plt.rcParams['axes.titlesize'] = 14
-    plt.rcParams['xtick.labelsize'] = 10
-    plt.rcParams['ytick.labelsize'] = 10
-    plt.rcParams['legend.fontsize'] = 10
-    plt.rcParams['axes.spines.top'] = False
-    plt.rcParams['axes.spines.right'] = False
-    plt.rcParams['legend.frameon'] = True
-    plt.rcParams['legend.framealpha'] = 0.9
-    plt.rcParams['legend.edgecolor'] = 'white'
 
     tasks = list(df.groupby(['outcome', 'branch', 'model_name']))
     if not tasks:
@@ -646,162 +723,190 @@ def plot_curves(df: pd.DataFrame, config: Optional[PlotConfig] = None) -> None:
 
         # Helper to save and close figures consistently
         def _save_fig(fig_obj: plt.Figure, path: Path) -> None:
-            save_figure_bundle(fig_obj, path, formats=("svg", "png"), close=True)
+            save_report_figure_bundle(
+                fig_obj,
+                path,
+                formats=("svg", "png"),
+                close=True,
+                mirror_to_primary=True,
+            )
 
         # 1. ROC Curve
-        fig, ax = plt.subplots(figsize=(8, 6), constrained_layout=True)
+        with report_figure_style_context():
+            fig, ax = plt.subplots(figsize=(8, 6), constrained_layout=True)
 
-        auc_scores: List[Tuple[str, float]] = []
-        for feature_set, model_group in valid_groups.items():
-            y_true = model_group['y_true']
-            prob_col = _select_prob_column(model_group, cfg)
-            y_prob = model_group[prob_col]
-            roc_auc = roc_auc_score(y_true, y_prob)
-            auc_scores.append((feature_set, roc_auc))
+            roc_payloads: List[Tuple[str, Dict[str, object]]] = []
+            for feature_set, model_group in valid_groups.items():
+                roc_payloads.append((feature_set, _curve_stats(model_group, cfg, "roc")))
+            roc_payloads.sort(key=lambda item: float(item[1]["score"]), reverse=True)
 
-        auc_scores.sort(key=lambda x: x[1], reverse=True)
+            for feature_set, payload in roc_payloads:
+                color = feature_set_color(feature_set)
+                label_name = FEATURE_SET_MAPPING.get(feature_set, feature_set)
+                score = float(payload["score"])
+                score_std = payload["score_std"]
+                label = f"{label_name} (AUC = {score:.3f})"
+                if score_std is not None and float(score_std) > 0:
+                    label = f"{label_name} (AUC = {score:.3f} +/- {float(score_std):.3f})"
+                ax.plot(payload["x"], payload["y"], label=label, linewidth=2.0, color=color)
+                if payload["band"] and payload["lower"] is not None and payload["upper"] is not None:
+                    ax.fill_between(payload["x"], payload["lower"], payload["upper"], color=color, alpha=0.18)
 
-        for feature_set, roc_auc in auc_scores:
-            model_group = valid_groups[feature_set]
-            y_true = model_group['y_true']
-            prob_col = _select_prob_column(model_group, cfg)
-            y_prob = model_group[prob_col]
-            fpr, tpr, _ = roc_curve(y_true, y_prob)
-
-            label_name = FEATURE_SET_MAPPING.get(feature_set, feature_set)
-            ax.plot(fpr, tpr, label=f'{label_name} (AUC = {roc_auc:.3f})', linewidth=1.5)
-
-        ax.plot([0, 1], [0, 1], 'k--', alpha=0.5, linewidth=1)
-        ax.set_xlabel('False Positive Rate')
-        ax.set_ylabel('True Positive Rate')
-        ax.set_title(f'ROC Curves - {outcome} ({branch}) - {model_name}')
-        ax.legend(loc='lower right')
+            ax.plot([0, 1], [0, 1], linestyle="--", color="#7d8793", linewidth=1.1, label="Chance")
+            ax.set_xlabel('False Positive Rate')
+            ax.set_ylabel('True Positive Rate')
+            ax.set_title(f'ROC Curves - {outcome} ({branch}) - {model_name}')
+            ax.legend(loc='lower right')
+            _style_plot_axes(ax)
         _save_fig(fig, FIGURES_DIR / f'roc_{outcome}_{branch}_{model_name}.png')
 
         # 2. PR Curve
-        fig, ax = plt.subplots(figsize=(8, 6), constrained_layout=True)
+        with report_figure_style_context():
+            fig, ax = plt.subplots(figsize=(8, 6), constrained_layout=True)
 
-        auprc_scores: List[Tuple[str, float]] = []
-        class_balance: Dict[str, Tuple[int, int]] = {}
-        for feature_set, model_group in valid_groups.items():
-            y_true = model_group['y_true']
-            prob_col = _select_prob_column(model_group, cfg)
-            y_prob = model_group[prob_col]
-            pr_auc = average_precision_score(y_true, y_prob)
-            auprc_scores.append((feature_set, pr_auc))
-            if cfg.show_class_balance:
-                pos = int((y_true == 1).sum())
-                neg = int((y_true == 0).sum())
-                class_balance[feature_set] = (pos, neg)
-
-        auprc_scores.sort(key=lambda x: x[1], reverse=True)
-
-        prevalence = None
-        if cfg.show_class_balance:
-            # Use the first valid group for prevalence baseline (they share outcome/branch/model)
+            pr_payloads: List[Tuple[str, Dict[str, object]]] = []
+            class_balance: Dict[str, Tuple[int, int]] = {}
             for feature_set, model_group in valid_groups.items():
-                y_true = model_group['y_true']
-                prevalence = float((y_true == 1).mean())
+                pr_payloads.append((feature_set, _curve_stats(model_group, cfg, "pr")))
+                if cfg.show_class_balance:
+                    pos = int((model_group['y_true'] == 1).sum())
+                    neg = int((model_group['y_true'] == 0).sum())
+                    class_balance[feature_set] = (pos, neg)
+
+            pr_payloads.sort(key=lambda item: float(item[1]["score"]), reverse=True)
+
+            prevalence = None
+            for _feature_set, model_group in valid_groups.items():
+                prevalence = float((model_group['y_true'] == 1).mean())
                 break
+            if prevalence is not None:
+                ax.axhline(
+                    prevalence,
+                    color="#7d8793",
+                    linestyle="--",
+                    linewidth=1.1,
+                    alpha=0.8,
+                    label=f'Prevalence = {prevalence:.3f}',
+                )
 
-        if prevalence is not None:
-            ax.axhline(prevalence, color='gray', linestyle='--', linewidth=1, alpha=0.7, label=f'Prevalence = {prevalence:.3f}')
+            for feature_set, payload in pr_payloads:
+                color = feature_set_color(feature_set)
+                label_name = FEATURE_SET_MAPPING.get(feature_set, feature_set)
+                score = float(payload["score"])
+                score_std = payload["score_std"]
+                cb_suffix = ""
+                if cfg.show_class_balance and feature_set in class_balance:
+                    pos, neg = class_balance[feature_set]
+                    cb_suffix = f" (pos={pos}, neg={neg})"
+                label = f'{label_name} (AP = {score:.3f})'
+                if score_std is not None and float(score_std) > 0:
+                    label = f'{label_name} (AP = {score:.3f} +/- {float(score_std):.3f})'
+                ax.step(payload["x"], payload["y"], where="post", label=f"{label}{cb_suffix}", linewidth=2.0, color=color)
+                if payload["band"] and payload["lower"] is not None and payload["upper"] is not None:
+                    ax.fill_between(payload["x"], payload["lower"], payload["upper"], color=color, alpha=0.18)
 
-        for feature_set, pr_auc in auprc_scores:
-            model_group = valid_groups[feature_set]
-            y_true = model_group['y_true']
-            prob_col = _select_prob_column(model_group, cfg)
-            y_prob = model_group[prob_col]
-            prec, rec, _ = precision_recall_curve(y_true, y_prob)
-
-            label_name = FEATURE_SET_MAPPING.get(feature_set, feature_set)
-            cb_suffix = ""
-            if cfg.show_class_balance and feature_set in class_balance:
-                pos, neg = class_balance[feature_set]
-                cb_suffix = f" (pos={pos}, neg={neg})"
-            ax.step(rec, prec, where="post", label=f'{label_name} (AP = {pr_auc:.3f}){cb_suffix}', linewidth=1.5)
-
-        ax.set_xlabel('Recall')
-        ax.set_ylabel('Precision')
-        ax.set_title(f'PR Curves - {outcome} ({branch}) - {model_name}')
-        ax.legend(loc='lower left')
+            ax.set_xlabel('Recall')
+            ax.set_ylabel('Precision')
+            ax.set_title(f'PR Curves - {outcome} ({branch}) - {model_name}')
+            ax.legend(loc='lower left')
+            _style_plot_axes(ax)
         _save_fig(fig, FIGURES_DIR / f'pr_{outcome}_{branch}_{model_name}.png')
 
         # 3. Calibration Curve
-        fig, ax = plt.subplots(figsize=(8, 6), constrained_layout=True)
-        all_probs: List[float] = []
-        max_prob_seen = 0.0
-        for feature_set, model_group in valid_groups.items():
-            y_true = model_group['y_true']
-            prob_col = _select_prob_column(model_group, cfg)
-            y_prob = model_group[prob_col]
-            prob_pred, prob_true, counts = _calibration_bins(y_true, y_prob, cfg)
-            all_probs.extend(y_prob.tolist())
-            max_prob_seen = max(max_prob_seen, y_prob.max())
+        with report_figure_style_context():
+            fig, ax = plt.subplots(figsize=(8, 6), constrained_layout=True)
+            all_probs: List[float] = []
+            max_prob_seen = 0.0
+            for feature_set, model_group in valid_groups.items():
+                y_true = model_group['y_true']
+                prob_col = _select_prob_column(model_group, cfg)
+                y_prob = model_group[prob_col]
+                prob_pred, prob_true, counts = _calibration_bins(y_true, y_prob, cfg)
+                all_probs.extend(y_prob.tolist())
+                max_prob_seen = max(max_prob_seen, y_prob.max())
 
-            label_name = FEATURE_SET_MAPPING.get(feature_set, feature_set)
-            ax.plot(prob_pred, prob_true, marker='o', label=label_name, linewidth=1, markersize=4, alpha=0.7)
+                label_name = FEATURE_SET_MAPPING.get(feature_set, feature_set)
+                color = feature_set_color(feature_set)
+                ax.plot(
+                    prob_pred,
+                    prob_true,
+                    marker='o',
+                    label=label_name,
+                    linewidth=1.8,
+                    markersize=4.5,
+                    alpha=0.82,
+                    color=color,
+                )
 
-            if cfg.show_bin_counts:
-                for x, y, c in zip(prob_pred, prob_true, counts):
-                    if c > cfg.max_count_to_annotate:
-                        continue
-                    ax.annotate(
-                        str(c),
-                        (x, y),
-                        textcoords="offset points",
-                        xytext=(0, 6),
-                        ha='center',
-                        fontsize=7,
-                        color='gray',
-                    )
+                if cfg.show_bin_counts:
+                    for x, y, c in zip(prob_pred, prob_true, counts):
+                        if c > cfg.max_count_to_annotate:
+                            continue
+                        ax.annotate(
+                            str(c),
+                            (x, y),
+                            textcoords="offset points",
+                            xytext=(0, 6),
+                            ha='center',
+                            fontsize=7,
+                            color='#52606d',
+                        )
 
-        ax.plot([0, 1], [0, 1], 'k--', alpha=0.5, linewidth=1)
-        ax.set_xlabel('Mean Predicted Probability')
-        ax.set_ylabel('Fraction of Positives')
-        ax.set_title(f'Calibration Curves - {outcome} ({branch}) - {model_name}')
+            ax.plot([0, 1], [0, 1], linestyle="--", color="#7d8793", linewidth=1.1)
+            ax.set_xlabel('Mean Predicted Probability')
+            ax.set_ylabel('Fraction of Positives')
+            ax.set_title(f'Calibration Curves - {outcome} ({branch}) - {model_name}')
+            _style_plot_axes(ax)
 
-        if max_prob_seen > 0:
-            auto_xmax = min(1.0, math.ceil((max_prob_seen * 1.05) * 10) / 10.0)
-            auto_xmax = max(auto_xmax, 0.1)
-            auto_xmax = min(auto_xmax, 0.3)
-            ax.set_xlim(0, auto_xmax)
-            if cfg.show_xlim_inset:
-                inset_ax = inset_axes(ax, width="35%", height="35%", loc="upper left", borderpad=1.2)
-                inset_ax.plot([0, 1], [0, 1], 'k--', alpha=0.4, linewidth=1)
-                inset_ax.set_xlim(0, 1)
-                inset_ax.set_ylim(ax.get_ylim())
-                inset_ax.set_xticks([0, 0.5, 1.0])
-                inset_ax.set_yticks([])
-                inset_ax.tick_params(axis='both', labelsize=7)
-                inset_ax.set_title("Full range", fontsize=7)
-                inset_ax.grid(False)
-                for feature_set, model_group in valid_groups.items():
-                    y_true = model_group['y_true']
-                    prob_col = _select_prob_column(model_group, cfg)
-                    y_prob = model_group[prob_col]
-                    prob_pred, prob_true, _ = _calibration_bins(y_true, y_prob, cfg)
-                    inset_ax.plot(prob_pred, prob_true, linewidth=1, alpha=0.4)
+            if max_prob_seen > 0:
+                auto_xmax = min(1.0, math.ceil((max_prob_seen * 1.05) * 10) / 10.0)
+                auto_xmax = max(auto_xmax, 0.1)
+                auto_xmax = min(auto_xmax, 0.3)
+                ax.set_xlim(0, auto_xmax)
+                if cfg.show_xlim_inset:
+                    inset_ax = inset_axes(ax, width="35%", height="35%", loc="upper left", borderpad=1.2)
+                    inset_ax.plot([0, 1], [0, 1], linestyle="--", color="#7d8793", linewidth=1.0, alpha=0.6)
+                    inset_ax.set_xlim(0, 1)
+                    inset_ax.set_ylim(ax.get_ylim())
+                    inset_ax.set_xticks([0, 0.5, 1.0])
+                    inset_ax.set_yticks([])
+                    inset_ax.tick_params(axis='both', labelsize=7)
+                    inset_ax.set_title("Full range", fontsize=7)
+                    inset_ax.grid(False)
+                    _style_plot_axes(inset_ax)
+                    for feature_set, model_group in valid_groups.items():
+                        y_true = model_group['y_true']
+                        prob_col = _select_prob_column(model_group, cfg)
+                        y_prob = model_group[prob_col]
+                        prob_pred, prob_true, _ = _calibration_bins(y_true, y_prob, cfg)
+                        inset_ax.plot(
+                            prob_pred,
+                            prob_true,
+                            linewidth=1.0,
+                            alpha=0.5,
+                            color=feature_set_color(feature_set),
+                        )
 
-        if cfg.show_prob_hist and all_probs:
-            rug_ax = inset_axes(
-                ax,
-                width="100%",
-                height="22%",
-                loc="lower left",
-                borderpad=0,
-                bbox_to_anchor=(0, -0.32, 1, 0.25),
-                bbox_transform=ax.transAxes,
-            )
-            rug_ax.hist(all_probs, bins=min(20, cfg.n_bins * 2), color="#4c72b0", alpha=0.35, edgecolor="none")
-            rug_ax.set_xlim(ax.get_xlim())
-            rug_ax.set_yticks([])
-            rug_ax.set_xticks(ax.get_xticks())
-            rug_ax.set_xlabel('Predicted probability distribution', fontsize=8)
-            rug_ax.tick_params(axis='both', labelsize=7)
-            rug_ax.grid(False)
+            if cfg.show_prob_hist and all_probs:
+                rug_ax = inset_axes(
+                    ax,
+                    width="100%",
+                    height="22%",
+                    loc="lower left",
+                    borderpad=0,
+                    bbox_to_anchor=(0, -0.32, 1, 0.25),
+                    bbox_transform=ax.transAxes,
+                )
+                rug_ax.hist(all_probs, bins=min(20, cfg.n_bins * 2), color="#2d6ba3", alpha=0.30, edgecolor="none")
+                rug_ax.set_xlim(ax.get_xlim())
+                rug_ax.set_yticks([])
+                rug_ax.set_xticks(ax.get_xticks())
+                rug_ax.set_xlabel('Predicted probability distribution', fontsize=8)
+                rug_ax.tick_params(axis='both', labelsize=7)
+                rug_ax.grid(False)
+                _style_plot_axes(rug_ax)
 
-        ax.legend(loc='best')
+            ax.legend(loc='best')
         _save_fig(fig, FIGURES_DIR / f'calibration_{outcome}_{branch}_{model_name}.png')
 
     Parallel(n_jobs=cfg.n_jobs)(delayed(_plot_group)(key, group) for key, group in tasks)

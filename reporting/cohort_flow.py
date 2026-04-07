@@ -3,8 +3,9 @@
 The flow diagram visualizes how many cases remain after each filtering step in
 ``data_preparation.step_01_cohort_construction``. The module accepts structured
 counts saved to JSON (for example by persisting print statements from
-``step_01``) and renders a Graphviz CONSORT-style flow chart to
-``results/figures``.
+``step_01``) and renders a Graphviz-first CONSORT-style flow chart to
+``results/figures``. When Graphviz is unavailable, the module falls back to a
+Matplotlib renderer so `.svg`/`.png` outputs still succeed.
 
 Expected JSON structure (flexible):
 
@@ -42,8 +43,12 @@ from pathlib import Path
 import textwrap
 from typing import Any, Iterable, List, Mapping, MutableSequence, Optional, Sequence, Tuple, Union
 
+import matplotlib.pyplot as plt
+from matplotlib.patches import FancyBboxPatch
+
 from artifact_paths import enforce_storage_policy, get_paper_dir, get_results_dir
 from reporting.display_dictionary import DisplayDictionary, load_display_dictionary
+from reporting.figure_rendering import mirror_figure_variants, report_figure_style_context, save_report_figure_bundle
 from reporting.manuscript_assets import PNG_DPI, refresh_paper_bundle
 
 logger = logging.getLogger(__name__)
@@ -54,11 +59,6 @@ PAPER_DIR = get_paper_dir(PROJECT_ROOT)
 FIGURES_DIR = PAPER_DIR / "figures"
 METADATA_DIR = PAPER_DIR / "metadata"
 DEFAULT_COUNTS_PATH = METADATA_DIR / "cohort_flow_counts.json"
-MISSING_DOT_MESSAGE = (
-    "Graphviz 'dot' binary not found. Activate the 'aki_prediction_project' "
-    "Conda environment and run 'conda env update -f environment.yml --prune', "
-    "then rerun the cohort flow renderer."
-)
 
 
 @dataclass(frozen=True)
@@ -566,11 +566,206 @@ def _cohort_flow_dot(stages: Sequence[CohortStage], outcome_split: Optional[Outc
     return "\n".join(lines) + "\n"
 
 
-def _dot_binary() -> str:
-    dot_binary = shutil.which("dot")
-    if dot_binary is None:
-        raise RuntimeError(MISSING_DOT_MESSAGE)
-    return dot_binary
+def _box_height(lines: Sequence[str], *, line_height: float, minimum: float) -> float:
+    return max(minimum, 0.045 + len(lines) * line_height)
+
+
+def _draw_box(
+    ax: plt.Axes,
+    *,
+    x: float,
+    y: float,
+    width: float,
+    height: float,
+    lines: Sequence[str],
+    facecolor: str,
+    edgecolor: str,
+    fontsize: float,
+    dashed: bool = False,
+    centered: bool = True,
+) -> None:
+    patch = FancyBboxPatch(
+        (x, y),
+        width,
+        height,
+        boxstyle="round,pad=0.018,rounding_size=0.02",
+        linewidth=1.35,
+        linestyle=(0, (4, 2)) if dashed else "solid",
+        edgecolor=edgecolor,
+        facecolor=facecolor,
+    )
+    ax.add_patch(patch)
+    ax.text(
+        x + width / 2 if centered else x + 0.025,
+        y + height / 2,
+        "\n".join(lines),
+        ha="center" if centered else "left",
+        va="center",
+        fontsize=fontsize,
+        fontweight="bold" if centered else "normal",
+        linespacing=1.35,
+        color="#1f2933",
+    )
+
+
+def _draw_arrow(ax: plt.Axes, start: tuple[float, float], end: tuple[float, float]) -> None:
+    ax.annotate(
+        "",
+        xy=end,
+        xytext=start,
+        arrowprops={"arrowstyle": "-|>", "lw": 1.5, "color": "#607286", "shrinkA": 2, "shrinkB": 2},
+    )
+
+
+def _draw_cohort_flow_fallback(
+    stages: Sequence[CohortStage],
+    outcome_split: Optional[OutcomeSplit],
+    title: Optional[str],
+) -> plt.Figure:
+    stage_lines = [_stage_node_lines(stage) for stage in stages]
+    exclusion_lines = [_exclusion_node_lines(stage) for stage in stages]
+    split_lines = None
+    if outcome_split:
+        negative_label, positive_label = _split_labels(outcome_split)
+        split_lines = (
+            _split_node_lines(negative_label, outcome_split.false_count),
+            _split_node_lines(positive_label, outcome_split.true_count),
+        )
+
+    fig, ax = plt.subplots(figsize=(11.0, max(8.2, 2.2 + len(stages) * 1.55)))
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+    ax.axis("off")
+
+    main_x = 0.08
+    main_w = 0.42
+    side_x = 0.61
+    side_w = 0.29
+    top_y = 0.86
+    bottom_y = 0.22 if outcome_split else 0.08
+    stage_centers = (
+        [0.50]
+        if len(stages) == 1
+        else list(reversed([bottom_y + (top_y - bottom_y) * idx / (len(stages) - 1) for idx in range(len(stages))]))
+    )
+
+    stage_boxes: List[tuple[float, float, float, float]] = []
+    exclusion_boxes: List[Optional[tuple[float, float, float, float]]] = []
+    for idx, lines in enumerate(stage_lines):
+        height = _box_height(lines, line_height=0.035, minimum=0.12)
+        center_y = stage_centers[idx]
+        y = max(0.05, center_y - height / 2)
+        stage_boxes.append((main_x, y, main_w, height))
+
+        if exclusion_lines[idx]:
+            exclusion_height = _box_height(exclusion_lines[idx], line_height=0.028, minimum=0.14)
+            exclusion_y = max(0.05, center_y - exclusion_height / 2)
+            exclusion_boxes.append((side_x, exclusion_y, side_w, exclusion_height))
+        else:
+            exclusion_boxes.append(None)
+
+    with report_figure_style_context():
+        for idx, stage in enumerate(stages):
+            x, y, width, height = stage_boxes[idx]
+            fillcolor = "#f2f7fb" if idx == len(stages) - 1 else "#f8fafc"
+            _draw_box(
+                ax,
+                x=x,
+                y=y,
+                width=width,
+                height=height,
+                lines=stage_lines[idx],
+                facecolor=fillcolor,
+                edgecolor="#607286",
+                fontsize=10.2,
+            )
+
+            exclusion_box = exclusion_boxes[idx]
+            if exclusion_box is not None:
+                ex_x, ex_y, ex_width, ex_height = exclusion_box
+                _draw_box(
+                    ax,
+                    x=ex_x,
+                    y=ex_y,
+                    width=ex_width,
+                    height=ex_height,
+                    lines=exclusion_lines[idx],
+                    facecolor="#fbfcfd",
+                    edgecolor="#7b8b99",
+                    fontsize=8.7,
+                    dashed=True,
+                    centered=False,
+                )
+                stage_mid_y = y + height / 2
+                ax.plot(
+                    [x + width, ex_x],
+                    [stage_mid_y, stage_mid_y],
+                    color="#7b8b99",
+                    lw=1.2,
+                    linestyle=(0, (3, 2)),
+                )
+
+        for idx in range(len(stage_boxes) - 1):
+            x, y, width, _height = stage_boxes[idx]
+            next_x, next_y, next_width, next_height = stage_boxes[idx + 1]
+            _draw_arrow(
+                ax,
+                (x + width / 2, y),
+                (next_x + next_width / 2, next_y + next_height),
+            )
+
+        if outcome_split and split_lines is not None:
+            branch_height = max(
+                _box_height(split_lines[0], line_height=0.035, minimum=0.11),
+                _box_height(split_lines[1], line_height=0.035, minimum=0.11),
+            )
+            left_box = (0.07, 0.04, 0.34, branch_height)
+            right_box = (0.45, 0.04, 0.34, branch_height)
+            _draw_box(
+                ax,
+                x=left_box[0],
+                y=left_box[1],
+                width=left_box[2],
+                height=left_box[3],
+                lines=split_lines[0],
+                facecolor="#f8fafc",
+                edgecolor="#607286",
+                fontsize=9.8,
+            )
+            _draw_box(
+                ax,
+                x=right_box[0],
+                y=right_box[1],
+                width=right_box[2],
+                height=right_box[3],
+                lines=split_lines[1],
+                facecolor="#eef5fb",
+                edgecolor="#607286",
+                fontsize=9.8,
+            )
+
+            parent_x, parent_y, parent_w, _parent_h = stage_boxes[-1]
+            split_y = left_box[1] + left_box[3] + 0.05
+            parent_center = parent_x + parent_w / 2
+            left_center = left_box[0] + left_box[2] / 2
+            right_center = right_box[0] + right_box[2] / 2
+            ax.plot([parent_center, parent_center], [parent_y, split_y], color="#607286", lw=1.5)
+            ax.plot([left_center, right_center], [split_y, split_y], color="#607286", lw=1.5)
+            _draw_arrow(ax, (left_center, split_y), (left_center, left_box[1] + left_box[3]))
+            _draw_arrow(ax, (right_center, split_y), (right_center, right_box[1] + right_box[3]))
+
+        if title:
+            ax.text(
+                0.5,
+                0.985,
+                title,
+                ha="center",
+                va="top",
+                fontsize=14,
+                fontweight="bold",
+                color="#1f2933",
+            )
+    return fig
 
 
 def render_cohort_flow(
@@ -601,7 +796,6 @@ def render_cohort_flow(
     dot_path.write_text(_cohort_flow_dot(stages, outcome_split, title), encoding="utf-8")
 
     saved_paths = [dot_path]
-    dot_binary = _dot_binary()
     requested_formats: List[str] = []
     seen_formats = set()
     for fmt in formats:
@@ -611,14 +805,32 @@ def render_cohort_flow(
         requested_formats.append(normalized)
         seen_formats.add(normalized)
 
-    for fmt in requested_formats:
-        output_path = base_path.with_suffix(f".{fmt}")
-        command = [dot_binary, f"-T{fmt}", str(dot_path), "-o", str(output_path)]
-        if fmt == "png":
-            command.insert(1, f"-Gdpi={PNG_DPI}")
-        subprocess.run(command, check=True)
-        saved_paths.append(output_path)
-        logger.info("Saved cohort flow diagram to %s", output_path)
+    dot_binary = shutil.which("dot")
+    if dot_binary is not None:
+        for fmt in requested_formats:
+            output_path = base_path.with_suffix(f".{fmt}")
+            command = [dot_binary, f"-T{fmt}", str(dot_path), "-o", str(output_path)]
+            if fmt == "png":
+                command.insert(1, f"-Gdpi={PNG_DPI}")
+            subprocess.run(command, check=True)
+            saved_paths.append(output_path)
+            logger.info("Saved cohort flow diagram to %s", output_path)
+        mirror_figure_variants(base_path, formats=requested_formats)
+    elif requested_formats:
+        fig = _draw_cohort_flow_fallback(stages, outcome_split, title)
+        try:
+            saved_paths.extend(
+                save_report_figure_bundle(
+                    fig,
+                    base_path,
+                    formats=requested_formats,
+                    close=True,
+                    mirror_to_primary=True,
+                )
+            )
+        finally:
+            plt.close(fig)
+        logger.warning("Graphviz 'dot' binary not found; used Matplotlib fallback for %s.", base_path)
 
     refresh_paper_bundle(PAPER_DIR)
     return saved_paths

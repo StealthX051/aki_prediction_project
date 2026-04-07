@@ -89,12 +89,26 @@ Result locations:
   `results_*_{main,delta}.csv`: per-outcome/branch/model table bundles.
 - `results/catch22/paper/figures/`: ROC, PR, calibration, and cohort-flow
   figures saved as `.svg` and publication `.png`.
+- `results/catch22/paper/figures/primary_figures/`: mirrored copies of the
+  top-level manuscript figures for easier bundle download.
+- `results/catch22/paper/figures/shap_scatter/` and
+  `results/catch22/paper/figures/shap_scatter_featured/`: optional report-time
+  XGBoost SHAP raw-value scatter plots rebuilt from saved bundles.
 
 Reporting layout/styling notes:
 - Feature-set inputs render as compact component columns (Preop, AWP, CO2, ECG, Pleth) with widths scaled to the header text plus padding; metric columns stay wider for readability.
 - DOCX exports default to landscape and apply the same dynamic component widths; metric columns keep a roomy fixed width.
 - PDF tables apply matching width fractions (component vs. metric) to keep the checkbox grid tight without crowding performance columns.
 - Heatmaps use darker, more visible gradients (greens for higher-is-better, reds for lower-is-better; Brier uses the inverse palette).
+- ROC and PR figures now use foldwise mean curves with uncertainty bands when
+  `repeat_id` and `outer_fold_id` metadata are present in the saved test
+  predictions; otherwise plotting falls back to the pooled held-out curves.
+
+Optional richer XGBoost SHAP figures can be rebuilt without retraining:
+
+```bash
+python -m reporting.make_shap_figures
+```
 
 ## Descriptive figures bundle
 Run all descriptive artifacts (preop demographics table, cohort flow diagram,
