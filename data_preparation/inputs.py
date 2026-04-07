@@ -49,15 +49,13 @@ FULL_FEATURE_TARGET_SR = 10
 # name of column for outcome variable
 OUTCOME = DEFAULT_OUTCOME_COLUMN
 
-# === NEW: AEON export controls ===
-EXPORT_AEON = False
+# === Experimental Aeon controls ===
 AEON_OUT_DIR = os.getenv("AEON_OUT_DIR", "outputs/aeon")
 AEON_SAVE_FORMATS = ["nested_pkl", "numpy3d_npz", "np_list_pkl"]
 AEON_PAD_POLICY = "in_memory_pad" # 'aeon_padding_transformer','in_memory_pad','none'
 AEON_PAD_LENGTH = 57600
 AEON_PAD_FILL = 0
 AEON_STRICT_CHANNELS = True
-AEON_COMMON_SR = 100.0  # Kept for reference
 AEON_WINDOW_POLICY = "intersection"
 AEON_FIXED_LENGTH = 57600  # Target length (16 hours @ 1 Hz)
 

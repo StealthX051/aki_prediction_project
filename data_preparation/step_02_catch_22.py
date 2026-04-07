@@ -1,14 +1,12 @@
 import os
 import logging
 from multiprocessing import Pool, cpu_count
-from typing import Dict, Any, Tuple, Optional, List
+from typing import Dict, Any, Tuple
 import numpy as np
 import pandas as pd
-import vitaldb
 import pycatch22
 from tqdm import tqdm
 import time
-from collections import defaultdict
 
 from data_preparation.artifact_metadata import (
     STEP_01_COHORT_ARTIFACT,
@@ -23,38 +21,28 @@ from data_preparation.inputs import (
     WAVEFORM_SUBSTITUTIONS, 
     WIN_SEC,
     SLIDE_SEC,
-    OUTCOME,
-    EXPORT_AEON,
-    AEON_COMMON_SR,
-    GENERATE_FULL_FEATURES,
     GENERATE_FULL_FEATURES,
     GENERATE_WINDOWED_FEATURES,
     FULL_FEATURE_TARGET_SR
 )
 from data_preparation.waveform_processing import WAVEFORM_SPECS, process_signal, harmonize_sr, load_and_validate_case
-from data_preparation.aeon_io import collate_and_save_aeon, AeonExportConfig, AeonSeriesPayload
 
 COHORT_REQUIRED_COLUMNS = ["caseid", "opstart", "opend"]
-
-# Create mapping from VitalDB ID to Spec Key
-ID_TO_SPEC_KEY = {spec['id']: key for key, spec in WAVEFORM_SPECS.items()}
 
 # Validation
 if GENERATE_WINDOWED_FEATURES:
     assert WIN_SEC is not None and SLIDE_SEC is not None, "WIN_SEC and SLIDE_SEC must be set for windowed extraction."
 
-def _process_case(case: Tuple[int, float, float, str]) -> Tuple[Dict[str, Any], Dict[str, float], Dict[str, Optional[AeonSeriesPayload]]]:
+def _process_case(case: Tuple[int, float, float, str]) -> Tuple[Dict[str, Any], Dict[str, float]]:
     """
     Processes a single case/waveform pair.
     Returns:
         - results: Dict with keys 'full' and/or 'windowed' containing feature dicts.
         - timings: Dict of timing metrics.
-        - payloads: Dict with keys 'full' and/or 'windowed' containing Aeon payloads.
     """
     caseid, opstart, opend, waveform_key = case
     timings = {}
     results = {}
-    payloads = {}
     
     start = time.perf_counter()
 
@@ -64,7 +52,7 @@ def _process_case(case: Tuple[int, float, float, str]) -> Tuple[Dict[str, Any], 
         
         if error_msg:
              err = {'caseid': caseid, 'waveform': waveform_key, 'error': error_msg}
-             return {'error': err}, timings, {}
+             return {'error': err}, timings
         
         spec = WAVEFORM_SPECS[spec_key_loaded]
         end = time.perf_counter()
@@ -81,7 +69,7 @@ def _process_case(case: Tuple[int, float, float, str]) -> Tuple[Dict[str, Any], 
         nan_pct = np.mean(nan_mask)
         if nan_pct > 0.05:
             err = {'caseid': caseid, 'waveform': waveform_key, 'error': 'invalid_signal_gt_5_pct_nan'}
-            return {'error': err}, timings, {}
+            return {'error': err}, timings
         
         if nan_pct > 0:
             x = np.arange(seg.size)
@@ -91,7 +79,7 @@ def _process_case(case: Tuple[int, float, float, str]) -> Tuple[Dict[str, Any], 
         seg, error_msg = process_signal(seg, spec, caseid, waveform_key)
         if error_msg:
              err = {'caseid': caseid, 'waveform': waveform_key, 'error': error_msg}
-             return {'error': err}, timings, {}
+             return {'error': err}, timings
 
         target_sr = spec['target_sr']
 
@@ -111,17 +99,6 @@ def _process_case(case: Tuple[int, float, float, str]) -> Tuple[Dict[str, Any], 
                 out['waveform'] = waveform_key 
                 results['full'] = out
                 
-                if EXPORT_AEON:
-                    seg_out = seg.astype(np.float32, copy=False)
-                    current_sr = target_sr
-                    if AEON_COMMON_SR:
-                        seg_out = harmonize_sr(seg_out, target_sr, AEON_COMMON_SR)
-                        current_sr = AEON_COMMON_SR
-                    
-                    payloads['full'] = AeonSeriesPayload(
-                        caseid=caseid, waveform=waveform_key,
-                        target_sr=current_sr, seg_full=seg_out, length=seg_out.size
-                    )
             timings['process_full'] = time.perf_counter() - start_full
 
         # === WINDOWED FEATURE EXTRACTION ===
@@ -134,21 +111,13 @@ def _process_case(case: Tuple[int, float, float, str]) -> Tuple[Dict[str, Any], 
                 results['windowed'] = {'caseid': caseid, 'waveform': waveform_key, 'error': 'segment_too_short_for_window'}
             else:
                 feats_list = []
-                win_vals = []
-                valid_mask = []
                 
                 # Pre-calculate window indices
                 window_starts = range(0, seg.size - win_samp + 1, slide_samp)
-                n_potential_windows = (seg.size - win_samp + slide_samp) // slide_samp
                 
                 for i in window_starts:
                     win = seg[i:i + win_samp]
                     is_valid = (not np.isnan(win).all()) and (np.nanstd(win) >= 1e-6)
-                    
-                    if EXPORT_AEON:
-                        valid_mask.append(is_valid)
-                        if is_valid:
-                            win_vals.append(win.astype(np.float32, copy=False))
                     
                     if is_valid:
                         all_feature_results = pycatch22.catch22_all(win, catch24=True)
@@ -170,38 +139,14 @@ def _process_case(case: Tuple[int, float, float, str]) -> Tuple[Dict[str, Any], 
                     out['waveform'] = waveform_key
                     results['windowed'] = out
 
-                    if EXPORT_AEON:
-                        # Fill remainder of mask
-                        valid_mask.extend([False] * (n_potential_windows - len(valid_mask)))
-                        
-                        current_sr = target_sr
-                        final_win_samp = win_samp
-                        win_mat = np.empty((0, final_win_samp), dtype=np.float32)
-
-                        if win_vals:
-                            if AEON_COMMON_SR and target_sr != AEON_COMMON_SR:
-                                win_vals = [harmonize_sr(w, target_sr, AEON_COMMON_SR) for w in win_vals]
-                                current_sr = AEON_COMMON_SR
-                                final_win_samp = win_vals[0].shape[0]
-
-                            win_mat = np.vstack(win_vals)
-                        elif AEON_COMMON_SR:
-                             final_win_samp = int(win_samp * (AEON_COMMON_SR / target_sr))
-
-                        payloads['windowed'] = AeonSeriesPayload(
-                            caseid=caseid, waveform=waveform_key,
-                            target_sr=current_sr, win_mat=win_mat,
-                            valid_window_mask=np.array(valid_mask, dtype=bool),
-                            length=final_win_samp
-                        )
             timings['process_windowed'] = time.perf_counter() - start_win
 
-        return results, timings, payloads
+        return results, timings
 
     except Exception as e:
         logging.error(f"Error processing case {caseid} waveform {waveform_key}: {e}")
         err = {'caseid': caseid, 'waveform': waveform_key, 'error': str(e)}
-        return {'error': err}, timings, {}
+        return {'error': err}, timings
 
 def main():
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -301,14 +246,6 @@ def main():
         .itertuples(index=False, name=None)
     )
     
-    # Outcome map for Aeon
-    caseid_to_outcome = {}
-    if not cohort_to_process.empty:
-        caseid_to_outcome = pd.Series(
-            cohort_to_process[OUTCOME].values, 
-            index=cohort_to_process['caseid']
-        ).drop_duplicates().to_dict()
-
     logging.info(f"{len(cohort_to_process)} pairs to process.")
 
     # Determine number of processes
@@ -321,17 +258,11 @@ def main():
     
     logging.info(f"Using {num_processes} worker processes.")
     
-    # Aeon buffers
-    aeon_buffers = {
-        'full': defaultdict(dict),
-        'windowed': defaultdict(lambda: defaultdict(dict))
-    }
-
     timings = []
     
     with Pool(processes=num_processes) as pool:
         with tqdm(total=len(cases_to_process), desc="Extracting Features") as pbar:
-            for result_dict, timing, payload_dict in pool.imap_unordered(_process_case, cases_to_process):
+            for result_dict, timing in pool.imap_unordered(_process_case, cases_to_process):
                 timings.append(timing)
                 
                 # Handle global error (loading failure)
@@ -346,19 +277,6 @@ def main():
                             outputs_config[mode]['errors'].append(res)
                         else:
                             outputs_config[mode]['features'].append(res)
-                    
-                    # Distribute Aeon payloads
-                    if EXPORT_AEON:
-                        if 'full' in payload_dict:
-                             p = payload_dict['full']
-                             aeon_buffers['full'][p.caseid][p.waveform] = p.seg_full
-                        
-                        if 'windowed' in payload_dict:
-                            p = payload_dict['windowed']
-                            valid_idx = np.flatnonzero(p.valid_window_mask)
-                            for local_wi, global_wi in enumerate(valid_idx):
-                                aeon_buffers['windowed'][(p.caseid, global_wi)][p.waveform] = p.win_mat[local_wi]
-
                 pbar.update()
 
     # Save results for each mode
@@ -383,29 +301,6 @@ def main():
             logging.info(f"[{mode}] Saved {len(features_df)} features.")
         else:
             logging.info(f"[{mode}] No new features to save.")
-
-    # Aeon Export
-    if EXPORT_AEON:
-        if GENERATE_FULL_FEATURES and aeon_buffers['full']:
-            collate_and_save_aeon(
-                case_buffers=aeon_buffers['full'],
-                window_buffers={},
-                caseid_to_outcome=caseid_to_outcome,
-                channel_order=MANDATORY_WAVEFORMS,
-                is_windowed=False
-            )
-        
-        if GENERATE_WINDOWED_FEATURES and aeon_buffers['windowed']:
-            # We need to temporarily override AEON_OUT_DIR or file names to avoid collision?
-            # aeon_io.py saves to fixed filenames like 'X_nonwindowed.npz' and 'X_windowed.npz'.
-            # So they won't collide.
-            collate_and_save_aeon(
-                case_buffers={},
-                window_buffers=aeon_buffers['windowed'],
-                caseid_to_outcome=caseid_to_outcome,
-                channel_order=MANDATORY_WAVEFORMS,
-                is_windowed=True
-            )
 
     logging.info("Processing complete.")
 

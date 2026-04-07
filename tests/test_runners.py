@@ -1,212 +1,127 @@
-import os
-import shutil
-import subprocess
-import sys
 from pathlib import Path
+import sys
 
-import pandas as pd
+import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+import run_catch22
 
 
-def test_run_experiments_exits_nonzero_and_skips_reporting_on_validation_failures(tmp_path: Path):
-    results_dir = tmp_path / "results" / "catch22" / "experiments"
-    paper_dir = tmp_path / "results" / "catch22" / "paper"
-    stale_predictions_dir = (
-        results_dir
-        / "models"
-        / "xgboost"
-        / "any_aki"
-        / "windowed"
-        / "preop_only"
-        / "predictions"
-    )
-    stale_predictions_dir.mkdir(parents=True, exist_ok=True)
-    (stale_predictions_dir / "test.csv").write_text("caseid,y_true,y_prob_calibrated\n1,0,0.5\n")
-
-    proxy = tmp_path / "python_proxy.sh"
-    proxy.write_text(
-        "#!/bin/bash\n"
-        "if [[ \"$1\" == \"-m\" && \"$2\" == \"data_preparation.validate_processed_artifacts\" ]]; then\n"
-        "  exit 0\n"
-        "fi\n"
-        "exit 1\n"
-    )
-    proxy.chmod(0o755)
-
-    env = os.environ.copy()
-    env.update(
-        {
-            "RESULTS_DIR": str(results_dir),
-            "PAPER_DIR": str(paper_dir),
-            "LOG_FILE": str(tmp_path / "experiment.log"),
-            "AKI_STORAGE_POLICY": "off",
-            "PYTHON_BIN": str(proxy),
-        }
+def test_experiments_fail_fast_when_generated_paths_are_off_media(tmp_path: Path, monkeypatch, capsys):
+    monkeypatch.setenv("PROCESSED_DIR", str(tmp_path / "data" / "processed"))
+    monkeypatch.setenv("RESULTS_DIR", str(tmp_path / "results" / "catch22" / "experiments"))
+    monkeypatch.setenv("PAPER_DIR", str(tmp_path / "results" / "catch22" / "paper"))
+    monkeypatch.setenv("LOG_FILE", str(tmp_path / "experiment.log"))
+    monkeypatch.setenv("AKI_STORAGE_POLICY", "enforce")
+    monkeypatch.setattr(run_catch22, "refresh_repo_convenience_paths", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        run_catch22,
+        "run_module",
+        lambda *args, **kwargs: pytest.fail("run_module should not be called when storage policy fails"),
     )
 
-    proc = subprocess.run(
-        ["bash", "run_experiments.sh", "--prep", "skip", "--only-xgboost", "--no-resume"],
-        cwd=PROJECT_ROOT,
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=120,
-    )
+    result = run_catch22.main(["experiments", "--prep", "skip", "--only-xgboost", "--no-resume"])
 
-    combined_output = f"{proc.stdout}\n{proc.stderr}"
-    assert proc.returncode == 1
-    assert f"Python runner: {proxy}" in combined_output
-    assert "skipping metrics/report generation" in combined_output
-    assert "FAILED: model=xgboost" in combined_output
-    assert "Running evaluation (results -> results directory)" not in combined_output
-    assert "command not found" not in combined_output
-    assert not (paper_dir / "tables" / "metrics_summary.csv").exists()
+    captured = capsys.readouterr()
+    assert result == 1
+    assert "Generated artifact paths must live under /media/volume/catch22" in captured.err
+    assert "Starting Experiments" not in captured.out
 
 
-def test_run_smoke_test_accepts_multiword_python_bin_prefix(tmp_path: Path):
+def test_experiments_skip_reporting_on_validation_failures(tmp_path: Path, monkeypatch, capsys):
+    monkeypatch.setenv("PROCESSED_DIR", str(tmp_path / "data" / "processed"))
+    monkeypatch.setenv("RESULTS_DIR", str(tmp_path / "results" / "catch22" / "experiments"))
+    monkeypatch.setenv("PAPER_DIR", str(tmp_path / "results" / "catch22" / "paper"))
+    monkeypatch.setenv("LOG_FILE", str(tmp_path / "experiment.log"))
+    monkeypatch.setenv("AKI_STORAGE_POLICY", "off")
+    monkeypatch.setattr(run_catch22, "refresh_repo_convenience_paths", lambda *args, **kwargs: None)
+
+    calls: list[tuple[str, list[str]]] = []
+
+    def fake_run_module(module: str, args: list[str], *, env, log_handle) -> int:
+        calls.append((module, list(args)))
+        if module == "data_preparation.validate_processed_artifacts":
+            return 0
+        if module == "model_creation.step_07_train_evaluate":
+            return 1
+        pytest.fail(f"Unexpected module call: {module}")
+
+    monkeypatch.setattr(run_catch22, "run_module", fake_run_module)
+
+    result = run_catch22.main(["experiments", "--prep", "skip", "--only-xgboost", "--no-resume"])
+
+    captured = capsys.readouterr()
+    assert result == 1
+    assert any(module == "data_preparation.validate_processed_artifacts" for module, _ in calls)
+    assert any(module == "model_creation.step_07_train_evaluate" for module, _ in calls)
+    assert "skipping metrics/report generation" in captured.out
+    assert "FAILED: model=xgboost" in captured.out
+    assert "Running evaluation (results -> results directory)" not in captured.out
+
+
+def test_smoke_uses_isolated_root_and_selected_models(tmp_path: Path, monkeypatch):
     smoke_root = tmp_path / "smoke"
-    env = os.environ.copy()
-    env.update(
-        {
-            "SMOKE_ROOT": str(smoke_root),
-            "AKI_STORAGE_POLICY": "off",
-            "PYTHON_BIN": "env PYTHONUNBUFFERED=1 false",
-        }
-    )
+    monkeypatch.setenv("SMOKE_ROOT", str(smoke_root))
+    monkeypatch.setenv("LOG_FILE", str(smoke_root / "smoke_test.log"))
+    monkeypatch.setenv("AKI_STORAGE_POLICY", "off")
+    monkeypatch.setattr(run_catch22, "refresh_repo_convenience_paths", lambda *args, **kwargs: None)
 
-    proc = subprocess.run(
-        ["bash", "run_smoke_test.sh"],
-        cwd=PROJECT_ROOT,
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=120,
-    )
+    calls: list[tuple[str, list[str], str, str]] = []
 
-    combined_output = f"{proc.stdout}\n{proc.stderr}"
-    assert proc.returncode != 0
-    assert "Python runner: env PYTHONUNBUFFERED=1 false" in combined_output
-    assert "command not found" not in combined_output
-    assert "--- Step 01: Cohort construction ---" in combined_output
+    def fake_run_module(module: str, args: list[str], *, env, log_handle) -> int:
+        calls.append((module, list(args), env["PROCESSED_DIR"], env["RESULTS_DIR"]))
+        return 0
 
+    monkeypatch.setattr(run_catch22, "run_module", fake_run_module)
 
-def test_run_experiments_fails_fast_when_generated_paths_are_off_media(tmp_path: Path):
-    env = os.environ.copy()
-    env.update(
-        {
-            "RESULTS_DIR": str(tmp_path / "results" / "catch22" / "experiments"),
-            "PAPER_DIR": str(tmp_path / "results" / "catch22" / "paper"),
-            "PROCESSED_DIR": str(tmp_path / "data" / "processed"),
-            "LOG_FILE": str(tmp_path / "experiment.log"),
-            "PYTHON_BIN": "env PYTHONUNBUFFERED=1 false",
-        }
-    )
-
-    proc = subprocess.run(
-        ["bash", "run_experiments.sh", "--prep", "skip", "--only-xgboost", "--no-resume"],
-        cwd=PROJECT_ROOT,
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=120,
-    )
-
-    combined_output = f"{proc.stdout}\n{proc.stderr}"
-    assert proc.returncode == 1
-    assert "Generated artifact path must live under /media/volume/catch22" in combined_output
-    assert "Starting Experiments" not in combined_output
-
-
-def test_run_experiments_fails_fast_on_stale_processed_artifacts(tmp_path: Path):
-    processed_dir = tmp_path / "data" / "processed"
-    results_dir = tmp_path / "results" / "catch22" / "experiments"
-    paper_dir = tmp_path / "results" / "catch22" / "paper"
-    processed_dir.mkdir(parents=True, exist_ok=True)
-
-    for name in [
-        "aki_preop_processed.csv",
-        "aki_features_master_wide.csv",
-        "aki_features_master_wide_windowed.csv",
-    ]:
-        (processed_dir / name).write_text("caseid\n1\n")
-
-    env = os.environ.copy()
-    env.update(
-        {
-            "PROCESSED_DIR": str(processed_dir),
-            "RESULTS_DIR": str(results_dir),
-            "PAPER_DIR": str(paper_dir),
-            "LOG_FILE": str(tmp_path / "experiment.log"),
-            "AKI_STORAGE_POLICY": "off",
-            "PYTHON_BIN": sys.executable,
-        }
-    )
-
-    proc = subprocess.run(
-        ["bash", "run_experiments.sh", "--prep", "skip", "--only-xgboost", "--no-resume"],
-        cwd=PROJECT_ROOT,
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=120,
-    )
-
-    combined_output = f"{proc.stdout}\n{proc.stderr}"
-    assert proc.returncode == 1
-    assert "failed schema validation" in combined_output
-    assert "metadata sidecar is missing" in combined_output
-    assert "Validation run complete" not in combined_output
-
-
-def test_smoke_trim_module_runs_under_conda_invocation_when_available(tmp_path: Path):
-    conda_bin = shutil.which("conda")
-    if conda_bin is None:
-        return
-
-    cohort_path = tmp_path / "cohort.csv"
-    pd.DataFrame(
-        {
-            "caseid": list(range(1, 13)),
-            "subjectid": list(range(101, 113)),
-            "aki_label": [0, 1] * 6,
-            "y_icu_admit": [1, 0] * 6,
-            "eligible_any_aki": [1] * 12,
-            "eligible_icu_admission": [1] * 12,
-        }
-    ).to_csv(cohort_path, index=False)
-
-    proc = subprocess.run(
+    result = run_catch22.main(
         [
-            conda_bin,
-            "run",
-            "-n",
-            "aki_prediction_project",
-            "python",
-            "-m",
-            "data_preparation.smoke_trim_cohort",
-            "--cohort-path",
-            str(cohort_path),
-            "--limit",
-            "6",
+            "smoke",
             "--outcomes",
-            "any_aki,icu_admission",
-        ],
-        cwd=PROJECT_ROOT,
-        capture_output=True,
-        text=True,
-        timeout=120,
+            "any_aki",
+            "--model-types",
+            "xgboost,ebm",
+            "--case-limit",
+            "6",
+            "--hpo-trials",
+            "1",
+        ]
     )
 
-    combined_output = f"{proc.stdout}\n{proc.stderr}"
-    if proc.returncode != 0 and (
-        "EnvironmentLocationNotFound" in combined_output
-        or "Could not find conda environment" in combined_output
-        or "Not a conda environment" in combined_output
-    ):
-        return
+    assert result == 0
+    trim_calls = [entry for entry in calls if entry[0] == "data_preparation.smoke_trim_cohort"]
+    assert len(trim_calls) == 1
+    trim_module, trim_args, processed_dir, results_dir = trim_calls[0]
+    assert trim_module == "data_preparation.smoke_trim_cohort"
+    assert str(smoke_root / "data" / "processed" / "aki_pleth_ecg_co2_awp.csv") in trim_args
+    assert processed_dir == str(smoke_root / "data" / "processed")
+    assert results_dir == str(smoke_root / "results" / "catch22" / "experiments")
 
-    assert proc.returncode == 0
-    trimmed = pd.read_csv(cohort_path)
-    assert len(trimmed) == 8
-    assert "Cohort trimmed to 8 rows" in combined_output
+    validation_calls = [entry for entry in calls if entry[0] == "model_creation.step_07_train_evaluate"]
+    assert len(validation_calls) == 2
+    assert {call[1][call[1].index("--model_type") + 1] for call in validation_calls} == {"xgboost", "ebm"}
+    assert all(call[2] == str(smoke_root / "data" / "processed") for call in validation_calls)
+    assert all(call[3] == str(smoke_root / "results" / "catch22" / "experiments") for call in validation_calls)
+
+
+def test_descriptive_fails_clearly_on_missing_inputs(tmp_path: Path, monkeypatch, capsys):
+    monkeypatch.setenv("PROCESSED_DIR", str(tmp_path / "data" / "processed"))
+    monkeypatch.setenv("RESULTS_DIR", str(tmp_path / "results" / "catch22" / "experiments"))
+    monkeypatch.setenv("PAPER_DIR", str(tmp_path / "results" / "catch22" / "paper"))
+    monkeypatch.setenv("LOG_FILE", str(tmp_path / "descriptive.log"))
+    monkeypatch.setenv("AKI_STORAGE_POLICY", "off")
+    monkeypatch.setattr(run_catch22, "refresh_repo_convenience_paths", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        run_catch22,
+        "run_module",
+        lambda *args, **kwargs: pytest.fail("run_module should not be called when required inputs are missing"),
+    )
+
+    result = run_catch22.main(["descriptive"])
+
+    captured = capsys.readouterr()
+    assert result == 1
+    assert "Required file not found" in captured.out

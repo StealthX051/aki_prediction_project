@@ -145,13 +145,21 @@ def get_logs_dir() -> Path:
     return get_artifact_root() / "logs"
 
 
-def get_log_file(default_name: str) -> Path:
-    """Return the resolved log-file path."""
+def resolve_log_file(default_name: str, *, default_dir: Optional[Path | str] = None) -> Path:
+    """Return the resolved log file, honoring LOG_FILE when set."""
 
     explicit = _path_from_env("LOG_FILE")
     if explicit is not None:
         return explicit
-    return get_logs_dir() / default_name
+    if default_dir is None:
+        default_dir = get_logs_dir()
+    return _normalize(Path(default_dir) / default_name)
+
+
+def get_log_file(default_name: str) -> Path:
+    """Return the resolved log-file path."""
+
+    return resolve_log_file(default_name)
 
 
 def build_catch22_layout(project_root: Path, *, default_log_name: str) -> Catch22ArtifactLayout:
@@ -211,3 +219,54 @@ def enforce_storage_policy(
         return normalized
 
     raise StoragePolicyError(message)
+
+
+def ensure_repo_symlink(link_path: Path | str, target_path: Path | str) -> Path:
+    """Create or refresh a repo convenience symlink."""
+
+    link = _normalize(link_path)
+    target = _normalize(target_path)
+
+    link.parent.mkdir(parents=True, exist_ok=True)
+    target.parent.mkdir(parents=True, exist_ok=True)
+
+    if link.is_symlink():
+        link.unlink()
+        link.symlink_to(target)
+        return link
+
+    if link.exists():
+        if link.is_dir() and not any(link.iterdir()):
+            link.rmdir()
+            link.symlink_to(target)
+            return link
+        warnings.warn(
+            f"Repo convenience path {link} already exists as a real path; leaving it in place.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return link
+
+    link.symlink_to(target)
+    return link
+
+
+def refresh_repo_convenience_paths(
+    project_root: Path | str,
+    *,
+    processed_dir: Path | str,
+    results_dir: Path | str,
+    paper_dir: Path | str,
+) -> Dict[str, Path]:
+    """Refresh repo-local convenience symlinks for processed/results surfaces."""
+
+    root = _normalize(project_root)
+    resolved = {
+        "processed_dir": _normalize(processed_dir),
+        "results_dir": _normalize(results_dir),
+        "paper_dir": _normalize(paper_dir),
+    }
+    ensure_repo_symlink(root / "data" / "processed", resolved["processed_dir"])
+    ensure_repo_symlink(root / "results" / "catch22" / "experiments", resolved["results_dir"])
+    ensure_repo_symlink(root / "results" / "catch22" / "paper", resolved["paper_dir"])
+    return resolved

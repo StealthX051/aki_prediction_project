@@ -1,97 +1,54 @@
 # Display dictionary
 
-This repository now ships a **single source of truth** for translating internal
-identifiers (feature names, outcome keys, model types, branches, feature sets)
-into publication-ready labels. The dictionary lives at
-`metadata/display_dictionary.json` and is loaded by
-`reporting.display_dictionary.DisplayDictionary`.
+`metadata/display_dictionary.json` is the single source of truth for
+publication-facing labels used in tables, figures, and interpretability
+artifacts.
 
-## Contents and schema
-The JSON file is intentionally human-editable. Each top-level section is a map
-from an internal key to an object with at least a `label` and optional fields:
+The JSON is loaded by `reporting.display_dictionary.DisplayDictionary`.
 
-- `short_label`: Abbreviated label suitable for tight spaces (axes, legends).
-- `unit`: Unit string to append when helpful.
-- `description`: Longer human-readable description (optional).
+## Main sections
 
-Sections included today:
+The dictionary currently covers:
 
-- `outcomes`: Outcome identifiers such as `any_aki` or `y_inhosp_mortality`.
-- `branches`: Dataset branches (e.g., `windowed`, `non_windowed`).
-- `model_types`: Model family names (`xgboost`, `ebm`, `autogluon`).
-- `feature_sets`: Experiment feature set keys from the run scripts.
-- `features`: Direct feature-name overrides (e.g., `preop_egfr_ckdepi_2021`).
-- `waveforms`: Waveform channel names. Slash-based keys automatically map to
-  their flattened underscore equivalents.
-- `catch22_statistics`: Glossary for the 24 Catch22/Catch24 statistics.
-- `catch22_aggregates`: Human-readable names for windowed aggregates (`mean`,
-  `std`, `min`, `max`).
+- `outcomes`
+- `branches`
+- `model_types`
+- `feature_sets`
+- `features`
+- `waveforms`
+- `catch22_statistics`
+- `catch22_aggregates`
 
-The schema is deliberately permissive so new sections can be added later if
-needed by downstream tools.
+Each entry typically provides:
 
-## Python utility: `DisplayDictionary`
-`reporting/display_dictionary.py` provides a lightweight helper that loads the
-JSON file and exposes lookups with sensible fallbacks:
+- `label`
+- optional `short_label`
+- optional `unit`
+- optional `description`
 
-```python
-from reporting.display_dictionary import load_display_dictionary
+## Resolution behavior
 
-names = load_display_dictionary()
+Feature lookup follows this order:
 
-names.outcome_label("any_aki")          # -> "Any AKI"
-names.branch_label("windowed")          # -> "Segmented (windowed)"
+1. explicit `features` entry
+2. waveform plus Catch22 template parsing
+3. raw feature name fallback
 
-# Feature lookups prefer explicit entries, then waveform + Catch22 templates
-names.feature_label("preop_egfr_ckdepi_2021", include_unit=True)
-# -> "Estimated GFR (CKD-EPI 2021) (mL/min/1.73 m²)"
+This allows the reporting stack to render human-readable labels without
+hardcoding them into every report module.
 
-names.feature_label("SNUADC_PLETH_DN_HistogramMode_5_mean")
-# -> "Pleth — Histogram mode (5 bins) (Mean across windows)"
+## Where it is used
 
-# Feature-set labels merge dictionary entries with optional defaults
-labels = names.feature_set_labels({"custom_set": "Custom feature set"})
-```
+- `reporting.make_report`
+- `reporting.cohort_flow`
+- `reporting.preop_descriptives`
+- `reporting.missingness_table`
+- EBM explanation exports from `model_creation.step_07_train_evaluate`
 
-Resolution order for feature names:
-1. Exact match in the `features` section.
-2. Catch22-style waveform names that follow `<waveform>_<stat>[_aggregate]`.
-3. Fallback to the raw feature name when no mapping exists.
+## Maintenance guidance
 
-## How to extend or modify
-1. Edit `metadata/display_dictionary.json` and add new keys under the relevant
-   section. Keep labels concise and avoid units unless necessary.
-2. If you introduce a new waveform channel or Catch22 statistic, add a new
-   entry to `waveforms` or `catch22_statistics` so windowed/full features render
-   cleanly.
-3. For new experiment knobs (e.g., a new `feature_set` or `model_type`), add the
-   human-readable label so tables and plots remain synchronized.
-
-## Integration pointers
-- **Reporting**: `results_recreation/results_analysis.py` now consumes the
-  dictionary for feature-set labels and can be extended to render outcome/model
-  labels the same way.
-- **Descriptive tables and figures**: `reporting/cohort_flow.py`,
-  `reporting/preop_descriptives.py`, and `reporting/missingness_table.py` all
-  pull feature and waveform labels from the dictionary so supplemental tables
-  and flow diagrams stay consistent with the main reports.
-- **Interpretability**: When generating SHAP/EBM plots, prefer
-  `DisplayDictionary.feature_label()` to annotate axes and tooltips.
-- **Data prep**: If additional derived preoperative features are created,
-  register them under `features` to keep cohort tables tidy.
-
-The EBM XAI exporter (`step_07_train_evaluate.py --export_ebm_explanations`) also
-uses the display dictionary to render human-readable labels and units on term
-importances, partial dependence plots, and local contribution visuals. Update the
-dictionary before regenerating explainability artifacts to ensure consistent
-plot labeling.
-
-Additions should be reviewed during PRs to avoid drift between the dictionary
-and the data/model artifacts that reference it.
-
-## Feature set checkboxes
-- Component order for checkbox grids is defined in `metadata/feature_components.yml` (Preop tabular, AWP, CO2, ECG, Pleth). Add new feature-set keys or tweak membership there to keep tables in sync.
-- Rendering mode is controlled by the `FEATURE_SET_DISPLAY` environment variable: `checkbox` (default, show the grid), `label` (text-only), or `both` (grid + label column). The setting flows through `reporting/make_report.py` for HTML/DOCX/PDF outputs.
-- Column sizing is dynamic: component columns scale to header length with light padding; metric columns stay wider. DOCX and PDF use matching dynamic/fixed widths to keep the checkbox grid compact without crowding metrics.
-- Heatmap gradients for metrics/deltas use darker greens/reds to stay legible after export (Brier uses the inverse palette).
-- If `feature_components.yml` is missing or PyYAML is unavailable, defaults are used so reports still render. Update the YAML before adding new permutations to avoid blank grids.
+- Add new feature sets, outcomes, or derived features here before regenerating
+  manuscript-facing outputs.
+- Keep labels concise and publication-ready.
+- Review dictionary changes alongside the code and artifacts that consume them
+  so labels do not drift from the underlying analysis.

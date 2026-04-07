@@ -12,6 +12,8 @@ from artifact_paths import (
     StoragePolicyError,
     build_catch22_layout,
     enforce_storage_policy,
+    refresh_repo_convenience_paths,
+    resolve_log_file,
 )
 
 
@@ -54,3 +56,37 @@ def test_enforce_storage_policy_modes(tmp_path: Path, monkeypatch):
 
     monkeypatch.setenv("AKI_STORAGE_POLICY", "off")
     enforce_storage_policy(candidate)
+
+
+def test_resolve_log_file_can_target_custom_default_dir(monkeypatch):
+    monkeypatch.delenv("LOG_FILE", raising=False)
+
+    resolved = resolve_log_file("smoke_test.log", default_dir=Path("/tmp/aki_smoke"))
+
+    assert resolved == Path("/tmp/aki_smoke/smoke_test.log")
+
+
+def test_refresh_repo_convenience_paths_creates_symlinks(tmp_path: Path):
+    project_root = tmp_path / "repo"
+    processed_dir = tmp_path / "artifacts" / "data" / "processed"
+    results_dir = tmp_path / "artifacts" / "results" / "catch22" / "experiments"
+    paper_dir = tmp_path / "artifacts" / "results" / "catch22" / "paper"
+
+    refreshed = refresh_repo_convenience_paths(
+        project_root,
+        processed_dir=processed_dir,
+        results_dir=results_dir,
+        paper_dir=paper_dir,
+    )
+
+    processed_link = project_root / "data" / "processed"
+    results_link = project_root / "results" / "catch22" / "experiments"
+    paper_link = project_root / "results" / "catch22" / "paper"
+
+    assert refreshed["processed_dir"] == processed_dir.resolve(strict=False)
+    assert processed_link.is_symlink()
+    assert results_link.is_symlink()
+    assert paper_link.is_symlink()
+    assert processed_link.resolve(strict=False) == processed_dir.resolve(strict=False)
+    assert results_link.resolve(strict=False) == results_dir.resolve(strict=False)
+    assert paper_link.resolve(strict=False) == paper_dir.resolve(strict=False)

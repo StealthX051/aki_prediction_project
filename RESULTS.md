@@ -1,192 +1,204 @@
 # Results artifacts
 
-This repository keeps publication-ready outputs under `results/catch22/paper/`
-and raw experiment artifacts under `results/catch22/experiments/` so writers can
-pull figures/tables without rerunning the pipeline. Catch22 generated artifacts
-now default to the attached media root
-`/media/volume/catch22/data/aki_prediction_project` via `AKI_ARTIFACT_ROOT`.
-Heavy generated outputs fail fast off `/media/volume/catch22` by default
-(`AKI_STORAGE_POLICY=enforce`). All reporting scripts respect `RESULTS_DIR`
-(experiments) and `PAPER_DIR` (paper surface) environment overrides and share
-the display dictionary at `metadata/display_dictionary.json` to keep labels
-synchronized. Artifacts from the Catch22 + XGBoost/EBM pipeline are considered
-the primary source of truth; Aeon artifacts are optional and live under
-`results/aeon/`.
+This file is more artifact-focused than `README.md` and more operational than
+`METHODS.md`. It documents where the repository writes paper-facing outputs,
+what those outputs mean, and how to regenerate them from saved artifacts.
 
-## Layout overview (Catch22)
-- `results/catch22/experiments/`: models, params, predictions, calibration artifacts. Convenience symlinks to paper tables/figures/metadata live here.
-- `results/catch22/paper/`: publication-ready bundle (`figures/`, `tables/`, `reports/`, `metadata/`, `manifest.json`).
-- `results/catch22/xai/`: symlinks to interpretability outputs
-  - `xai/ebm/<outcome>/<branch>/<feature_set>/ebm_xai` → per-model EBM explanations
-  - `xai/shap/xgboost/<outcome>/<branch>/<feature_set>/shap_summary_*.png` → SHAP bar/dot plots
-- `results/catch22/archive/legacy/`: legacy grids (kept for reference).
+## Artifact roots
 
-Env overrides:
-- `AKI_ARTIFACT_ROOT` sets the canonical generated-artifact root (default: `/media/volume/catch22/data/aki_prediction_project`).
-- `AKI_STORAGE_POLICY` controls off-media enforcement for heavy outputs: `enforce` (default), `warn`, or `off`.
-- `RESULTS_DIR` and `PAPER_DIR` still override the Catch22 experiments root and paper surface explicitly. Aeon uses the same names but defaults to `results/aeon/...`.
+Generated Catch22 artifacts default to:
 
-## Running experiments (full or staged)
-- Use `run_experiments.sh` for the Catch22/XGBoost/EBM grid. It supports:
-  - `--prep auto` (default): reuse `data/processed/aki_features_master_wide*.csv` if present; rebuild only if missing.
-  - `--prep force`: re-run Steps 01–05 (cohort, Catch22, preop, intraop, merge) and regenerate both non-windowed and windowed features.
-  - `--prep skip`: assume processed features already exist; skip all prep.
-- Parallel backend default: set `PARALLEL_BACKEND=processes` in the shells (override via env) to keep bootstrapping on the process pool; scripts fall back to threads or sequential only on timeout/error.
-- Model-family control:
-  - XGBoost only: `./run_experiments.sh --only-xgboost --prep auto`
-  - EBM only (reuse XGBoost-prepared data): `./run_experiments.sh --only-ebm --prep skip`
-  - Both families: default or `--model-types xgboost,ebm`
-- Environment roots (`DATA_DIR`, `PROCESSED_DIR`, `RAW_DIR`, `RESULTS_DIR`) are exported so both families share the same files; no wasted preprocessing.
-- Metrics/report generation is skipped if no prediction files are present, so partial runs (only one family) are handled gracefully. All CLI flags also pass through `run_catch22_experiments.sh`.
-- `results_recreation/metrics_summary.py` validates each `predictions/test.csv`; invalid files are skipped with a warning so a single bad artifact does not halt consolidation. If no valid predictions remain, it fails fast with a clear message.
-- All run scripts (`run_experiments*.sh`, smoke tests) now invoke `metrics_summary` with stratified, paired bootstrapping, Δ vs `preop_only`, and full-core parallelism, then call `reporting/make_report` to emit the report bundle (main + Δ tables).
-- Reporting defaults baked into the run scripts:
-  - Calibration: quantile bins (`CALIBRATION_BIN_STRATEGY=quantile`, `CALIBRATION_N_BINS=10`), per-bin counts, probability histograms under the curve, auto x-axis zoom with a full-range inset, counts annotated up to 30/bin.
-  - PR curves: step rendering with a prevalence baseline; class-count annotations are off by default.
-  - Plotting runs in parallel (`PLOT_N_JOBS=-2`) and prefers calibrated probabilities.
-  - Override via env when rerunning `reporting.make_report` if you need different visuals (e.g., `CALIBRATION_SHOW_BIN_COUNTS`, `CALIBRATION_MAX_COUNT_ANNOTATE`, `CALIBRATION_SHOW_PROB_HIST`, `CALIBRATION_SHOW_XLIM_INSET`, `PLOT_PREFER_CALIBRATED`, `PR_SHOW_CLASS_BALANCE`).
-- Bootstrapping safeguards: run scripts pin `--bootstrap-timeout 1800` and `--bootstrap-max-retries 2` so long jobs don’t hang silently; if the process backend fails or times out, they retry threads then sequential.
-- EBM explainability is auto-enabled in `run_experiments.sh` (the script injects `--export_ebm_explanations` for EBM runs). Per-term exports run in a bounded thread pool with per-term timeouts and retries; logging is unbuffered (`PYTHONUNBUFFERED=1`) to surface progress and avoid silent hangs. If you need to regenerate XAI for existing EBM models only, reuse processed data and models:  
-  ```bash
-  PYTHON_BIN=/home/exouser/.conda/envs/aki_prediction_project/bin/python
-  OUTCOMES=(any_aki icu_admission); BRANCHES=(non_windowed windowed)
-  FEATURE_SETS=(preop_only pleth_only ecg_only co2_only awp_only all_waveforms preop_and_all_waveforms preop_and_pleth preop_and_ecg preop_and_co2 preop_and_awp preop_and_all_minus_pleth preop_and_all_minus_ecg preop_and_all_minus_co2 preop_and_all_minus_awp)
-  for o in "${OUTCOMES[@]}"; do for b in "${BRANCHES[@]}"; do for fs in "${FEATURE_SETS[@]}"; do
-    $PYTHON_BIN -m model_creation.step_07_train_evaluate --outcome "$o" --branch "$b" --feature_set "$fs" --model_type ebm --export_ebm_explanations
-  done; done; done
-  ```
-  Outputs land in `results/catch22/experiments/models/ebm/<outcome>/<branch>/<feature_set>/artifacts/ebm_xai/` with `index.html` linking global, local, and per-term plots (also symlinked under `results/catch22/xai/ebm/`).
-
-## Core model evaluation outputs
-The consolidated metrics table and plots are generated from previously trained
-models without retraining:
-
-1. Build the unified metrics summary from saved predictions and calibration
-   metadata (stratified, paired bootstrap with Δ vs preop reference using all
-   cores):
-   ```bash
-   python results_recreation/metrics_summary.py \
-     --delta-mode reference \
-     --reference-feature-set preop_only \
-     --parallel-backend processes \
-     --n-jobs -1
-   ```
-
-2. Render styled tables, ROC/PR/calibration plots, and Markdown/Word/PDF reports
-   (with separate delta tables and heatmap shading where the Δ CI excludes 0):
-   ```bash
-   python reporting/make_report.py
-   ```
-
-Result locations:
-- `results/catch22/paper/tables/metrics_summary.{csv,md,docx,pdf}`:
-  consolidated AUROC/AUPRC and thresholded metrics with confidence intervals,
-  plus Δ columns (CSV also reachable via the `results/catch22/experiments/tables`
-  symlink).
-- `results/catch22/paper/reports/report.{md,docx,pdf}`: consolidated report
-  bundle with main tables and separate Δ tables.
-- `results/catch22/paper/tables/results_*.{html,md,docx,pdf}` plus
-  `results_*_{main,delta}.csv`: per-outcome/branch/model table bundles.
-- `results/catch22/paper/figures/`: ROC, PR, calibration, and cohort-flow
-  figures saved as `.svg` and publication `.png`.
-- `results/catch22/paper/figures/primary_figures/`: mirrored copies of the
-  top-level manuscript figures for easier bundle download.
-- `results/catch22/paper/figures/shap_scatter/` and
-  `results/catch22/paper/figures/shap_scatter_featured/`: optional report-time
-  XGBoost SHAP raw-value scatter plots rebuilt from saved bundles.
-
-Reporting layout/styling notes:
-- Feature-set inputs render as compact component columns (Preop, AWP, CO2, ECG, Pleth) with widths scaled to the header text plus padding; metric columns stay wider for readability.
-- DOCX exports default to landscape and apply the same dynamic component widths; metric columns keep a roomy fixed width.
-- PDF tables apply matching width fractions (component vs. metric) to keep the checkbox grid tight without crowding performance columns.
-- Heatmaps use darker, more visible gradients (greens for higher-is-better, reds for lower-is-better; Brier uses the inverse palette).
-- ROC and PR figures now use foldwise mean curves with uncertainty bands when
-  `repeat_id` and `outer_fold_id` metadata are present in the saved test
-  predictions; otherwise plotting falls back to the pooled held-out curves.
-
-Optional richer XGBoost SHAP figures can be rebuilt without retraining:
-
-```bash
-python -m reporting.make_shap_figures
+```text
+/media/volume/catch22/data/aki_prediction_project
 ```
 
-## Descriptive figures bundle
-Run all descriptive artifacts (preop demographics table, cohort flow diagram,
-missingness table) with one command. The script reuses your training run's
-paths (`DATA_DIR`, `PROCESSED_DIR`, `RESULTS_DIR`) if they are already set.
+Relevant environment controls:
 
-```bash
-./run_descriptive_figures.sh
+- `AKI_ARTIFACT_ROOT`: canonical generated-artifact root
+- `AKI_STORAGE_POLICY`: heavy-output policy (`enforce`, `warn`, `off`)
+- `RESULTS_DIR`: explicit experiments root
+- `PAPER_DIR`: explicit paper-output root
+- `SMOKE_ROOT`: isolated smoke-test root
+
+The default policy is to fail fast if heavy generated outputs are routed off the
+attached media volume unless the policy is relaxed explicitly.
+
+## Catch22 results layout
+
+The validated default artifact tree is:
+
+- `results/catch22/experiments/`: raw model outputs and intermediate artifacts
+- `results/catch22/paper/`: paper-facing bundle
+- `results/catch22/xai/`: convenience entry points to interpretability outputs
+- `results/catch22/archive/legacy/`: retained historical outputs
+
+Within a single modeling configuration, artifacts live under:
+
+```text
+results/catch22/experiments/models/<model_type>/<outcome>/<branch>/<feature_set>/
 ```
 
-## Cohort flow diagram
-`reporting/cohort_flow.py` transforms the saved cohort counts from
-`step_01_cohort_construction.py` into a vertical flow diagram. Provide the
-counts JSON (default: `results/catch22/paper/metadata/cohort_flow_counts.json`) and an optional
-custom display dictionary path. The renderer skips no-op/increasing steps, shows
-per-step removals in rightward exclusion boxes with reason text, applies friendly
-labels, groups all waveform checks into one stage with a footnote listing channels,
-and draws a centered T-junction from the Final Cohort box to AKI vs. No AKI split
-boxes when `label_split` is present in the JSON. Outputs:
-`results/catch22/paper/figures/cohort_flow.svg` and `cohort_flow.png`.
+Typical contents:
+
+- `predictions/train_oof.csv`
+- `predictions/test.csv`
+- `artifacts/calibration.json`
+- `artifacts/threshold.json`
+- `artifacts/metadata.json`
+- `artifacts/validation.json`
+- model bundle and any family-specific artifacts
+
+For nested CV runs, `predictions/test.csv` contains the pooled outer-fold
+evaluation predictions. For holdout runs, it contains the held-out test cohort.
+
+## Primary regeneration commands
+
+### Fastest isolated validation
 
 ```bash
-python -m reporting.cohort_flow \
-  --counts-file results/catch22/paper/metadata/cohort_flow_counts.json \
-  --display-dictionary metadata/display_dictionary.json
+python -m run_catch22 smoke
 ```
 
-The cohort excludes ASA V–VI cases prior to waveform availability checks and
-other custom filters; the counts JSON reflects that step.
+This writes a small end-to-end run under `SMOKE_ROOT` without touching the
+canonical experiment tree.
 
-## Preoperative descriptive statistics
-`reporting/preop_descriptives.py` summarizes baseline demographics and clinical
-variables using the raw cohort CSV (before one-hot encoding). Continuous
-features are tested for normality (Shapiro–Wilk, subsampled to 5,000) to decide
-between mean ± SD or median (IQR) reporting; categorical features are presented
-as counts with percentages. Outputs:
-- `results/catch22/paper/tables/preop_descriptives.csv`
-- `results/catch22/paper/tables/preop_descriptives.md`
-- `results/catch22/paper/tables/preop_descriptives.docx`
-- `results/catch22/paper/tables/preop_descriptives.pdf`
-- `results/catch22/paper/tables/preop_descriptives.html`
-- `results/catch22/paper/tables/preop_descriptives.tex`
+### Full Catch22 experiment grid
 
 ```bash
-python -m reporting.preop_descriptives \
-  --dataset data/processed/aki_pleth_ecg_co2_awp.csv \
-  --processed-dataset data/processed/aki_preop_processed.csv \
-  --display-dictionary metadata/display_dictionary.json
+python -m run_catch22 experiments
 ```
-Continuous summaries pull from the winsorized preop dataset (`aki_preop_processed.csv`) when present; binary categoricals
-render 0/1 as False/True, and one-hot categoricals use human-readable labels from the display dictionary. Regenerate
-`aki_preop_processed.csv` via
-`python -m data_preparation.step_03_preop_prep` if you rebuild the cohort.
 
-## Missingness summary for model features
-`reporting/missingness_table.py` computes per-feature missing counts and
-percentages for the merged modeling dataset
-(`data/processed/aki_features_master_wide.csv` by default), excluding
-identifiers and outcomes. Headers are human-friendly and one-hot columns resolve
-to display labels. Outputs are written to:
-- `results/catch22/paper/tables/missingness_table.csv`
-- `results/catch22/paper/tables/missingness_table.md`
-- `results/catch22/paper/tables/missingness_table.docx`
-- `results/catch22/paper/tables/missingness_table.pdf`
-- `results/catch22/paper/tables/missingness_table.html`
+Useful variants:
 
 ```bash
-python -m reporting.missingness_table \
-  --dataset data/processed/aki_features_master_wide.csv \
-  --display-dictionary metadata/display_dictionary.json
+python -m run_catch22 experiments --prep force
+python -m run_catch22 experiments --prep skip
+python -m run_catch22 experiments --only-xgboost
+python -m run_catch22 experiments --only-ebm --prep skip
 ```
 
-## Smoke test artifacts
-For quick validation, run the lightweight smoke test without touching production
-artifacts:
+`--prep auto` and `--prep skip` validate the Step 01/03/05 processed-artifact
+sidecars before reuse.
+
+### Descriptive reporting bundle
+
 ```bash
-./run_smoke_test.sh
+python -m run_catch22 descriptive
 ```
-This generates a miniature set of `data/processed/` and `results/` outputs under
-the directory specified by `SMOKE_ROOT` (default:
-`/media/volume/catch22/data/aki_prediction_project/smoke_test_outputs/`).
+
+This regenerates:
+
+- preoperative descriptives
+- cohort flow figures
+- missingness tables
+
+from saved artifacts rather than rerunning model training.
+
+## Metrics and report regeneration
+
+If predictions already exist and you only need consolidated paper outputs:
+
+```bash
+python -m results_recreation.metrics_summary \
+  --results-dir results/catch22/experiments \
+  --delta-mode reference \
+  --reference-feature-set preop_only
+
+python -m reporting.make_report
+```
+
+The reporting path is artifact-based:
+
+- `metrics_summary` validates stored predictions and paired validation metadata
+- tables and figures are rebuilt from saved predictions, calibrations, and
+  labels
+- no model, calibrator, or threshold is refit at report time
+
+## Paper-facing bundle
+
+The publication-facing surface lives under `results/catch22/paper/`.
+
+Primary files:
+
+- `tables/metrics_summary.{csv,md,docx,pdf}`
+- `tables/results_*_{main,delta}.csv` and companion formatted exports
+- `figures/` for ROC, PR, calibration, cohort flow, SHAP, and manuscript
+  figures
+- `reports/report.{md,docx,pdf}`
+- `metadata/cohort_flow_counts.json`
+- `manifest.json`
+
+The paper tree is designed for downstream manuscript writing and supplemental
+assembly without requiring model retraining.
+
+## Metrics summary contract
+
+`results_recreation.metrics_summary` consolidates saved predictions across
+configurations and computes:
+
+- discrimination metrics
+- thresholded operating-point metrics
+- confidence intervals
+- paired delta summaries against a reference feature set
+
+Bootstrap uncertainty is computed from saved predictions using patient-grouped
+resampling when `subjectid` is available.
+
+## Descriptive artifact bundle
+
+The descriptive branch produces the non-model outputs most likely to be reused
+in the manuscript and supplement:
+
+### Cohort flow
+
+- `figures/cohort_flow.svg`
+- `figures/cohort_flow.png`
+- counts source: `metadata/cohort_flow_counts.json`
+
+### Preoperative descriptives
+
+- `tables/preop_descriptives.csv`
+- `tables/preop_descriptives.md`
+- `tables/preop_descriptives.docx`
+- `tables/preop_descriptives.pdf`
+- plus HTML/LaTeX companion exports
+
+### Missingness
+
+- `tables/missingness_table.csv`
+- `tables/missingness_table.md`
+- `tables/missingness_table.docx`
+- `tables/missingness_table.pdf`
+- plus HTML companion export
+
+## Interpretability outputs
+
+The primary tree also supports model-family-specific interpretability artifacts.
+
+- XGBoost: SHAP figures rebuilt from saved model bundles and predictions
+- EBM: optional native explanation exports, with convenience entry points under
+  `results/catch22/xai/`
+
+These artifacts are additive to the predictive evaluation outputs and should be
+treated as supplementary or exploratory unless explicitly incorporated into the
+paper workflow.
+
+## Smoke outputs
+
+Smoke runs write a miniature but structurally valid artifact tree under
+`SMOKE_ROOT`. They are intended for pipeline verification rather than final
+evidence generation.
+
+Smoke runs still exercise:
+
+- Steps 01-05
+- Step 07 holdout validation
+- metrics aggregation
+- report generation
+
+## Experimental and legacy outputs
+
+- Aeon outputs are experimental and documented in
+  `experimental/aeon/README.md` and `results/aeon/README.md`.
+- Archive outputs are retained for reference only and are not part of the
+  validated default paper path.

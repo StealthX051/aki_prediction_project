@@ -1,26 +1,21 @@
 # Archive
 
-This directory contains legacy notebooks and scripts kept for historical
-reference only.
+This directory contains historical notebooks, scripts, and environment
+snapshots retained for reference only.
 
-Use the root [README.md](../README.md), [METHODS.md](../METHODS.md), and the
-production pipeline under `data_preparation/`, `model_creation/`,
-`results_recreation/`, and `reporting/` for current work.
+Use the root docs and the production modules under `data_preparation/`,
+`model_creation/`, `results_recreation/`, and `reporting/` for current work.
 
-## What is here
+## Contents
 
-- `archive/notebooks/`: early exploratory notebooks and prototype analyses
-- `archive/scripts/`: legacy spectrogram, Catch22, and older training utilities
-- `archive/run_pipeline.sh`: historical launcher for archived workflows
+- `archive/notebooks/`: early exploratory notebooks
+- `archive/scripts/`: legacy utilities and older training code
 - `archive/environment_linux.yml`: archived environment snapshot
 
-## How to treat archive contents
+## Guidance
 
-- Do not use archive code as the default implementation path.
-- Do not update archive notebooks/scripts unless the task is explicitly about
-  reproducing or inspecting legacy work.
-- Expect archived methods, assumptions, and outputs to differ from the current
-  production pipeline.
-
-If you need the active study workflow, start from the repository root docs
-instead of this directory.
+- Do not treat archive code as the default reproducible workflow.
+- Do not update archive contents unless the task is explicitly about legacy
+  reproduction or inspection.
+- Expect methods and assumptions here to differ from the current production
+  pipeline.

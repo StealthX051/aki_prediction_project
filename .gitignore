@@ -22,6 +22,7 @@ smoke_test_outputs/
 
 # Runner / smoke logs
 /experiment_log.txt
+/experiment_log_aeon.txt
 /pipeline_aeon.log
 /smoke_test_aeon.log
 /smoke_test_outputs/*.log

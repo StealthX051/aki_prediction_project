@@ -2,65 +2,48 @@
 trigger: always_on
 ---
 
-# AKI Prediction Project – Scientific Integrity Rules
+# AKI Prediction Project scientific integrity rules
 
-These rules ensure code changes remain aligned with the study’s scientific methods.
+## 1. Treat this as scientific software
 
-## 0. Treat this as scientific software
-
-- This repository supports a scientific study, so correctness is not only a software concern; it also includes validity of cohort logic, feature construction, evaluation, and interpretation.
 - Favor conservative, reviewable method changes over clever rewrites.
-- Prefer the simplest implementation that preserves cohort semantics, leakage
-  protections, reproducibility, and the existing study design.
-- When removing analytical code, confirm it is truly obsolete or duplicated
-  and that the retained path still preserves the primary study workflow.
-- When implementing a new method, make the comparison to the primary pipeline explicit and preserve a path back to the existing baseline.
+- Preserve the validated Catch22 paper path unless the task explicitly changes
+  study design.
+- Keep experimental branches clearly labeled.
 
-## 1. Treat METHODS.md as the source of truth
+## 2. Treat `METHODS.md` as authoritative
 
-- Consider the definitions and preprocessing described in `METHODS.md` to be authoritative for the study.
-- Do not change key clinical definitions (e.g., AKI definition, inclusion/exclusion criteria, waveform list) unless explicitly asked to update the study design.
-- When adding new analyses or variants, clearly distinguish them from the primary analysis.
+- Do not change cohort definitions, outcome definitions, waveform
+  requirements, or evaluation rules without explicitly updating the study
+  design.
+- When a method changes, update `METHODS.md` and any affected paper-facing
+  documentation.
 
-## 2. Cohort selection and outcome definition
+## 3. Cohort and outcome semantics
 
-- Preserve the cohort inclusion and exclusion logic:
-  - required preoperative creatinine and operation end time,
-  - required waveform availability,
-  - exclusions for severe baseline renal dysfunction and inadequate signal quality.
-- Maintain the KDIGO-based AKI outcome definition and binary labeling convention.
-- If you introduce alternative outcomes (e.g., staging, time-to-event), implement them as separate variables and document them.
+- Preserve the shared outer cohort contract and its outcome-specific
+  eligibility layers.
+- Preserve KDIGO-based AKI labeling.
+- Preserve patient grouping by `subjectid` across splitting and evaluation.
 
-## 3. Data leakage prevention
+## 4. Leakage prevention
 
-- Respect the stratified train/test split:
-  - perform the split once and reuse it downstream,
-  - do not recalculate the split inside later steps.
-- When computing statistics (outlier thresholds, imputations, encodings), use **only the training subset** and apply the resulting rules to both train and test.
-- Never use information from the test set to:
-  - tune hyperparameters,
-  - select features,
-  - derive thresholds, encodings, or normalization parameters.
+- The grouped split is created once in Step 03 and reused downstream.
+- Learned preprocessing, HPO, calibration, and threshold selection must be fit
+  on training data only.
+- Reporting must consume saved artifacts and must not silently refit anything.
 
-## 4. Feature engineering and waveform processing
+## 5. Feature and model changes
 
-- Keep the Catch24 feature definition consistent (Catch22 features plus mean and standard deviation per channel).
-- Maintain both **full-case** and **windowed** feature pipelines; do not break one while modifying the other.
-- When adding new features or channels:
-  - follow the same resampling and filtering conventions,
-  - document them clearly in code and comments so they can be reflected in METHODS later if needed.
+- Keep Catch24 feature semantics consistent unless the task explicitly changes
+  the study.
+- Maintain both non-windowed and windowed branches unless explicitly asked
+  otherwise.
+- Keep primary-model changes clearly distinguished from exploratory analyses.
 
-## 5. Modeling and evaluation
+## 6. Evaluation
 
-- Preserve the use of gradient boosted tree models (e.g., XGBoost) for the primary analysis unless explicitly requested otherwise.
-- When changing modeling choices (model type, hyperparameters, evaluation metrics):
-  - clearly label experimental scripts as such (e.g., `EXPERIMENTAL_*.py`),
-  - avoid overwriting artifacts from the main analysis without explicit instruction.
-- Always report performance separately for the held-out test set; do not present cross-validation results alone as final performance.
-
-## 6. Documentation of changes
-
-- For any change that affects the scientific interpretation (cohort, preprocessing, features, modeling, metrics):
-  - add or update comments in the relevant scripts,
-  - add a short note to the project’s README outlining the change and its intent.
-- Avoid copying large sections of METHODS or README into code comments; link to the files or summarize only what is necessary.
+- The primary internal validation path is patient-grouped nested CV.
+- Legacy holdout evaluation may remain available but should not silently become
+  the default.
+- Do not present partial or mixed artifact sets as final evidence.

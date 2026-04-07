@@ -15,6 +15,7 @@ from results_recreation.metrics_summary import (
     _load_case_subject_lookup,
     _prediction_frames_are_aligned,
     compute_point_metrics,
+    summarize,
 )
 
 
@@ -132,3 +133,38 @@ def test_validate_dataframe_rejects_duplicate_caseids_in_test_predictions(tmp_pa
 
     with pytest.raises(metrics_summary.ValidationError, match="duplicate caseids"):
         _validate_dataframe(df, tmp_path / "test.csv")
+
+
+def test_summarize_tolerates_empty_bootstrap_frames(monkeypatch):
+    df = pd.DataFrame(
+        {
+            "caseid": [1, 2],
+            "subjectid": [10, 20],
+            "y_true": [1, 0],
+            "y_prob_calibrated": [0.6, 0.4],
+            "threshold": [0.5, 0.5],
+            "y_pred_label": [1, 0],
+            "outcome": ["any_aki", "any_aki"],
+            "branch": ["windowed", "windowed"],
+            "feature_set": ["all_waveforms", "all_waveforms"],
+            "model_name": ["xgboost", "xgboost"],
+            "pipeline": ["step_07_train_evaluate_holdout", "step_07_train_evaluate_holdout"],
+        }
+    )
+    pred_set = PredictionSet(
+        path=Path("test.csv"),
+        df=df,
+        threshold=0.5,
+        outcome="any_aki",
+        branch="windowed",
+        feature_set="all_waveforms",
+        model_name="xgboost",
+        pipeline="step_07_train_evaluate_holdout",
+    )
+
+    monkeypatch.setattr(metrics_summary, "_run_bootstrap_jobs", lambda *args, **kwargs: [pd.DataFrame()])
+
+    summary_df, bootstrap_df = summarize([pred_set], n_bootstrap=10, n_jobs=1)
+
+    assert len(summary_df) == 1
+    assert bootstrap_df is None

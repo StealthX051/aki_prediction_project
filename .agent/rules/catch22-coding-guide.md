@@ -2,87 +2,52 @@
 trigger: always_on
 ---
 
-# AKI Prediction Project – Coding Guide
+# AKI Prediction Project coding guide
 
-These rules apply when working in the `aki_prediction_project` repository.
+## 1. Entry points
 
-## 1. Project structure and entry points
-
-- Treat the `data_preparation/` directory as the canonical data pipeline.
-- Keep the step scripts (`step_01_...` through `step_05_...`) modular and composable; avoid turning them into monolithic scripts.
-- Keep `inputs.py` as the single source of truth for input/output paths and configuration; prefer extending it rather than hardcoding new paths.
-- When adding new functionality, prefer new, clearly named modules over large modifications to existing ones.
+- Treat `run_catch22.py` as the canonical launcher.
+- Treat `data_preparation/step_01` through `step_05` as the canonical staged
+  preprocessing path.
+- Keep `inputs.py` as the source of truth for preprocessing settings and paths.
 
 ## 2. Change strategy
 
-- Follow KISS: prefer the simplest design that satisfies the requirement.
-- Prefer minimal, local edits over broad refactors.
-- Reuse existing helpers, utilities, and CLI paths before creating new abstractions.
-- Prefer extending an existing module with a small, explicit change over
-  adding new layers, wrappers, or configuration surfaces.
-- Treat new abstractions as a last resort; add one only when it removes clear,
-  repeated complexity that already exists in the codebase.
-- Delete stale code when a replacement is clearly in place; do not leave dead
-  helpers, unused branches, or shadow implementations behind just to feel
-  safe.
-- Keep diffs auditable: make control flow easy to follow and avoid
-  speculative generalization for future use cases that are not part of the
-  task.
-- Do not rename, move, or reorganize pipeline modules unless the task explicitly requires it.
-- Avoid touching generated outputs, experiment logs, or results trees unless the task is specifically about those artifacts.
+- Prefer minimal, auditable edits.
+- Reuse existing modules and helpers before adding abstractions.
+- Delete stale code and stale docs when a replacement is clearly in place.
+- Avoid touching generated outputs or result trees unless the task is about
+  those artifacts.
 
-## 3. Environment and execution
+## 3. Runtime assumptions
 
-- Assume the Conda environment defined in `environment.yml` is the default runtime.
-- When writing “how to run” instructions or automation, use that environment name and file rather than ad-hoc installations.
-- Prefer `conda env update -f environment.yml --prune` to sync existing environments after dependency changes.
-- If tests need extra pinned packages, install `requirements-test.txt` into the activated Conda environment with `python -m pip install -r requirements-test.txt`.
-- Do not add a parallel `venv` workflow to the docs unless explicitly asked to redesign environment management.
-- Avoid adding dependencies that are not reflected in `environment.yml`; if necessary, update that file and mention the change in the README.
+- Assume the Conda environment in `environment.yml`.
+- Prefer the existing launcher and module commands over ad hoc entrypoints.
+- Reflect dependency changes in `environment.yml`.
 
-## 4. Coding style and logging
+## 4. CLI and artifact contracts
 
-- Follow the global Python style rules (PEP 8, type hints, docstrings).
-- Prefer explicit, boring code over clever or heavily abstracted code when
-  both are correct.
-- For data pipeline steps and model training, use the standard Python `logging` module with informative messages at key steps:
-  - dataset loading, train/test split application, feature extraction, model training, evaluation.
-- Keep logging concise; focus on shapes, counts, and key configuration, not every loop iteration.
+- Preserve CLI behavior unless the task explicitly requires a change.
+- Preserve artifact names, key columns, and result layout unless the task
+  explicitly requires a change.
+- Preserve Step 03 outcome-specific split metadata and its downstream reuse.
 
-## 5. Inputs, outputs, and CLI contracts
+## 5. Verification
 
-- Treat the current CLI and function signatures of `data_preparation` scripts and training scripts as an API.
-- When modifying scripts, preserve:
-  - input file locations and expected formats,
-  - output file locations and key column names,
-  - `split_group` semantics for train/test indicators.
-- If an interface must change, document:
-  - what changed,
-  - how to migrate,
-  - which downstream steps are affected.
+- Prefer the smallest check that proves the surviving path works.
+- For pipeline changes, prefer `python -m run_catch22 smoke`.
+- For reporting changes, prefer targeted pytest plus
+  `results_recreation.metrics_summary` or `reporting.make_report` as needed.
 
-## 6. Tests, smoke checks, and reproducibility
+## 6. Documentation
 
-- Whenever feasible, add or update smoke checks that:
-  - verify non-empty outputs,
-  - check key columns (`caseid`, outcome labels, `split_group`) exist and have reasonable distributions.
-- When removing or consolidating code paths, run the smallest targeted check
-  that proves the surviving path works and that the touched interface still
-  behaves as expected.
-- Use fixed seeds where the underlying libraries support them (e.g., model training, data splitting) to maintain reproducibility of results.
-- Do not delete or disable existing tests or checks without a clear stated reason.
+- Keep `README.md` operational.
+- Keep `METHODS.md` and `RESULTS.md` suitable for manuscript and supplement
+  distillation.
+- Remove duplicate or stale text instead of layering more prose on top.
 
-## 7. Documentation maintenance
+## 7. Subagents
 
-- Keep documentation concise and operational.
-- When updating docs, also check whether older text has become stale, duplicated, misleading, or bloated; delete or replace it instead of layering more prose on top.
-- Verify commands, paths, and environment instructions against the current repo before finalizing doc changes.
-
-## 8. Subagent usage
-
-- Use subagents when parallel exploration, bounded implementation work, or
-  independent verification will materially help.
-- Zero, one, or many subagents are all acceptable; do not force delegation on
-  small or tightly coupled tasks.
-- Keep each subagent scoped to a concrete outcome so work does not become
-  redundant or noisy.
+- Use subagents when parallel exploration or independent verification will
+  materially help.
+- Keep subagent prompts narrow and outcome-oriented.

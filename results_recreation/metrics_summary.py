@@ -609,6 +609,12 @@ def summarize(
     summary_df = pd.DataFrame(summary_rows)
 
     bootstrap_df = pd.concat(bootstrap_frames, ignore_index=True) if bootstrap_frames else None
+    if bootstrap_df is not None and bootstrap_df.empty:
+        logger.warning(
+            "All bootstrap replicates were skipped; continuing without bootstrap confidence intervals."
+        )
+        bootstrap_df = None
+
     if bootstrap_df is not None:
         ci_cols = [
             c
