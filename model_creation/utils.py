@@ -4,7 +4,7 @@ import numpy as np
 from pathlib import Path
 import logging
 from typing import Tuple, List, Dict, Optional
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import StratifiedGroupKFold, train_test_split
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -50,6 +50,8 @@ CONTINUOUS_PREOP_COLS = [
     'preop_bun', 'preop_cr', 'preop_hco3'
 ]
 
+PATIENT_GROUP_COLUMNS = ("subjectid", "subject_id")
+
 def load_data(branch: str) -> pd.DataFrame:
     """
     Loads the dataset based on the branch (windowed or non-windowed).
@@ -86,7 +88,7 @@ def get_feature_sets(df: pd.DataFrame) -> Dict[str, List[str]]:
         waveform_cols.extend([c for c in all_cols if c.startswith(prefix)])
         
     # Identify excluded columns (IDs, outcomes, split_group)
-    excluded_cols = set(['caseid', 'subject_id', 'hadm_id', 'split_group'])
+    excluded_cols = set(['caseid', 'subjectid', 'subject_id', 'hadm_id', 'split_group'])
     excluded_cols.update(OUTCOMES.values())
     
     # Preop cols = All cols - Waveform cols - Excluded cols
@@ -123,6 +125,83 @@ def get_feature_sets(df: pd.DataFrame) -> Dict[str, List[str]]:
         feature_sets[f'preop_and_all_minus_{name}'] = preop_cols + cols
 
     return feature_sets
+
+
+def get_patient_group_column(df: pd.DataFrame) -> Optional[str]:
+    """Return the first available patient-group column name, if present."""
+    for candidate in PATIENT_GROUP_COLUMNS:
+        if candidate in df.columns:
+            return candidate
+    return None
+
+
+def get_patient_groups(df: pd.DataFrame, indices: Optional[pd.Index] = None) -> Optional[pd.Series]:
+    """Return patient-group labels aligned to ``indices`` when available."""
+    group_col = get_patient_group_column(df)
+    if group_col is None:
+        return None
+
+    groups = df[group_col] if indices is None else df.loc[indices, group_col]
+    if groups.isna().any():
+        raise ValueError(f"Patient group column '{group_col}' contains missing values.")
+    return groups
+
+
+def select_patient_level_holdout_positions(
+    y: pd.Series,
+    groups: pd.Series,
+    *,
+    random_state: int = 42,
+    target_test_size: float = 0.2,
+    max_splits: int = 5,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Return patient-disjoint train/test positional indices for a grouped holdout split."""
+    class_counts = y.value_counts()
+    if class_counts.empty:
+        raise ValueError("Cannot split an empty target vector.")
+
+    unique_groups_per_class = [
+        int(groups[y == class_value].nunique()) for class_value in sorted(y.dropna().unique())
+    ]
+    if not unique_groups_per_class:
+        raise ValueError("Unable to derive patient-level class counts.")
+
+    n_splits = min(
+        max_splits,
+        int(class_counts.min()),
+        int(groups.nunique()),
+        min(unique_groups_per_class),
+    )
+    if n_splits < 2:
+        raise ValueError(
+            "Need at least two patient groups in each class to create a grouped holdout split."
+        )
+
+    splitter = StratifiedGroupKFold(n_splits=n_splits, shuffle=True, random_state=random_state)
+    target_test_rows = max(1, int(round(len(y) * target_test_size)))
+
+    best_train = None
+    best_test = None
+    best_gap = None
+
+    dummy = np.zeros(len(y), dtype=int)
+    for train_idx, test_idx in splitter.split(dummy, y.to_numpy(), groups.to_numpy()):
+        gap = abs(len(test_idx) - target_test_rows)
+        if best_gap is None or gap < best_gap:
+            best_gap = gap
+            best_train = train_idx
+            best_test = test_idx
+
+    if best_train is None or best_test is None:
+        raise ValueError("Failed to construct a patient-level holdout split.")
+
+    train_groups = set(groups.iloc[best_train])
+    test_groups = set(groups.iloc[best_test])
+    overlap = train_groups & test_groups
+    if overlap:
+        raise ValueError(f"Patient overlap detected across grouped holdout split: {sorted(overlap)[:5]}")
+
+    return best_train, best_test
 
 def prepare_data(
     df: pd.DataFrame,
@@ -177,20 +256,45 @@ def prepare_data(
 
     # Split data
     # Use 'split_group' if available to respect the original split
+    group_col = get_patient_group_column(df)
     if 'split_group' in df.columns:
         logger.info("Using existing 'split_group' column for train/test split.")
         train_mask = df['split_group'] == 'train'
         test_mask = df['split_group'] == 'test'
+
+        if group_col is not None:
+            train_groups = set(df.loc[train_mask, group_col])
+            test_groups = set(df.loc[test_mask, group_col])
+            overlap = train_groups & test_groups
+            if overlap:
+                raise ValueError(
+                    f"Existing split_group leaks patients across train/test via '{group_col}': {sorted(overlap)[:5]}"
+                )
         
         X_train = X[train_mask]
         y_train = y[train_mask]
         X_test = X[test_mask]
         y_test = y[test_mask]
     else:
-        logger.warning("'split_group' column not found. Performing random stratified split.")
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=0.2, random_state=random_state, stratify=y
-        )
+        if group_col is not None:
+            logger.warning(
+                "'split_group' column not found. Performing patient-level grouped holdout split using '%s'.",
+                group_col,
+            )
+            train_idx, test_idx = select_patient_level_holdout_positions(
+                y,
+                df[group_col],
+                random_state=random_state,
+            )
+            X_train = X.iloc[train_idx]
+            y_train = y.iloc[train_idx]
+            X_test = X.iloc[test_idx]
+            y_test = y.iloc[test_idx]
+        else:
+            logger.warning("'split_group' column not found. Performing random stratified split.")
+            X_train, X_test, y_train, y_test = train_test_split(
+                X, y, test_size=0.2, random_state=random_state, stratify=y
+            )
 
     # Calculate scale_pos_weight
     neg = (y_train == 0).sum()

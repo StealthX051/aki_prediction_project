@@ -4,6 +4,8 @@ This script crawls `<results_dir>/models/**/predictions/test.csv`, validates
 required artifacts and columns, computes metrics using stored thresholds, and
 writes consolidated outputs to `<results_dir>/tables/metrics_summary.csv`.
 Optional bootstrap samples can also be saved to Parquet for further analysis.
+When patient identifiers are present in the prediction files, bootstrap
+resampling is clustered at the patient level.
 """
 from __future__ import annotations
 
@@ -12,11 +14,12 @@ import concurrent.futures
 import logging
 import sys
 from collections import defaultdict
+from functools import lru_cache
 import os
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
 from joblib import Parallel, delayed
 import numpy as np
@@ -36,6 +39,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from data_preparation.inputs import COHORT_FILE, INPUT_FILE
 from model_creation.prediction_io import REQUIRED_PREDICTION_COLUMNS, validate_prediction_dataframe
 
 logger = logging.getLogger(__name__)
@@ -48,6 +52,7 @@ TABLES_DIR = RESULTS_DIR / "tables"
 PAPER_TABLES_DIR = PAPER_DIR / "tables"
 
 ARTIFACT_FILES = ("calibration.json", "threshold.json")
+PATIENT_ID_COLUMNS = ("subjectid", "subject_id")
 
 
 @dataclass
@@ -66,6 +71,8 @@ class PredictionSet:
 
 class ValidationError(Exception):
     """Raised when a predictions file fails validation."""
+
+
 def _validate_artifacts(pred_path: Path) -> None:
     """Ensure calibration/threshold artifacts exist alongside predictions.
 
@@ -85,7 +92,13 @@ def _validate_dataframe(df: pd.DataFrame, path: Path) -> float:
     """Validate required columns and return the unique threshold value."""
 
     try:
-        return validate_prediction_dataframe(df, path, REQUIRED_PREDICTION_COLUMNS)
+        return validate_prediction_dataframe(
+            df,
+            path,
+            REQUIRED_PREDICTION_COLUMNS,
+            require_unique_caseids=True,
+            require_single_threshold=False,
+        )
     except ValueError as exc:
         raise ValidationError(str(exc)) from exc
 
@@ -97,10 +110,77 @@ def _assert_single_value(df: pd.DataFrame, col: str, path: Path) -> str:
     return str(values[0])
 
 
+def _summarize_threshold(values: Union[pd.Series, np.ndarray]) -> float:
+    thresholds = np.asarray(values, dtype=float)
+    if thresholds.size == 0:
+        return float("nan")
+    return float(np.median(thresholds))
+
+
+@lru_cache(maxsize=1)
+def _load_case_subject_lookup() -> Optional[pd.Series]:
+    lookup_frames: List[pd.DataFrame] = []
+    for source_path, source_name in ((COHORT_FILE, "cohort"), (INPUT_FILE, "clinical")):
+        if not source_path.exists():
+            logger.warning(
+                "%s file %s not found; cannot use it for patient-ID recovery during clustered bootstrap.",
+                source_name.capitalize(),
+                source_path,
+            )
+            continue
+
+        try:
+            source_df = pd.read_csv(source_path, usecols=["caseid", "subjectid"])
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Failed to load case-to-subject mapping from %s: %s", source_path, exc)
+            continue
+
+        if source_df["caseid"].duplicated().any():
+            logger.warning("%s contains duplicate caseids; skipping it for patient-ID recovery.", source_path)
+            continue
+
+        lookup_frames.append(source_df)
+
+    if not lookup_frames:
+        return None
+
+    combined_lookup = pd.concat(lookup_frames, ignore_index=True)
+    combined_lookup = combined_lookup.drop_duplicates(subset="caseid", keep="first")
+    return combined_lookup.set_index("caseid")["subjectid"]
+
+
+def _attach_patient_ids(df: pd.DataFrame, pred_path: Path) -> pd.DataFrame:
+    if any(column in df.columns for column in PATIENT_ID_COLUMNS):
+        return df
+
+    case_subject_lookup = _load_case_subject_lookup()
+    if case_subject_lookup is None:
+        return df
+
+    mapped_subjectids = df["caseid"].map(case_subject_lookup)
+    if mapped_subjectids.isna().any():
+        missing = int(mapped_subjectids.isna().sum())
+        logger.warning(
+            "Could not recover patient IDs for %s/%s predictions from %s missing caseids in %s or %s; falling back to case-level bootstrap.",
+            pred_path.parent.parent.parent.name,
+            pred_path.name,
+            missing,
+            COHORT_FILE,
+            INPUT_FILE,
+        )
+        return df
+
+    enriched_df = df.copy()
+    enriched_df["subjectid"] = mapped_subjectids.to_numpy()
+    logger.info("Recovered subject IDs for %s using %s and %s.", pred_path, COHORT_FILE, INPUT_FILE)
+    return enriched_df
+
+
 def _load_predictions(pred_path: Path) -> PredictionSet:
     df = pd.read_csv(pred_path)
     threshold = _validate_dataframe(df, pred_path)
     _validate_artifacts(pred_path)
+    df = _attach_patient_ids(df, pred_path)
 
     outcome = _assert_single_value(df, "outcome", pred_path)
     branch = _assert_single_value(df, "branch", pred_path)
@@ -176,14 +256,19 @@ def compute_point_metrics(pred_set: PredictionSet) -> Dict[str, float]:
 
     y_true = pred_set.df["y_true"].values
     y_prob = pred_set.df["y_prob_calibrated"].values
-    y_pred = (y_prob >= pred_set.threshold).astype(int)
+    y_pred = pred_set.df["y_pred_label"].astype(int).values
+    threshold = _summarize_threshold(pred_set.df["threshold"].values)
 
-    return _compute_metrics_arrays(y_true, y_prob, pred_set.threshold)
+    return _compute_metrics_arrays(y_true, y_prob, y_pred, threshold)
 
 
-def _compute_metrics_arrays(y_true: np.ndarray, y_prob: np.ndarray, threshold: float) -> Dict[str, float]:
+def _compute_metrics_arrays(
+    y_true: np.ndarray,
+    y_prob: np.ndarray,
+    y_pred: np.ndarray,
+    threshold: float,
+) -> Dict[str, float]:
     """Fast path to compute metrics without constructing a PredictionSet."""
-    y_pred = (y_prob >= threshold).astype(int)
 
     metrics = {
         "n": len(y_true),
@@ -210,30 +295,90 @@ def _compute_metrics_arrays(y_true: np.ndarray, y_prob: np.ndarray, threshold: f
     return metrics
 
 
+def _get_cluster_column(df: pd.DataFrame) -> str:
+    """Return the patient-cluster column when available, else fall back to case-level rows."""
+    for column in PATIENT_ID_COLUMNS:
+        if column in df.columns:
+            return column
+    return "caseid"
+
+
+def _get_cluster_ids(df: pd.DataFrame) -> np.ndarray:
+    cluster_col = _get_cluster_column(df)
+    return df[cluster_col].to_numpy()
+
+
+def _prediction_frames_are_aligned(reference_df: pd.DataFrame, candidate_df: pd.DataFrame) -> bool:
+    if len(reference_df) != len(candidate_df):
+        return False
+    if not np.array_equal(reference_df["caseid"].to_numpy(), candidate_df["caseid"].to_numpy()):
+        return False
+    if not np.array_equal(reference_df["y_true"].to_numpy(), candidate_df["y_true"].to_numpy()):
+        return False
+    for column in ("repeat_id", "outer_fold_id"):
+        if column in reference_df.columns or column in candidate_df.columns:
+            if column not in reference_df.columns or column not in candidate_df.columns:
+                return False
+            if not np.array_equal(reference_df[column].to_numpy(), candidate_df[column].to_numpy()):
+                return False
+    return np.array_equal(_get_cluster_ids(reference_df), _get_cluster_ids(candidate_df))
+
+
 def _generate_bootstrap_indices(
-    y_true: np.ndarray, n_bootstrap: int, stratified: bool, seed: int
+    df: pd.DataFrame, n_bootstrap: int, stratified: bool, seed: int
 ) -> List[np.ndarray]:
-    """Create bootstrap index sets, optionally stratified by outcome."""
+    """Create clustered bootstrap index sets, optionally stratified by patient label."""
 
     rng = np.random.default_rng(seed)
-    indices = np.arange(len(y_true))
+    cluster_col = _get_cluster_column(df)
+
+    if cluster_col == "caseid":
+        logger.warning(
+            "Predictions at %s do not include a patient identifier; falling back to case-level bootstrap.",
+            cluster_col,
+        )
+
+    cluster_to_indices = {
+        cluster_id: np.asarray(cluster_rows, dtype=int)
+        for cluster_id, cluster_rows in df.groupby(cluster_col, sort=False).indices.items()
+    }
+    cluster_ids = np.array(list(cluster_to_indices.keys()), dtype=object)
 
     if not stratified:
-        return [rng.choice(indices, size=len(indices), replace=True) for _ in range(n_bootstrap)]
+        samples = []
+        for _ in range(n_bootstrap):
+            sampled_clusters = rng.choice(cluster_ids, size=len(cluster_ids), replace=True)
+            sampled_rows = np.concatenate([cluster_to_indices[cluster_id] for cluster_id in sampled_clusters])
+            samples.append(sampled_rows)
+        return samples
 
-    pos_idx = indices[y_true == 1]
-    neg_idx = indices[y_true == 0]
+    cluster_labels = df.groupby(cluster_col, sort=False)["y_true"].max()
+    pos_clusters = cluster_labels[cluster_labels == 1].index.to_numpy(dtype=object)
+    neg_clusters = cluster_labels[cluster_labels == 0].index.to_numpy(dtype=object)
+
+    if cluster_labels.nunique() > 1:
+        mixed_clusters = df.groupby(cluster_col, sort=False)["y_true"].nunique()
+        if (mixed_clusters > 1).any():
+            logger.warning(
+                "Mixed operation-level outcomes detected within patient clusters; stratified clustered bootstrap uses patient label=max(y_true)."
+            )
 
     # If a class is missing, fall back to unstratified to avoid degenerate samples.
-    if len(pos_idx) == 0 or len(neg_idx) == 0:
-        logger.warning("Stratified bootstrap requested but one class is missing; falling back to unstratified.")
-        return [rng.choice(indices, size=len(indices), replace=True) for _ in range(n_bootstrap)]
+    if len(pos_clusters) == 0 or len(neg_clusters) == 0:
+        logger.warning("Stratified clustered bootstrap requested but one patient class is missing; falling back to unstratified.")
+        samples = []
+        for _ in range(n_bootstrap):
+            sampled_clusters = rng.choice(cluster_ids, size=len(cluster_ids), replace=True)
+            sampled_rows = np.concatenate([cluster_to_indices[cluster_id] for cluster_id in sampled_clusters])
+            samples.append(sampled_rows)
+        return samples
 
     samples: List[np.ndarray] = []
     for _ in range(n_bootstrap):
-        pos_sample = rng.choice(pos_idx, size=len(pos_idx), replace=True)
-        neg_sample = rng.choice(neg_idx, size=len(neg_idx), replace=True)
-        samples.append(np.concatenate([pos_sample, neg_sample]))
+        pos_sample = rng.choice(pos_clusters, size=len(pos_clusters), replace=True)
+        neg_sample = rng.choice(neg_clusters, size=len(neg_clusters), replace=True)
+        sampled_clusters = np.concatenate([pos_sample, neg_sample])
+        samples.append(np.concatenate([cluster_to_indices[cluster_id] for cluster_id in sampled_clusters]))
     return samples
 
 
@@ -247,20 +392,23 @@ def _bootstrap_metrics(
     df = pred_set.df
     y_true = df["y_true"].values
     y_prob = df["y_prob_calibrated"].values
+    y_pred = df["y_pred_label"].astype(int).values
 
     if indices_list is None:
-        indices_list = _generate_bootstrap_indices(y_true, n_bootstrap, stratified=stratified, seed=seed)
+        indices_list = _generate_bootstrap_indices(df, n_bootstrap, stratified=stratified, seed=seed)
 
     records = []
     for i, sample_idx in enumerate(indices_list):
         y_true_sample = y_true[sample_idx]
         y_prob_sample = y_prob[sample_idx]
+        y_pred_sample = y_pred[sample_idx]
 
         # Skip replicate if only one class is present after sampling.
         if len(np.unique(y_true_sample)) < 2:
             continue
 
-        metrics = _compute_metrics_arrays(y_true_sample, y_prob_sample, pred_set.threshold)
+        threshold_sample = _summarize_threshold(df.iloc[sample_idx]["threshold"].values)
+        metrics = _compute_metrics_arrays(y_true_sample, y_prob_sample, y_pred_sample, threshold_sample)
         metrics.update(
             {
                 "outcome": pred_set.outcome,
@@ -396,8 +544,16 @@ def summarize(
                 shared_indices[key] = None
                 continue
 
+            if any(not _prediction_frames_are_aligned(first.df, ps.df) for ps in group_sets[1:]):
+                logger.warning(
+                    "Grouping %s has mismatched case order, outcomes, or patient IDs; skipping paired bootstrap for this group.",
+                    key,
+                )
+                shared_indices[key] = None
+                continue
+
             shared_indices[key] = _generate_bootstrap_indices(
-                first.df["y_true"].values,
+                first.df,
                 n_bootstrap,
                 stratified=stratified_bootstrap,
                 seed=bootstrap_seed,

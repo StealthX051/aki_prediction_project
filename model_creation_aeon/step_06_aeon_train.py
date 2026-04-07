@@ -24,7 +24,7 @@ sys.path.append(str(PROJECT_ROOT))
 # Imports for HPO
 import optuna
 from sklearn.linear_model import LogisticRegression
-from sklearn.model_selection import StratifiedKFold
+from sklearn.model_selection import StratifiedGroupKFold, StratifiedKFold
 from sklearn.metrics import average_precision_score
 from sklearn.preprocessing import StandardScaler
 from aeon.transformations.collection.convolution_based import MiniRocket, MultiRocket
@@ -135,7 +135,7 @@ def load_aeon_data(outcome_name, channels, include_preop):
         mapped_outcome = OUTCOME_MAPPING.get(outcome_name, outcome_name)
         
         # Safe exclusion list
-        ignore = ['caseid', 'split_group', 'idx', mapped_outcome] + list(OUTCOME_MAPPING.values())
+        ignore = ['caseid', 'subjectid', 'split_group', 'idx', mapped_outcome] + list(OUTCOME_MAPPING.values())
         feat_cols = [c for c in preop_df.columns if c not in ignore and c in full_df.columns]
         X_preop_aligned = full_df[feat_cols].values
         logging.info(f"Using {len(feat_cols)} preop features.")
@@ -169,6 +169,8 @@ def load_aeon_data(outcome_name, channels, include_preop):
 
     caseids_train = full_df.loc[train_mask, 'caseid'].values
     caseids_test = full_df.loc[test_mask, 'caseid'].values
+    subjectids_train = full_df.loc[train_mask, 'subjectid'].values if 'subjectid' in full_df.columns else caseids_train
+    subjectids_test = full_df.loc[test_mask, 'subjectid'].values if 'subjectid' in full_df.columns else caseids_test
 
     return (
         X_wave_train,
@@ -179,11 +181,24 @@ def load_aeon_data(outcome_name, channels, include_preop):
         y_test,
         caseids_train,
         caseids_test,
+        subjectids_train,
+        subjectids_test,
         full_df.loc[train_mask],
         full_df.loc[test_mask],
     )
 
-def optimize_aeon_model(X_wave_tr, X_preop_tr, y_tr, model_type, n_trials=100, n_jobs=-1):
+def _build_grouped_cv(y: np.ndarray, groups: np.ndarray, random_state: int = 42):
+    min_class = min(pd.Series(y).value_counts())
+    unique_groups_per_class = [
+        int(pd.Series(groups[y == class_value]).nunique()) for class_value in sorted(np.unique(y))
+    ]
+    n_splits = min(5, int(min_class), int(pd.Series(groups).nunique()), min(unique_groups_per_class))
+    if n_splits < 2:
+        return None, n_splits
+    return StratifiedGroupKFold(n_splits=n_splits, shuffle=True, random_state=random_state), n_splits
+
+
+def optimize_aeon_model(X_wave_tr, X_preop_tr, y_tr, groups_tr, model_type, n_trials=100, n_jobs=-1):
     """
     Runs Optuna HPO for generic Aeon models (MiniRocket/MultiRocket).
     1. Precompute Rocket features.
@@ -212,10 +227,12 @@ def optimize_aeon_model(X_wave_tr, X_preop_tr, y_tr, model_type, n_trials=100, n
         # User requested to fix class_weight to 'balanced'
         class_weight = 'balanced'
         
-        kf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+        kf, n_splits = _build_grouped_cv(y_tr, groups_tr, random_state=42)
+        if kf is None:
+            return 0.0
         auprcs = []
         
-        for train_idx, val_idx in kf.split(X_rocket_tr, y_tr):
+        for train_idx, val_idx in kf.split(X_rocket_tr, y_tr, groups_tr):
             # Split
             X_r_train, X_r_val = X_rocket_tr[train_idx], X_rocket_tr[val_idx]
             y_train_fold, y_val_fold = y_tr[train_idx], y_tr[val_idx]
@@ -275,16 +292,24 @@ def generate_oof_predictions(
     X_wave: np.ndarray,
     X_preop: np.ndarray,
     y: np.ndarray,
+    groups: np.ndarray,
     n_splits: int,
     random_state: int,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Generate out-of-fold predictions for Aeon models without test leakage."""
 
-    cv = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=random_state)
+    unique_groups_per_class = [
+        int(pd.Series(groups[y == class_value]).nunique()) for class_value in sorted(np.unique(y))
+    ]
+    max_safe_splits = min(int(pd.Series(groups).nunique()), min(unique_groups_per_class))
+    if n_splits > max_safe_splits:
+        raise ValueError("n_splits exceeds the number of unique patient groups available in each class.")
+
+    cv = StratifiedGroupKFold(n_splits=n_splits, shuffle=True, random_state=random_state)
     oof_predictions = np.empty_like(y, dtype=float)
     fold_indices = np.empty_like(y, dtype=int)
 
-    for fold, (train_idx, val_idx) in enumerate(cv.split(X_wave, y)):
+    for fold, (train_idx, val_idx) in enumerate(cv.split(X_wave, y, groups)):
         if model_name == 'freshprince':
             fold_model = FreshPrinceFused(n_estimators=200, random_state=random_state, n_jobs=-1)
             fold_model.fit(X_wave[train_idx], None if X_preop is None else X_preop[train_idx], y[train_idx])
@@ -363,18 +388,20 @@ def main():
     
     # 1. Load Data
     data = load_aeon_data(args.outcome, args.channels, args.include_preop)
-    Xw_tr, Xp_tr, y_tr, Xw_te, Xp_te, y_te, caseids_tr, caseids_te, df_tr, df_te = data
+    Xw_tr, Xp_tr, y_tr, Xw_te, Xp_te, y_te, caseids_tr, caseids_te, subjectids_tr, subjectids_te, df_tr, df_te = data
 
     if args.limit:
         logging.info(f"Limiting usage to {args.limit} samples per split.")
         Xw_tr, Xp_tr = Xw_tr[:args.limit], (Xp_tr[:args.limit] if Xp_tr is not None else None)
         y_tr = y_tr[:args.limit]
         caseids_tr = caseids_tr[:args.limit]
+        subjectids_tr = subjectids_tr[:args.limit]
         df_tr = df_tr.iloc[:args.limit]
 
         Xw_te, Xp_te = Xw_te[:args.limit], (Xp_te[:args.limit] if Xp_te is not None else None)
         y_te = y_te[:args.limit]
         caseids_te = caseids_te[:args.limit]
+        subjectids_te = subjectids_te[:args.limit]
         df_te = df_te.iloc[:args.limit]
 
     logging.info(f"Train size: {len(y_tr)}, Test size: {len(y_te)}")
@@ -389,6 +416,17 @@ def main():
     if n_splits > min_class:
         logging.warning("Reducing n_splits from %s to %s to match minority class count.", n_splits, min_class)
         n_splits = min_class
+    unique_groups_per_class = [
+        int(pd.Series(subjectids_tr[y_tr == class_value]).nunique()) for class_value in sorted(np.unique(y_tr))
+    ]
+    max_safe_group_splits = min(int(pd.Series(subjectids_tr).nunique()), min(unique_groups_per_class))
+    if n_splits > max_safe_group_splits:
+        logging.warning(
+            "Reducing n_splits from %s to %s to match per-class training patient counts.",
+            n_splits,
+            max_safe_group_splits,
+        )
+        n_splits = max_safe_group_splits
 
     dataset_hash = compute_file_hash(Path(AEON_OUT_DIR) / 'aki_preop_aeon.csv')
 
@@ -408,6 +446,7 @@ def main():
         # MiniRocket / MultiRocket with Optuna HPO
         best_params, transformer, X_rocket_tr = optimize_aeon_model(
             Xw_tr, Xp_tr, y_tr, 
+            subjectids_tr,
             model_type=args.model, 
             n_trials=args.n_trials
         )
@@ -464,6 +503,7 @@ def main():
         Xw_tr,
         Xp_tr,
         y_tr,
+        subjectids_tr,
         n_splits=n_splits,
         random_state=args.random_state,
     )
@@ -478,11 +518,14 @@ def main():
 
     if set(caseids_tr) & set(caseids_te):
         raise AssertionError("Train and test caseids overlap; calibration would leak test data.")
+    if set(subjectids_tr) & set(subjectids_te):
+        raise AssertionError("Train and test patients overlap; calibration would leak test data.")
 
     calibrated_test = apply_logistic_recalibration(final_prob_raw, recalibration_model)
 
     train_predictions = pd.DataFrame({
         'caseid': caseids_tr,
+        'subjectid': subjectids_tr,
         'y_true': y_tr,
         'y_prob_raw': oof_predictions,
         'y_prob_calibrated': calibrated_oof,
@@ -499,6 +542,7 @@ def main():
 
     test_predictions = pd.DataFrame({
         'caseid': caseids_te,
+        'subjectid': subjectids_te,
         'y_true': y_te,
         'y_prob_raw': final_prob_raw,
         'y_prob_calibrated': calibrated_test,

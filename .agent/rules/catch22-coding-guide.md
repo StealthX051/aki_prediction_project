@@ -24,6 +24,9 @@ These rules apply when working in the `aki_prediction_project` repository.
 
 - Assume the Conda environment defined in `environment.yml` is the default runtime.
 - When writing “how to run” instructions or automation, use that environment name and file rather than ad-hoc installations.
+- Prefer `conda env update -f environment.yml --prune` to sync existing environments after dependency changes.
+- If tests need extra pinned packages, install `requirements-test.txt` into the activated Conda environment with `python -m pip install -r requirements-test.txt`.
+- Do not add a parallel `venv` workflow to the docs unless explicitly asked to redesign environment management.
 - Avoid adding dependencies that are not reflected in `environment.yml`; if necessary, update that file and mention the change in the README.
 
 ## 4. Coding style and logging
@@ -52,3 +55,18 @@ These rules apply when working in the `aki_prediction_project` repository.
   - check key columns (`caseid`, outcome labels, `split_group`) exist and have reasonable distributions.
 - Use fixed seeds where the underlying libraries support them (e.g., model training, data splitting) to maintain reproducibility of results.
 - Do not delete or disable existing tests or checks without a clear stated reason.
+
+## 7. Documentation maintenance
+
+- Keep documentation concise and operational.
+- When updating docs, also check whether older text has become stale, duplicated, misleading, or bloated; delete or replace it instead of layering more prose on top.
+- Verify commands, paths, and environment instructions against the current repo before finalizing doc changes.
+
+## 8. Subagent usage
+
+- Use subagents when parallel exploration, bounded implementation work, or
+  independent verification will materially help.
+- Zero, one, or many subagents are all acceptable; do not force delegation on
+  small or tightly coupled tasks.
+- Keep each subagent scoped to a concrete outcome so work does not become
+  redundant or noisy.

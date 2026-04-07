@@ -147,6 +147,7 @@ def normalize_counts(
     removal_reason_map = {
         "mandatory_columns": "Missing mandatory data fields",
         "waveforms": "Incomplete waveform data",
+        "Exclude ASA V/VI": "ASA class V/VI excluded",
         "filter_preop_cr": "Missing preoperative creatinine",
         "ensure_sample_independence": "Exclusion of repeat encounters",
         "filter_postop_cr": "Missing postoperative creatinine",
@@ -155,6 +156,7 @@ def normalize_counts(
     title_overrides = {
         "mandatory_columns": "EHR Record Screening",
         "waveforms": "High-fidelity Waveform Availability",
+        "Exclude ASA V/VI": "ASA Class Exclusion",
         "filter_preop_cr": "Baseline Renal Function Data",
         "ensure_sample_independence": "Subject Selection",
         "filter_postop_cr": "Outcome Data Availability",
@@ -179,6 +181,80 @@ def normalize_counts(
 
         label = str(split_raw.get("label") or "Label split")
         return OutcomeSplit(label=label, true_count=true_count, false_count=false_count)
+
+    def _normalize_custom_filter_entries(entries: Sequence[Any]) -> List[Dict[str, Any]]:
+        normalized_entries: List[Dict[str, Any]] = []
+        for entry in entries:
+            if not isinstance(entry, Mapping):
+                logger.warning("Skipping unrecognized custom filter entry: %s", entry)
+                continue
+
+            raw_name = str(entry.get("name") or "Custom filter")
+            count = _extract_count(entry)
+            if count is None:
+                continue
+
+            count_before = entry.get("count_before")
+            try:
+                count_before_value = int(count_before) if count_before is not None else None
+            except (TypeError, ValueError):
+                count_before_value = None
+
+            if raw_name in title_overrides:
+                title = title_overrides[raw_name]
+            else:
+                title = str(
+                    entry.get("label")
+                    or filter_label_map.get(raw_name)
+                    or raw_name.replace("_", " ").title()
+                )
+
+            normalized_entries.append(
+                {
+                    "raw_name": raw_name,
+                    "title": title,
+                    "count": count,
+                    "count_before": count_before_value,
+                    "removal_reason": removal_reason_map.get(raw_name),
+                }
+            )
+
+        return normalized_entries
+
+    def _order_custom_filter_entries(
+        entries: Sequence[Dict[str, Any]],
+        *,
+        start_count: Optional[int],
+    ) -> List[Dict[str, Any]]:
+        remaining = list(entries)
+        ordered: List[Dict[str, Any]] = []
+        current_count = start_count
+
+        while remaining:
+            next_idx = None
+            if current_count is not None:
+                for idx, entry in enumerate(remaining):
+                    if entry.get("count_before") == current_count:
+                        next_idx = idx
+                        break
+
+            if next_idx is None:
+                next_idx = 0
+                entry = remaining[next_idx]
+                if current_count is not None and entry.get("count_before") is not None:
+                    logger.warning(
+                        "Could not align custom filter %s using count_before=%s after count=%s; "
+                        "keeping input order.",
+                        entry["raw_name"],
+                        entry.get("count_before"),
+                        current_count,
+                    )
+
+            entry = remaining.pop(next_idx)
+            ordered.append(entry)
+            current_count = entry["count"]
+
+        return ordered
 
     stages: MutableSequence[CohortStage] = []
 
@@ -243,6 +319,39 @@ def normalize_counts(
         final_waveform_count = waveform_entries[-1][1]
         labels = [label for label, _ in waveform_entries]
         detail = _format_detail("Required waveforms", labels)
+    else:
+        final_waveform_count = None
+
+    custom_filters = raw_counts.get("custom_filters") or []
+    if isinstance(custom_filters, Mapping):
+        custom_filters = [
+            {"name": key, "count": value} for key, value in custom_filters.items()
+        ]
+
+    custom_filter_entries = _normalize_custom_filter_entries(custom_filters)
+    pre_waveform_filters: List[Dict[str, Any]] = []
+    post_waveform_filters: List[Dict[str, Any]] = []
+    for entry in custom_filter_entries:
+        if (
+            final_waveform_count is not None
+            and entry.get("count_before") is not None
+            and entry["count_before"] > final_waveform_count
+        ):
+            pre_waveform_filters.append(entry)
+        else:
+            post_waveform_filters.append(entry)
+
+    previous_stage_count = stages[-1].count if stages else None
+    for entry in _order_custom_filter_entries(pre_waveform_filters, start_count=previous_stage_count):
+        stages.append(
+            CohortStage(
+                title=entry["title"],
+                count=entry["count"],
+                removal_reason=entry["removal_reason"],
+            )
+        )
+
+    if final_waveform_count is not None:
         stages.append(
             CohortStage(
                 title=title_overrides.get("waveforms", "Waveform availability"),
@@ -252,34 +361,13 @@ def normalize_counts(
             )
         )
 
-    custom_filters = raw_counts.get("custom_filters") or []
-    if isinstance(custom_filters, Mapping):
-        custom_filters = [
-            {"name": key, "count": value} for key, value in custom_filters.items()
-        ]
-
-    for entry in custom_filters:
-        if isinstance(entry, Mapping):
-            raw_name = str(entry.get("name") or "Custom filter")
-            label = str(
-                entry.get("label")
-                or title_overrides.get(raw_name)
-                or filter_label_map.get(raw_name)
-                or raw_name.replace("_", " ").title()
-            )
-            name = label
-            count = _extract_count(entry)
-        else:
-            logger.warning("Skipping unrecognized custom filter entry: %s", entry)
-            continue
-
-        if count is None:
-            continue
+    previous_stage_count = stages[-1].count if stages else None
+    for entry in _order_custom_filter_entries(post_waveform_filters, start_count=previous_stage_count):
         stages.append(
             CohortStage(
-                title=name,
-                count=count,
-                removal_reason=removal_reason_map.get(raw_name),
+                title=entry["title"],
+                count=entry["count"],
+                removal_reason=entry["removal_reason"],
             )
         )
 

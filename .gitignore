@@ -20,6 +20,12 @@ smoke_test_outputs/
 /analysis/2_interpretability_analysis.html
 /outputs/
 
+# Runner / smoke logs
+/experiment_log.txt
+/pipeline_aeon.log
+/smoke_test_aeon.log
+/smoke_test_outputs/*.log
+
 # Model Artifacts: Trained models can be very large.
 /models/
 

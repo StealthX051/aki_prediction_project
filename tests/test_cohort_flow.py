@@ -61,3 +61,40 @@ def test_render_creates_files(tmp_path: Path):
 
     assert output_paths[0].exists()
     assert output_paths[0].suffix == ".png"
+
+
+def test_normalize_counts_inserts_pre_waveform_custom_filter_before_waveform_stage():
+    counts = {
+        "total_cases": 100,
+        "mandatory_columns": {"count": 90, "columns": ["preop_cr", "opend"]},
+        "waveforms": [
+            {"channel": "SNUADC/PLETH", "count": 80},
+            {"channel": "SNUADC/ECG_II", "count": 75},
+        ],
+        "custom_filters": [
+            {
+                "name": "Exclude ASA V/VI",
+                "label": "Excluded ASA V/VI",
+                "count_before": 90,
+                "count": 88,
+            },
+            {"name": "filter_preop_cr", "count_before": 75, "count": 70},
+        ],
+        "final_cohort": {"count": 70},
+    }
+
+    flow = normalize_counts(counts)
+    titles = [stage.title for stage in flow.stages]
+
+    assert "ASA Class Exclusion" in titles
+    assert "High-fidelity Waveform Availability" in titles
+    assert titles.index("ASA Class Exclusion") < titles.index("High-fidelity Waveform Availability")
+
+    asa_stage = next(stage for stage in flow.stages if stage.title == "ASA Class Exclusion")
+    waveform_stage = next(stage for stage in flow.stages if stage.title == "High-fidelity Waveform Availability")
+
+    assert asa_stage.count == 88
+    assert asa_stage.removed == 2
+    assert asa_stage.removal_reason == "ASA class V/VI excluded"
+    assert waveform_stage.count == 75
+    assert waveform_stage.removed == 13

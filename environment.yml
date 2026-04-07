@@ -1,5 +1,7 @@
-# This file defines the Conda environment for the AKI prediction project.
+# This file defines the canonical Conda environment for the AKI prediction project.
 # To create the environment, run: conda env create -f environment.yml
+# To sync an existing environment after dependency changes, run:
+#   conda env update -f environment.yml --prune
 # To activate the environment, run: conda activate aki_prediction_project
 
 name: aki_prediction_project

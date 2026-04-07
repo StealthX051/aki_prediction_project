@@ -42,7 +42,7 @@ OUTCOME_COLUMNS = (
     "y_prolonged_los_postop",
     "y_icu_admit",
 )
-EXCLUDED_COLUMNS = {"caseid", "subject_id", "hadm_id", "split_group", *OUTCOME_COLUMNS}
+EXCLUDED_COLUMNS = {"caseid", "subjectid", "subject_id", "hadm_id", "split_group", *OUTCOME_COLUMNS}
 
 
 def _load_dataset(path: Path) -> pd.DataFrame:

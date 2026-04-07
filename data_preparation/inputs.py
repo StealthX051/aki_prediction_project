@@ -31,10 +31,9 @@ MANDATORY_WAVEFORMS = ['SNUADC/PLETH', 'SNUADC/ECG_II', 'Primus/CO2', 'Primus/AW
 WAVEFORM_SUBSTITUTIONS = {'SNUADC/ECG_II': ['SNUADC/ECG_V5'],}
 # custom filters to apply (import from custom_filters folder)
 from data_preparation.custom_filters.preop_cr import filter_preop_cr
-from data_preparation.custom_filters.sampling_independence import ensure_sample_independence
 from data_preparation.custom_filters.postop_cr import filter_postop_cr
 from data_preparation.custom_filters.aki_label import add_aki_label
-CUSTOM_FILTERS = [filter_preop_cr, ensure_sample_independence, filter_postop_cr, add_aki_label]
+CUSTOM_FILTERS = [filter_preop_cr, filter_postop_cr, add_aki_label]
 # window length and slide length for catch-22 feature extraction (in seconds). None is entire waveform
 WIN_SEC = 10
 SLIDE_SEC = 5

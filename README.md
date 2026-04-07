@@ -24,26 +24,37 @@ The pipeline consists of three main stages:
 ## 🛠️ Prerequisites & Setup
 
 ### 1. Environment Setup
-The project uses a Conda environment to manage dependencies.
+Use the Conda environment as the canonical runtime for this repository. Agents
+and contributors should prefer this environment over ad-hoc `venv` setups so
+commands, paths, and package versions stay aligned.
 
 ```bash
-# Create the environment from the provided file
+# First-time setup
 conda env create -f environment.yml
 
-# Activate the environment
+# Sync an existing environment after dependency changes
+conda env update -f environment.yml --prune
+
+# Activate before running project commands
 conda activate aki_prediction_project
 ```
 
-If you just want to run the Python test suite without provisioning the full
-Conda environment, install the lightweight test dependencies via pip:
+If you need the pinned test extras inside the same Conda environment, install
+them after activation:
 
 ```bash
-pip install -r requirements-test.txt
+python -m pip install -r requirements-test.txt
 ```
 
 Static Plotly exports rely on the bundled `kaleido` dependency. The environment
 also pins `matplotlib` to a Plotly-compatible version to keep visualization
 outputs reproducible across CLI runs.
+
+Shell runners (`run_experiments.sh`, `run_smoke_test.sh`) honor `PYTHON_BIN` as
+a whitespace-separated command prefix. If you do not activate Conda in the
+shell first, invoke them with
+`PYTHON_BIN='conda run -n aki_prediction_project python' ...` so the smoke and
+experiment paths run inside the pinned project environment.
 
 ### 2. VitalDB Access
 Ensure you have access to the VitalDB API. The `vitaldb` Python package is used to download waveforms on-demand.
@@ -54,7 +65,7 @@ Ensure you have access to the VitalDB API. The `vitaldb` Python package is used 
 
 ### Advantages over Legacy Pipeline
 *   **Reproducibility**: Modular Python scripts replace monolithic notebooks, making execution deterministic and easier to automate.
-*   **Leakage Prevention**: The train/test split is performed **once** at the beginning of the preprocessing stage (`step_03`) and propagated to the final datasets. This guarantees that no patient from the test set is used to calculate training statistics (e.g., outlier thresholds).
+*   **Leakage Prevention**: The patient-level train/test split is performed **once** at the beginning of the preprocessing stage (`step_03`) and propagated to the final datasets. This guarantees that no patient from the test set is used to calculate training statistics (e.g., outlier thresholds).
 *   **Dual Mode Support**: Automatically handles both **Full** (entire case) and **Windowed** (segmented) feature sets.
 
 ### Step 1: Configuration
@@ -68,7 +79,7 @@ Central configuration file. Defines input/output paths, mandatory waveforms/colu
 ### Step 2: Cohort Construction
 **File**: `data_preparation/step_01_cohort_construction.py`
 Filters the raw dataset to create a valid cohort.
-*   **Logic**: Selects patients who have all `MANDATORY_WAVEFORMS` and `MANDATORY_COLUMNS`.
+*   **Logic**: Selects operations with all `MANDATORY_WAVEFORMS` and `MANDATORY_COLUMNS`. Multiple operations per patient are retained, but later train/validation/test splits are grouped by patient ID.
 *   **Output**: A cohort CSV containing valid `caseid`s and the following derived outcomes:
     *   `aki_label`: Primary outcome (KDIGO AKI).
     *   `y_icu_admit`: ICU admission (>0 days) — secondary outcome used in the current experiment grid.
@@ -124,18 +135,16 @@ We extract a comprehensive set of preoperative variables from `clinical_data.csv
 *   **Derived Features**:
     *   `inpatient_preop`: Binary flag for inpatient admission prior to surgery.
     *   `preop_egfr_ckdepi_2021`: eGFR calculated using the CKD-EPI 2021 creatinine-only, race-free equation (per the National Kidney Foundation). The dataset-supplied `preop_gfr` column is intentionally excluded in favor of this derived value.
-    *   Clinical flag helpers (e.g., `bun_high`, `hypoalbuminemia`) are computed for intermediate use but removed before one-hot encoding/imputation in the saved `preop_processed.csv`.
+    *   Clinical flag helpers (e.g., `bun_high`, `hypoalbuminemia`) are computed for intermediate use but removed before the processed preop table is saved.
 
 #### 2. Processing Steps
-*   **Splitting**: Performs an 80/20 stratified split based on the outcome. This `split_group` is saved and used downstream to prevent leakage.
-*   **Outlier Handling**: Calculates percentiles (0.5%, 99.5%) **only on the training set** and applies them to clip/impute outliers in both train and test sets.
-*   **Imputation**: **Disabled by default**; missing values remain as `NaN` for downstream handling. Pass `--impute-missing` (or set `IMPUTE_MISSING=True` in `data_preparation/inputs.py`) to restore the previous `-99` sentinel behavior.
-*   **Encoding**: Categorical variables are one-hot encoded. Rare categories (<30 occurrences) in `department` are merged into 'other'.
+*   **Splitting**: Performs an approximately 80/20 patient-grouped stratified split based on the outcome and saves it as `split_group` for the optional legacy holdout workflow.
+*   **Deterministic only**: Step 03 now stops after raw feature derivation plus `split_group` assignment. No train-fitted encoding, rare-category collapsing, outlier clipping, or imputation rules are baked into `aki_preop_processed.csv`.
+*   **Leakage control**: All learned preprocessing now happens inside model-time folds only, so inner CV, calibration, and holdout training all fit preprocessing statistics on the current training partition only.
+*   **Missingness**: The saved processed tables keep `NaN` values by default. Step 03 still accepts `--impute-missing` for CLI compatibility, but that flag is now a no-op and does not modify the saved outputs.
 
 ```bash
 python data_preparation/step_03_preop_prep.py
-# Optional: restore -99 imputation
-python data_preparation/step_03_preop_prep.py --impute-missing
 ```
 
 ### Step 5: Intraoperative Data Prep
@@ -156,31 +165,50 @@ Combines preop and intraop data into master datasets.
 *   **Technical Details**:
     *   Merges intraop features with processed preop data on `caseid`.
     *   **Integrity Check**: Ensures every row has a valid `split_group` from Step 3.
-    *   **Missing Data**: Leaves NaNs in place by default; pass `--impute-missing` (or set `IMPUTE_MISSING=True`) to fill merge-introduced NaNs with `-99`.
+    *   **Missing Data**: Leaves NaNs in place by default. `--impute-missing` (or `IMPUTE_MISSING=True`) is a backward-compatible Step 05-only option that fills merge-introduced NaNs with `-99`; the primary nested-CV pipeline should leave NaNs intact.
     *   Outputs final wide CSVs ready for training.
 ```bash
 python data_preparation/step_05_data_merge.py
-# Optional: restore -99 imputation during merge
+# Optional legacy sentinel path during merge only
 python data_preparation/step_05_data_merge.py --impute-missing
 ```
 
 ### Step 7: Model Training & Evaluation
 **Directory**: `model_creation/`
 
-We have refactored the modeling pipeline into two robust scripts plus shared utilities. Both scripts accept `--model_type {xgboost,ebm}`; the default `xgboost` path matches prior behavior, while `ebm` now uses an efficiency-tuned ExplainableBoostingClassifier configuration for HPO (0 interactions, `missing="gain"`, **Frozen Bins** pre-computed from the training data, **0 inner bags**, **1 outer bag**, multi-core training, deterministic seed). Optuna tunes leaves, smoothing, learning rate, validation size, early stopping, and regularization over a narrowed search space (see below). Inputs retain NaNs by default; pass `--legacy_imputation` if you need the previous `-99` sentinel fill during training.
+`model_creation/step_07_train_evaluate.py` is now the primary entrypoint. By default it runs a leakage-hardened patient-grouped nested CV workflow (`--validation-scheme nested_cv`) rather than a single holdout split. Inputs retain NaNs by default; pass `--legacy_imputation` only if you intentionally want fold-local modeling-time imputation instead of preserving missing values for the estimators. This flag is separate from Step 03/05's backward-compatible `--impute-missing` switches.
 
-*   **Hyperparameter Optimization** — `model_creation/step_06_run_hpo.py`: Runs Optuna sweeps (default 100 trials) to maximize AUPRC and stores the best parameters at `results/catch22/experiments/params/{model_type}/{outcome}/{branch}/{feature_set}.json`.
-*   **Training & Evaluation** — `model_creation/step_07_train_evaluate.py`: Trains the final model with the tuned hyperparameters, writes calibrated predictions, and exports artifacts.
-*   **Shared Utilities** — `model_creation/postprocessing.py` and `model_creation/prediction_io.py`: Implement stratified out-of-fold (OOF) prediction generation, logistic recalibration, Youden-J threshold search, prediction file validation, and JSON artifact persistence.
+*   **Primary validation mode**: `nested_cv` with patient-grouped `5 outer x 5 inner` CV, `repeats=1`, `max_workers=4`, `threads_per_model=8`, and Optuna `n_trials=100` per outer fit. `repeats > 1` is currently rejected because repeat-aware reporting is not implemented yet.
+*   **Legacy mode**: `holdout` remains available via `--validation-scheme holdout` and still respects the patient-grouped `split_group` created in Step 03.
+*   **Fold-local preprocessing**: rare-category merging, one-hot encoding, numeric clipping, and optional imputation are all fit inside each training partition only. HPO, calibration, and threshold tuning never inspect held-out fold outcomes.
+*   **Nested postprocessing**: after inner HPO, each outer fold generates grouped OOF predictions on outer-train, fits logistic recalibration on those predictions only, chooses the Youden-J threshold on calibrated outer-train OOF predictions only, then freezes both objects before scoring outer-test.
+*   **Strict resume safety**: nested checkpoints are reused only when the stored validation fingerprint matches the current run configuration exactly; stale fold checkpoints are ignored and recomputed rather than mixed into the new run.
+*   **Optional final refit**: `--save-final-refit` now works in both `nested_cv` and `holdout` mode and saves an additive full-data artifact bundle without changing the reported validation metrics.
+*   **Standalone HPO helper**: `model_creation/step_06_run_hpo.py` remains available for ad hoc tuning on the legacy holdout training cohort, but the default experiment runner no longer requires a separate Step 06 pass. Invalid configs or data-prep failures now terminate Step 06 with a nonzero exit code instead of logging-and-continuing.
+*   **Shared utilities**: `model_creation/validation.py`, `model_creation/preprocessing.py`, `model_creation/postprocessing.py`, and `model_creation/prediction_io.py` implement grouped splitting, fold-local preprocessing, calibration/thresholding, checkpointing, and prediction validation.
 
 ```bash
-# XGBoost example
-python model_creation/step_06_run_hpo.py --outcome any_aki --branch windowed --feature_set all_waveforms --model_type xgboost
-python model_creation/step_07_train_evaluate.py --outcome any_aki --branch windowed --feature_set all_waveforms --model_type xgboost
+# Default primary analysis: nested 5x5 patient-grouped CV
+python -m model_creation.step_07_train_evaluate \
+  --outcome any_aki \
+  --branch windowed \
+  --feature_set all_waveforms \
+  --model_type xgboost
 
-# EBM example
-python model_creation/step_06_run_hpo.py --outcome any_aki --branch windowed --feature_set all_waveforms --model_type ebm
-python model_creation/step_07_train_evaluate.py --outcome any_aki --branch windowed --feature_set all_waveforms --model_type ebm --export_ebm_explanations
+# Legacy patient-grouped holdout
+python -m model_creation.step_07_train_evaluate \
+  --outcome any_aki \
+  --branch windowed \
+  --feature_set all_waveforms \
+  --model_type xgboost \
+  --validation-scheme holdout
+
+# Optional standalone HPO on the holdout training cohort
+python -m model_creation.step_06_run_hpo \
+  --outcome any_aki \
+  --branch windowed \
+  --feature_set all_waveforms \
+  --model_type ebm
 ```
 
 **EBM explainability exports (global, local, per-term)**  
@@ -192,9 +220,9 @@ Step 7 now emits calibrated, publication-ready EBM interpretability artifacts by
 * Robust export loop: per-term exports run in a thread pool with progress logs, per-term timeouts (90s), up to 2 retries, and non-blocking shutdown to avoid hangs. KeyboardInterrupt cancels outstanding tasks promptly.
 
 **EBM HPO (small-N optimized)**  
-During HPO we now prioritize speed and stability for ~2.5k rows: `inner_bags=0`, `outer_bags=1`, `max_bins∈{32,64,128,256}`, `max_leaves∈{2,3}`, `smoothing_rounds∈{0,25,50,75,100,150,200,350,500}`, `learning_rate∈{0.0025,0.005,0.01,0.015,0.02,0.03,0.04}`, `validation_size∈{0.1,0.15,0.2}`, `early_stopping_rounds∈{100,200}`, `early_stopping_tolerance∈{0,1e-5}`, `min_samples_leaf∈{2,3,4,5,10}`, `min_hessian∈{0,1e-6,1e-4,1e-2}`, `greedy_ratio∈{0,5,10}`, `cyclic_progress∈{0,1}`, `n_jobs=-2`. For very small data (<50 rows) we automatically force `n_jobs=1`, `inner_bags=0`, `outer_bags=1`, `validation_size=0.2` to avoid hangs. Final training in Step 7 still applies the heavier production defaults (`inner_bags=20`, `outer_bags=14`, `max_bins` from tuned value) so you can refit top configs with stability while keeping HPO fast.
+During HPO we now prioritize speed and stability for ~2.5k rows: `inner_bags=0`, `outer_bags=1`, `max_bins∈{32,64,128,256}`, `max_leaves∈{2,3}`, `smoothing_rounds∈{0,25,50,75,100,150,200,350,500}`, `learning_rate∈{0.0025,0.005,0.01,0.015,0.02,0.03,0.04}`, `validation_size∈{0.1,0.15,0.2}`, `early_stopping_rounds∈{100,200}`, `early_stopping_tolerance∈{0,1e-5}`, `min_samples_leaf∈{2,3,4,5,10}`, `min_hessian∈{0,1e-6,1e-4,1e-2}`, `greedy_ratio∈{0,5,10}`, `cyclic_progress∈{0,1}`. Frozen bins are computed per fold-training subset and per candidate `max_bins`, not once on the full outer-train table. Final training in Step 7 keeps the heavier bagging defaults (`inner_bags=20`, `outer_bags=14`) while honoring the selected `max_bins`.
 
-*Trial-level parallelism*: Optuna now runs EBM trials concurrently (up to `cpu_count-1`) while keeping XGBoost trials sequential. EBM per-trial fits still use `n_jobs=-2` (all but one core) unless the tiny-data safeguard is triggered.
+*Parallelism*: the default launcher keeps Optuna trial parallelism at `1` inside each nested task, parallelizes outer folds instead, and budgets the host at `max_workers x threads_per_model = 4 x 8 = 32` threads by default.
 
 #### Full experiment grid (Catch22 + XGBoost/EBM)
 Use the provided shell script to sweep the default grid of outcomes, branches, feature sets, and both model families. Logs are written to `experiment_log.txt`.
@@ -205,10 +233,11 @@ Use the provided shell script to sweep the default grid of outcomes, branches, f
 ```
 
 **What happens during training & evaluation?**
-*   **OOF Calibration**: `step_07_train_evaluate.py` generates OOF predictions on the training set, fits a logistic recalibration model on those scores, and saves the calibrated OOF outputs.
-*   **Threshold Selection**: The calibrated OOF scores are searched for the **Youden-J** statistic to define a single decision threshold per (Outcome × Branch × Feature Set). That threshold is stored in `artifacts/threshold.json`.
-*   **Artifacted Outputs**: For each configuration, the script saves calibrated train/test predictions (`predictions/train.csv`, `predictions/test.csv`), the fitted recalibration parameters (`artifacts/calibration.json`), threshold metadata (`artifacts/threshold.json`), dataset/hash metadata (`artifacts/metadata.json`), and SHAP plots (XGBoost only).
-*   **Model-Type Specific Artifacts**: XGBoost runs export `model.json` plus SHAP figures, while EBM runs export `model.ebm` and can also emit calibrated explainability artifacts (`--export_ebm_explanations`).
+*   **Nested default**: `predictions/test.csv` contains pooled outer-fold out-of-fold predictions, exactly one row per operation in the current supported workflow (`repeats=1`). In holdout mode it remains the single held-out test cohort.
+*   **OOF Calibration**: Each outer fold fits logistic recalibration on grouped outer-train OOF predictions only; outer-test outcomes are never used to fit the calibrator.
+*   **Threshold Selection**: Each outer fold chooses its own Youden-J threshold from calibrated outer-train OOF predictions only. Nested outputs therefore allow row-varying thresholds; reporting uses stored `y_pred_label` rather than assuming one global threshold per file.
+*   **Artifacted Outputs**: For each configuration, the script saves `predictions/train_oof.csv`, `predictions/test.csv`, `artifacts/calibration.json`, `artifacts/threshold.json`, `artifacts/metadata.json`, and `artifacts/validation.json`. Nested runs additionally save per-fold checkpoints under `artifacts/folds/`; resume only reuses checkpoints whose stored validation fingerprint exactly matches the current run.
+*   **Model-Type Specific Artifacts**: XGBoost runs export `model.json` plus SHAP figures, while EBM runs export `model.pkl` and can also emit calibrated explainability artifacts (`--export_ebm_explanations`).
     *   **EBM Explainability outputs** live under `results/catch22/experiments/models/ebm/{outcome}/{branch}/{feature_set}/artifacts/ebm_xai/` (also symlinked at `results/catch22/xai/ebm/`) and include:
         * `global_explanation.json`: raw `interpret` global explanation payload for all learned terms.
         * `global_importances.png` and `global_importances_plotly.(html|png)`: bar plots of term importances (Matplotlib + Plotly with Kaleido fallback).
@@ -217,7 +246,7 @@ Use the provided shell script to sweep the default grid of outcomes, branches, f
         * `local_attributions.csv`: reconciliation table aligning each test case ID with raw logits, calibrated probabilities, predicted label, and per-term contributions where available.
         * `README.md`: describes how calibrated probabilities were produced from raw logits (`p = sigmoid(intercept + slope * logit)`) and the threshold used for decisions.
     *   The CLI flag is ignored during smoke tests to keep runs lightweight.
-*   **Fixed Application at Test Time**: The stored calibrator and threshold are applied **without further fitting** when evaluating the held-out test set; these same fixed values are later reused by the reporting scripts.
+*   **Fixed Application at Evaluation Time**: The stored calibrator and threshold are applied **without further fitting** when evaluating each outer test fold (or the held-out cohort in holdout mode); these same fixed row-level outputs are later reused by the reporting scripts.
 
 #### Available Options
 *   **Outcomes**: `any_aki`, `icu_admission` (current scope). Other derived labels remain in the cohort for archival analyses but are not exercised by the standard run scripts.
@@ -225,13 +254,16 @@ Use the provided shell script to sweep the default grid of outcomes, branches, f
 *   **Feature Sets**: `preop_only`, `all_waveforms`, `preop_and_all_waveforms`, `pleth_only`, `ecg_only`, etc.
 *   **Model Types**: `xgboost` (default) or `ebm`.
 *   **Default Grid (`run_experiments.sh`)**: Primary runs cover preop-only, single-waveform models (`pleth_only`, `ecg_only`, `co2_only`, `awp_only`), all waveforms, and fused preop + all waveforms. Ablations pair preop with each single waveform (`preop_and_<waveform>`) and with all waveforms minus one (`preop_and_all_minus_<waveform>`). Two-channel waveform-only combinations (e.g., **AWP+CO2** or **ECG+PLETH**) are intentionally excluded from default sweeps and should be launched manually if needed.
-*   **Model Families**: `run_experiments.sh` now supports staging and reuse. By default it runs both `xgboost` and `ebm`, but you can run families independently (`--only-xgboost` or `--only-ebm`) and reuse the same preprocessed data. PREP modes: `--prep auto` (default, reuse processed features if present), `--prep force` (re-run Steps 01–05, regenerating windowed/non-windowed features), or `--prep skip` (assume processed data already exist). The script exports `DATA_DIR/PROCESSED_DIR/RAW_DIR/RESULTS_DIR` to downstream Python so EBM can share the XGBoost-prepared files without recomputing. It skips metrics/report generation if no prediction files are found (graceful when only one family has been run).
+*   **Model Families**: `run_experiments.sh` now supports staging and reuse. By default it runs both `xgboost` and `ebm`, uses `nested_cv`, resumes completed outer folds when the validation fingerprint matches, and keeps configs sequential while parallelizing outer folds within each config. PREP modes remain `--prep auto` (default), `--prep force`, and `--prep skip`. Validation knobs (`--validation-scheme`, `--outer-folds`, `--inner-folds`, `--repeats`, `--max-workers`, `--threads-per-model`, `--n-trials`, `--resume`, `--save-final-refit`) are available directly on the shell runner.
+*   **Launcher failure contract**: the main launcher finishes the requested grid, prints a compact summary of failed configurations, skips `metrics_summary`/`make_report` on partial runs, and exits nonzero if any validation job failed. This prevents stale artifacts from earlier runs being mistaken for current outputs.
 *   **Reporting/Plotting Defaults**: `reporting.make_report` now runs with quantile calibration bins (`CALIBRATION_BIN_STRATEGY=quantile`, `CALIBRATION_N_BINS=10`), per-bin counts on the calibration curve, probability histograms beneath the calibration plot, auto x-axis zoom with a full-range inset, and parallel plotting (`PLOT_N_JOBS=-2`). PR curves render as step functions with a prevalence baseline; class-count annotations are off by default (`PR_SHOW_CLASS_BALANCE=false`). These defaults are exported by the run scripts; override via env if needed (e.g., `CALIBRATION_SHOW_BIN_COUNTS`, `CALIBRATION_MAX_COUNT_ANNOTATE`, `CALIBRATION_SHOW_PROB_HIST`, `CALIBRATION_SHOW_XLIM_INSET`, `PLOT_PREFER_CALIBRATED`, `PR_SHOW_CLASS_BALANCE`).
 
 ##### Running staged experiments
 
-* Full fresh run (prep + both families):  
+* Full fresh run (prep + both families, nested CV default):  
   `./run_experiments.sh --prep force`
+* Holdout-only rerun for backward comparison:  
+  `./run_experiments.sh --validation-scheme holdout --prep skip`
 * XGBoost first, reuse data, skip EBM:  
   `./run_experiments.sh --only-xgboost --prep auto`
 * Later EBM-only reuse of the same processed data:  
@@ -241,6 +273,8 @@ All CLI options also flow through `run_catch22_experiments.sh`, so you can pass 
 
 ### Real-data smoke test (shell)
 Use `run_smoke_test.sh` to exercise the full pipeline on a handful of real cases before launching the full experiment grid. The script writes all intermediate data and results to an isolated directory (`smoke_test_outputs/` by default) so production artifacts remain untouched.
+
+`run_smoke_test.sh` uses the same `PYTHON_BIN` contract as the main launcher: pass a whitespace-separated command prefix such as `PYTHON_BIN='conda run -n aki_prediction_project python'` when the Conda environment is not already activated.
 
 ```bash
 # Default: 10 cases, 2 Optuna trials, windowed all-waveform model
@@ -252,7 +286,7 @@ CASE_LIMIT=5 HPO_TRIALS=1 SMOKE_ROOT=/tmp/aki_smoke RAW_SOURCE_DIR=/data/raw ./r
 
 Key behaviors:
 * Activates environment variable overrides added to `data_preparation.inputs` and `model_creation.utils` so cohort, features, merged data, and results are written under `SMOKE_ROOT`.
-* Trims the generated cohort to `CASE_LIMIT` rows, then runs Steps 1–5, a minimal HPO (`--n_trials HPO_TRIALS` with `--smoke_test`), final training/evaluation (`--smoke_test`), and `results_recreation.metrics_summary` against the smoke results tree.
+* Trims the generated cohort to `CASE_LIMIT` rows, then runs Steps 1–5, a reduced nested-CV training/evaluation pass (`--validation-scheme nested_cv --outer-folds 3 --inner-folds 3 --n-trials HPO_TRIALS --smoke_test`), and `results_recreation.metrics_summary` against the smoke results tree.
 * Logs progress to `$SMOKE_ROOT/smoke_test.log` and leaves artifacts under `$SMOKE_ROOT/data/processed` and `$SMOKE_ROOT/results` for inspection.
 * Reporting: smoke scripts now run `metrics_summary` with stratified/paired bootstrap (Δ vs `preop_only`, all cores) and `reporting/make_report` to emit the main + Δ tables/figures bundle.
 
@@ -266,9 +300,10 @@ statistics are centralized in `metadata/display_dictionary.json`. See
 `reporting/DISPLAY_DICTIONARY.md` for the schema and helper utilities that keep
 tables/figures synchronized.
 
-*   **Artifact Validation & Aggregation**: `results_recreation/metrics_summary.py` crawls `RESULTS_DIR/models/**/predictions/test.csv`, confirms that the paired `artifacts/calibration.json` and `artifacts/threshold.json` from Step 7 are present, and computes held-out metrics using the stored threshold for each configuration. A consolidated metrics table is written to `results/catch22/paper/tables/metrics_summary.csv` (with a copy reachable via the `results/catch22/experiments/tables` symlink; optional bootstrap samples can be saved alongside).
-*   **Calibration & Thresholds**: No report-time refitting occurs. The recalibration parameters and thresholds learned from OOF training scores in Step 7 are **fixed** and reapplied to the test predictions when computing metrics and bootstraps.
-*   **Bootstrapping**: Non-parametric, outcome-stratified bootstrap of the held-out test predictions (default 1000 reps). The stored threshold is fixed. Bootstrap samples are **paired across models within each Outcome × Branch × Pipeline group**, enabling Δ CIs. Default reference for Δ is the `preop_only` feature set.
+*   **Artifact Validation & Aggregation**: `results_recreation/metrics_summary.py` crawls `RESULTS_DIR/models/**/predictions/test.csv`, confirms that the paired validation artifacts from Step 7 are present, and computes metrics directly from stored probabilities plus stored `y_pred_label`. In nested mode this means pooled outer-fold OOF predictions rather than a single held-out cohort. A consolidated metrics table is written to `results/catch22/paper/tables/metrics_summary.csv` (with a copy reachable via the `results/catch22/experiments/tables` symlink; optional bootstrap samples can be saved alongside).
+*   **Calibration & Thresholds**: No report-time refitting occurs. Holdout runs use one frozen calibrator/threshold pair; nested runs preserve the per-fold calibrator/threshold decisions already applied in Step 7 and report from the stored row-level outputs.
+*   **Uncertainty Estimation**: When prediction files include `subjectid`, bootstrap confidence intervals are computed with patient-clustered resampling so all operations from a sampled patient stay together within each replicate.
+*   **Bootstrapping**: Non-parametric, outcome-stratified bootstrap of the saved evaluation predictions (default 1000 reps). Bootstrap samples are **paired across models within each Outcome × Branch × Pipeline group**, enabling Δ CIs. Default reference for Δ is the `preop_only` feature set.
     * Parallelization defaults to the process backend with `PARALLEL_BACKEND=processes` in the run shells; retries and timeouts are baked in (`--bootstrap-timeout 1800`, `--bootstrap-max-retries 2`) so a stuck pool falls back to threads, then sequential, instead of hanging.
 *   **Unified Reporting**: `reporting/make_report.py` consumes `metrics_summary.csv` to generate Word, PDF, and HTML tables plus ROC/PR/Calibration figures across both pipelines. Reports display distinct rows for each model type (`xgboost` vs. `ebm`) within every Outcome × Branch × Feature Set combination, and add a separate delta table (Δ vs reference) with heatmap shading only when the Δ CI excludes 0.
 *   **Outputs**:
@@ -311,8 +346,8 @@ consistent across manuscripts and dashboards.
   ```
 
 - **Preoperative descriptive table** — Summarize baseline characteristics using
-  the raw (pre-encoding) cohort CSV for categoricals plus the winsorized
-  `aki_preop_processed.csv` for continuous features. Each continuous variable
+  the raw cohort CSV or `aki_preop_processed.csv`, both of which now retain the
+  raw categorical columns needed for counts. Each continuous variable
   undergoes a Shapiro–Wilk test; report mean ± SD if normal, otherwise median (IQR).
   Binary categoricals render as False/True; all labels/units come from the display
   dictionary. Outputs: HTML/LaTeX/DOCX at `results/catch22/paper/tables/preop_descriptives.*`.
@@ -382,7 +417,7 @@ jupyter notebook notebooks/04_hpo_xgboost.ipynb
     *   `utils.py`: Shared logic for data loading and preprocessing.
     *   `step_06_run_hpo.py`: Hyperparameter optimization script (Optuna, AUPRC objective).
     *   `step_07_train_evaluate.py`: Final training, OOF calibration, Youden-J threshold selection, and artifacted prediction export.
-    *   `postprocessing.py`: Logistic recalibration, stratified OOF prediction helpers, threshold search, and JSON persistence utilities.
+    *   `postprocessing.py`: Logistic recalibration, patient-grouped stratified OOF prediction helpers, threshold search, and JSON persistence utilities.
     *   `prediction_io.py`: Prediction file validation and standardized CSV writing for train/test splits.
 *   `model_creation_aeon/`: **(New)** Experimental Aeon pipeline.
     *   `classifiers.py`: Custom `FusedClassifier`, `RocketFused`, and `FreshPrinceFused` classes implementing early fusion.

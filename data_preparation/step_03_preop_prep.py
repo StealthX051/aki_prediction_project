@@ -5,7 +5,7 @@ from typing import Optional
 
 import numpy as np
 import pandas as pd
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import StratifiedGroupKFold
 
 # Add project root to path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -26,6 +26,7 @@ RANDOM_STATE = 42
 # All preoperative features to be selected from the cohort file
 PREOP_FEATURES_TO_SELECT = [
     'caseid',
+    'subjectid',
     OUTCOME,
     'y_severe_aki',
     'y_inhosp_mortality',
@@ -84,8 +85,7 @@ PREOP_FEATURES_TO_SELECT = [
     'preop_lac',
 ]
 
-# Continuous features for outlier handling
-# Continuous features for outlier handling
+# Continuous preoperative features retained for reporting/model-time preprocessing.
 CONTINUOUS_COLS = [
     # Demographics / body size
     'age',
@@ -126,8 +126,7 @@ CONTINUOUS_COLS = [
     'preop_egfr_ckdepi_2021',
 ]
 
-# Categorical features for merging and one-hot encoding
-# Categorical features for merging and one-hot encoding
+# Raw categorical preoperative features retained for reporting/model-time preprocessing.
 CATEGORICAL_COLS = [
     'sex',
     'emop',
@@ -306,53 +305,84 @@ def add_derived_preop_features(df: pd.DataFrame) -> pd.DataFrame:
 
     return df
 
-def handle_outliers(df, train_df, continuous_cols):
-    """
-    Handles outliers based on training set percentiles.
-    Replaces outliers with random values from a plausible range.
-    """
-    df_processed = df.copy()
-    for col in continuous_cols:
-        if col in df_processed.columns:
-            
-            # 1. Create a clean, numeric version of the training data column
-            train_col_numeric = pd.to_numeric(train_df[col], errors='coerce')
-            
-            # 2. Force the column in the dataframe being processed to also be numeric
-            df_processed[col] = pd.to_numeric(df_processed[col], errors='coerce')
+def select_patient_level_holdout_indices(
+    df: pd.DataFrame,
+    *,
+    outcome_col: str,
+    group_col: str = "subjectid",
+    target_test_size: float = 0.2,
+    random_state: int = RANDOM_STATE,
+    max_splits: int = 5,
+) -> tuple[pd.Index, pd.Index]:
+    """Return train/test index labels with patient-disjoint stratified groups."""
+    if group_col not in df.columns:
+        raise ValueError(f"Required patient group column '{group_col}' not found.")
 
-            # Calculate percentile thresholds ONLY from the numeric training column
-            train_col_numeric.dropna(inplace=True)
-            if train_col_numeric.empty:
-                print(f"Warning: No valid data for '{col}' in training set. Skipping outlier handling for this column.")
-                continue
+    groups = df[group_col]
+    if groups.isna().any():
+        raise ValueError(f"Patient group column '{group_col}' contains missing values.")
 
-            low_p_0_5, low_p_1, low_p_5 = np.percentile(train_col_numeric, [0.5, 1, 5])
-            high_p_95, high_p_99_5 = np.percentile(train_col_numeric, [95, 99.5])
-            
-            # Identify outlier indices in the processed dataframe
-            low_outlier_indices = df_processed[df_processed[col] < low_p_1].index
-            high_outlier_indices = df_processed[df_processed[col] > high_p_99_5].index
-            
-            # Replace with random values from the specified plausible range
-            low_replacements = np.random.uniform(low_p_0_5, low_p_5, size=len(low_outlier_indices))
-            high_replacements = np.random.uniform(high_p_95, high_p_99_5, size=len(high_outlier_indices))
-            
-            df_processed.loc[low_outlier_indices, col] = low_replacements
-            df_processed.loc[high_outlier_indices, col] = high_replacements
-    return df_processed
+    y = df[outcome_col]
+    if y.isna().any():
+        raise ValueError(f"Outcome column '{outcome_col}' contains missing values.")
+
+    class_counts = y.value_counts()
+    if class_counts.empty:
+        raise ValueError(f"Outcome column '{outcome_col}' is empty after filtering.")
+
+    unique_groups_per_class = [
+        int(groups[y == class_value].nunique()) for class_value in sorted(y.dropna().unique())
+    ]
+    if not unique_groups_per_class:
+        raise ValueError(f"Unable to derive patient-level class counts from '{outcome_col}'.")
+
+    n_splits = min(
+        max_splits,
+        int(class_counts.min()),
+        int(groups.nunique()),
+        min(unique_groups_per_class),
+    )
+    if n_splits < 2:
+        raise ValueError(
+            "Need at least two patient groups in each class to create a grouped holdout split."
+        )
+
+    splitter = StratifiedGroupKFold(n_splits=n_splits, shuffle=True, random_state=random_state)
+    target_test_rows = max(1, int(round(len(df) * target_test_size)))
+
+    best_train_pos = None
+    best_test_pos = None
+    best_gap = None
+
+    for train_pos, test_pos in splitter.split(df, y, groups):
+        gap = abs(len(test_pos) - target_test_rows)
+        if best_gap is None or gap < best_gap:
+            best_gap = gap
+            best_train_pos = train_pos
+            best_test_pos = test_pos
+
+    if best_train_pos is None or best_test_pos is None:
+        raise ValueError("Failed to construct a patient-level holdout split.")
+
+    train_groups = set(groups.iloc[best_train_pos])
+    test_groups = set(groups.iloc[best_test_pos])
+    overlap = train_groups & test_groups
+    if overlap:
+        raise AssertionError(f"Patient overlap detected across holdout split: {sorted(overlap)[:5]}")
+
+    return df.index[best_train_pos], df.index[best_test_pos]
 
 def main(impute_missing: Optional[bool] = None):
     parser = argparse.ArgumentParser(
-        description="Prepare preoperative dataset and optional imputation."
+        description="Prepare the preoperative dataset and assign the patient-grouped holdout split."
     )
     parser.add_argument(
         "--impute-missing",
         action="store_true",
         default=IMPUTE_MISSING,
         help=(
-            "Fill missing values with -99 (previous behavior). By default, NaNs"
-            " are preserved for downstream handling."
+            "Deprecated compatibility flag. Step 03 no longer performs train-fitted "
+            "imputation; missing-value handling now occurs inside model-time folds only."
         ),
     )
 
@@ -403,18 +433,13 @@ def main(impute_missing: Optional[bool] = None):
         sys.exit(1)
 
     # 3. Train/Test Split
-    print("Performing stratified train/test split (80/20)...")
-    X = preop_df.drop(columns=[OUTCOME])
-    y = preop_df[OUTCOME]
-    
-    # We split indices to keep track of rows
-    indices = np.arange(len(preop_df))
-    
-    train_idx, test_idx = train_test_split(
-        indices, 
-        test_size=0.2, 
-        random_state=RANDOM_STATE, 
-        stratify=y
+    print("Performing patient-level grouped train/test split (~80/20)...")
+    train_idx, test_idx = select_patient_level_holdout_indices(
+        preop_df,
+        outcome_col=OUTCOME,
+        group_col='subjectid',
+        target_test_size=0.2,
+        random_state=RANDOM_STATE,
     )
     
     # Assign split group
@@ -430,62 +455,14 @@ def main(impute_missing: Optional[bool] = None):
     
     print(f"Train set: {len(X_train)}, Test set: {len(X_test)}")
 
-    # 4. Categorical Processing
-    print("Processing categorical variables...")
-    
-    # Merge small departments (using train stats)
-    dept_counts = X_train['department'].value_counts()
-    depts_to_merge = dept_counts[dept_counts < 30].index.tolist()
-    
-    if depts_to_merge:
-        print(f"Merging {len(depts_to_merge)} departments into 'other'")
-        preop_df['department'] = preop_df['department'].replace(depts_to_merge, 'other')
-        # Update views
-        X_train = preop_df.loc[train_mask] 
-
-    # One-Hot Encoding
-    print("Applying one-hot encoding...")
-    # We encode the whole dataframe to ensure consistent columns, 
-    # BUT we must be careful not to introduce leakage if new categories appear in test.
-    # Ideally, we fit on train and transform test. 
-    # Using pandas get_dummies on the whole set is common but technically leaks the *existence* of categories.
-    # Given the 'department' merge above used only train stats, we are mostly safe.
-    # A stricter approach would be to fit a OneHotEncoder on train.
-    # For now, we'll stick to the pandas approach but align columns based on train.
-    
-    X_train_dummies = pd.get_dummies(X_train[CATEGORICAL_COLS], drop_first=True, dtype=int)
-    X_test_dummies = pd.get_dummies(X_test[CATEGORICAL_COLS], drop_first=True, dtype=int)
-    
-    # Align columns to Train
-    X_train_aligned, X_test_aligned = X_train_dummies.align(
-        X_test_dummies, join='left', axis=1, fill_value=0
-    )
-    
-    # Reconstruct the full dataframe with encoded columns
-    # We do this by concatenating the aligned parts
-    encoded_cols = pd.concat([X_train_aligned, X_test_aligned]).sort_index()
-    
-    # Drop original categorical and add encoded
-    preop_df_encoded = preop_df.drop(columns=CATEGORICAL_COLS)
-    preop_df_encoded = pd.concat([preop_df_encoded, encoded_cols], axis=1)
-
-    # 5. Outlier Handling (Continuous)
-    print("Handling outliers...")
-    # We pass the full dataframe to be processed, but pass the TRAIN subset for stats calculation
-    train_subset = preop_df_encoded.loc[train_mask]
-    preop_df_cleaned = handle_outliers(preop_df_encoded, train_subset, CONTINUOUS_COLS)
-
-    # 6. Imputation
+    print("Skipping train-fitted preprocessing in Step 03.")
+    print("Categorical encoding, outlier handling, and optional imputation now occur inside model-time folds only.")
     if impute_missing:
-        print("Imputing missing values with -99...")
-        preop_df_final = preop_df_cleaned.fillna(-99)
-    else:
-        print("Leaving missing values as NaN (no imputation)")
-        preop_df_final = preop_df_cleaned
-    
-    # 7. Save
+        print("NOTE: --impute-missing is retained for CLI compatibility only and does not modify Step 03 outputs.")
+
+    # 4. Save
     print(f"Saving processed data to {PREOP_PROCESSED_FILE}...")
-    preop_df_final.to_csv(PREOP_PROCESSED_FILE, index=False)
+    preop_df.to_csv(PREOP_PROCESSED_FILE, index=False)
     print("Done.")
 
 if __name__ == "__main__":

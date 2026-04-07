@@ -16,7 +16,7 @@ from numpy.typing import ArrayLike
 from sklearn.base import BaseEstimator, clone
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import confusion_matrix
-from sklearn.model_selection import StratifiedKFold
+from sklearn.model_selection import StratifiedGroupKFold, StratifiedKFold
 
 
 def _validate_array(name: str, array: ArrayLike, allow_nan: bool = False) -> np.ndarray:
@@ -57,6 +57,7 @@ def generate_stratified_oof_predictions(
     fit_params: Optional[Dict[str, Any]] = None,
     proba: bool = True,
     sample_weight: Optional[ArrayLike] = None,
+    groups: Optional[ArrayLike] = None,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Generate stratified K-fold out-of-fold predictions.
 
@@ -72,6 +73,8 @@ def generate_stratified_oof_predictions(
             probabilities; otherwise, use ``predict``.
         sample_weight: Optional sample weights aligned with ``X``/``y`` to use
             during training folds.
+        groups: Optional patient-group labels. When provided, cross-validation
+            is performed with patient-disjoint stratified folds.
 
     Returns:
         A tuple of ``(oof_predictions, fold_indices)`` where ``fold_indices``
@@ -93,11 +96,35 @@ def generate_stratified_oof_predictions(
         if sample_weight_arr.shape[0] != y_validated.shape[0]:
             raise ValueError("sample_weight must match number of rows in y.")
 
-    cv = StratifiedKFold(n_splits=n_splits, shuffle=shuffle, random_state=random_state)
+    groups_arr: Optional[np.ndarray] = None
+    if groups is not None:
+        groups_arr = _validate_array("groups", groups)
+        if groups_arr.shape[0] != y_validated.shape[0]:
+            raise ValueError("groups must match number of rows in y.")
+        if pd.isna(groups_arr).any():
+            raise ValueError("groups contains missing values.")
+
+        unique_groups = pd.Series(groups_arr).nunique()
+        unique_groups_per_class = [
+            int(pd.Series(groups_arr[y_validated == class_value]).nunique())
+            for class_value in np.unique(y_validated)
+        ]
+        max_safe_splits = min([unique_groups, *unique_groups_per_class])
+        if n_splits > max_safe_splits:
+            raise ValueError(
+                "n_splits cannot exceed the number of unique patient groups available in each class."
+            )
+
+        cv = StratifiedGroupKFold(n_splits=n_splits, shuffle=shuffle, random_state=random_state)
+        split_iter = cv.split(X_validated, y_validated, groups_arr)
+    else:
+        cv = StratifiedKFold(n_splits=n_splits, shuffle=shuffle, random_state=random_state)
+        split_iter = cv.split(X_validated, y_validated)
+
     oof_predictions = np.empty_like(y_validated, dtype=float)
     fold_indices = np.empty_like(y_validated, dtype=int)
 
-    for fold, (train_idx, val_idx) in enumerate(cv.split(X_validated, y_validated)):
+    for fold, (train_idx, val_idx) in enumerate(split_iter):
         model_clone = clone(model)
         fit_kwargs = dict(fit_params or {})
         if sample_weight_arr is not None:
@@ -121,6 +148,13 @@ def generate_stratified_oof_predictions(
     if expected_folds != observed_folds:
         missing = expected_folds - observed_folds
         raise ValueError(f"Missing folds in OOF predictions: {sorted(missing)}")
+
+    if groups_arr is not None:
+        group_fold_map: Dict[Any, int] = {}
+        for group_value, fold in zip(groups_arr, fold_indices):
+            existing = group_fold_map.setdefault(group_value, fold)
+            if existing != fold:
+                raise ValueError("A patient group was assigned to multiple OOF folds.")
 
     return oof_predictions, fold_indices
 

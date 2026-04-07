@@ -1,15 +1,15 @@
 """Generate descriptive statistics for the preoperative cohort.
 
-This module loads the finalized preoperative dataset alongside the feature
-lists defined in ``data_preparation.step_03_preop_prep`` to generate a
-publication-ready table summarizing baseline characteristics. Provide a dataset
-that still contains the raw categorical columns (i.e., before one-hot
-encoding) so that baseline counts can be reported. Continuous
-features are tested for normality using the Shapiro–Wilk test to decide
-between mean/standard deviation or median/interquartile range summaries.
-Categorical features are summarized with counts and percentages. Outputs are
-saved to HTML, LaTeX, and DOCX under ``results/tables`` with human-readable labels
-from :func:`reporting.display_dictionary.DisplayDictionary.feature_label`.
+This module loads a preoperative dataset alongside the feature lists defined in
+``data_preparation.step_03_preop_prep`` to generate a publication-ready table
+summarizing baseline characteristics. The default ``PREOP_PROCESSED_FILE`` now
+retains the raw categorical columns, so it can be used directly for both
+continuous and categorical summaries. Continuous features are tested for
+normality using the Shapiro-Wilk test to decide between mean/standard
+deviation or median/interquartile range summaries. Categorical features are
+summarized with counts and percentages. Outputs are saved to HTML, LaTeX, and
+DOCX under ``results/tables`` with human-readable labels from
+:func:`reporting.display_dictionary.DisplayDictionary.feature_label`.
 """
 from __future__ import annotations
 
@@ -62,7 +62,7 @@ def _load_preop_data(path: Path) -> pd.DataFrame:
 
 
 def _load_optional_processed_data(path: Optional[Path]) -> Optional[pd.DataFrame]:
-    """Load the outlier-handled preoperative dataset when available."""
+    """Load an optional processed preoperative dataset when available."""
 
     if path is None:
         return None
@@ -71,7 +71,7 @@ def _load_optional_processed_data(path: Optional[Path]) -> Optional[pd.DataFrame
         logger.warning("Processed dataset not found at %s; falling back to raw data for continuous features.", path)
         return None
 
-    logger.info("Loading processed (winsorized) data from %s", path)
+    logger.info("Loading processed preoperative data from %s", path)
     return pd.read_csv(path)
 
 
@@ -182,8 +182,8 @@ def _filter_and_validate_features(
     if missing_categorical:
         message = (
             "Dataset %s is missing categorical features (%s). "
-            "The PREOP_PROCESSED_FILE produced by step_03_preop_prep.py drops raw categoricals during one-hot encoding. "
-            "Provide --dataset pointing to a pre-encoding dataset (e.g., COHORT_FILE) or retain categorical columns before encoding."
+            "Provide --dataset pointing to a dataset that still retains the raw categorical columns "
+            "(for example COHORT_FILE or PREOP_PROCESSED_FILE from step_03_preop_prep.py)."
             % (dataset_path, ", ".join(missing_categorical))
         )
         raise ValueError(message)
@@ -275,8 +275,8 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=COHORT_FILE,
         help=(
-            "Path to the preoperative dataset (CSV) that still contains the raw categorical columns. "
-            "If you pass PREOP_PROCESSED_FILE from step_03_preop_prep.py, reintroduce the categoricals before encoding."
+            "Path to the preoperative dataset (CSV) that contains the raw categorical columns. "
+            "COHORT_FILE and PREOP_PROCESSED_FILE are both valid inputs."
         ),
     )
     parser.add_argument(
@@ -284,8 +284,8 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=PREOP_PROCESSED_FILE,
         help=(
-            "Optional path to the outlier-handled preoperative dataset (after winsorization in step_03). "
-            "Continuous features will be pulled from this file when present; categoricals always come from --dataset."
+            "Optional path to a processed preoperative dataset. Continuous features will be pulled "
+            "from this file when present; categoricals always come from --dataset."
         ),
     )
     parser.add_argument(

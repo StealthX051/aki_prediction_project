@@ -39,6 +39,44 @@ def test_generate_stratified_oof_predictions_validations_and_output(tmp_path):
         generate_stratified_oof_predictions(model, X, np.concatenate([y[:50], [np.nan] * 50]))
 
 
+def test_generate_stratified_oof_predictions_respects_groups():
+    X, y = make_classification(
+        n_samples=24,
+        n_features=4,
+        n_informative=2,
+        n_redundant=0,
+        random_state=0,
+    )
+    groups = np.repeat(np.arange(12), 2)
+    model = LogisticRegression(max_iter=100)
+
+    preds, folds = generate_stratified_oof_predictions(
+        model,
+        X,
+        y,
+        n_splits=4,
+        random_state=0,
+        groups=groups,
+    )
+
+    assert preds.shape[0] == y.shape[0]
+    assert set(folds) == {0, 1, 2, 3}
+
+    for group_value in np.unique(groups):
+        group_folds = set(folds[groups == group_value])
+        assert len(group_folds) == 1
+
+
+def test_generate_stratified_oof_predictions_rejects_insufficient_groups_per_class():
+    X = np.arange(12, dtype=float).reshape(-1, 1)
+    y = np.array([1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0])
+    groups = np.array([10, 10, 10, 10, 20, 21, 22, 23, 24, 25, 26, 27])
+    model = LogisticRegression(max_iter=100)
+
+    with pytest.raises(ValueError, match="unique patient groups available in each class"):
+        generate_stratified_oof_predictions(model, X, y, n_splits=2, random_state=0, groups=groups)
+
+
 def test_logistic_recalibration_and_application():
     y_true = np.array([0, 0, 1, 1, 1, 0, 1, 0])
     pred_probs = np.array([0.1, 0.2, 0.8, 0.7, 0.9, 0.3, 0.6, 0.4])

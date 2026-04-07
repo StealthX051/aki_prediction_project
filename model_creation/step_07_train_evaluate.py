@@ -22,14 +22,28 @@ sys.path.append(str(PROJECT_ROOT))
 
 from model_creation import utils
 from model_creation.postprocessing import (
-    apply_logistic_recalibration,
-    fit_logistic_recalibration,
-    find_youden_j_threshold,
-    generate_stratified_oof_predictions,
     LogisticRecalibrationModel,
     write_json,
 )
 from model_creation.prediction_io import write_prediction_files
+from model_creation.validation import (
+    VALIDATION_PROTOCOL_VERSION,
+    build_cv_splits,
+    build_validation_fingerprint,
+    checkpoint_matches_validation_fingerprint,
+    fit_final_model,
+    generate_cross_fitted_predictions,
+    get_effective_refit_params,
+    get_refit_param_overrides,
+    is_outer_fold_checkpoint_complete,
+    load_outer_fold_checkpoint,
+    run_outer_split,
+    save_model_bundle,
+    save_outer_fold_checkpoint,
+    select_modeling_dataset,
+    tune_model,
+    write_validation_manifest,
+)
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -94,6 +108,35 @@ def _safe_filename(name: str) -> str:
     """Coerce an arbitrary feature name into a filesystem-friendly slug."""
     slug = re.sub(r"[^A-Za-z0-9_.-]+", "_", name).strip("_")
     return slug or "feature"
+
+
+def _assert_nested_test_prediction_coverage(
+    test_predictions: pd.DataFrame,
+    expected_caseids: pd.Series,
+) -> None:
+    duplicated = test_predictions["caseid"].duplicated()
+    if duplicated.any():
+        dupes = sorted(test_predictions.loc[duplicated, "caseid"].unique().tolist())
+        raise ValueError(
+            "Nested pooled test predictions contain duplicate caseids; expected exactly one "
+            f"evaluation row per operation. Duplicate caseids: {dupes[:10]}"
+        )
+
+    actual_caseids = set(test_predictions["caseid"].tolist())
+    expected_caseid_set = set(expected_caseids.tolist())
+    if actual_caseids != expected_caseid_set:
+        missing = sorted(expected_caseid_set - actual_caseids)
+        extra = sorted(actual_caseids - expected_caseid_set)
+        raise ValueError(
+            "Nested pooled test predictions do not cover the modeling cohort exactly once. "
+            f"Missing caseids: {missing[:10]}; extra caseids: {extra[:10]}"
+        )
+
+    if len(test_predictions) != len(expected_caseids):
+        raise ValueError(
+            "Nested pooled test predictions must have exactly one row per modeled operation. "
+            f"Expected {len(expected_caseids)} rows, found {len(test_predictions)}."
+        )
 
 
 def _ebm_term_metadata(model) -> Tuple[List[str], List[float]]:
@@ -825,277 +868,535 @@ def train_evaluate(
     legacy_imputation=False,
     export_ebm_explanations_flag: bool = False,
     local_sample_size: int = 100,
+    validation_scheme: str = "nested_cv",
+    outer_folds: int = 5,
+    inner_folds: int = 5,
+    repeats: int = 1,
+    max_workers: int = 4,
+    threads_per_model: int = 8,
+    resume: bool = False,
+    save_final_refit: bool = False,
+    n_trials: int = 100,
 ):
     logger.info(
-        "Starting Training/Evaluation for Outcome: %s, Branch: %s, Feature Set: %s, Model: %s",
+        "Starting Training/Evaluation for Outcome: %s, Branch: %s, Feature Set: %s, Model: %s, Validation: %s",
         outcome,
         branch,
         feature_set,
         model_type,
+        validation_scheme,
     )
 
-    # Load params
-    params_file = utils.RESULTS_DIR / 'params' / model_type / outcome / branch / f"{feature_set}.json"
-    if not params_file.exists():
-        logger.error(f"Parameters file not found: {params_file}. Run HPO first.")
-        return
+    if validation_scheme not in {"nested_cv", "holdout"}:
+        raise ValueError(f"Unsupported validation_scheme: {validation_scheme}")
 
-    with open(params_file, 'r') as f:
-        params = json.load(f)
-    
-    # Load and prepare data
-    try:
-        random_state = params.get('random_state', 42)
-        params['random_state'] = random_state
-        df = utils.load_data(branch)
-        data_file = utils.FULL_FEATURES_FILE if branch == 'non_windowed' else utils.WINDOWED_FEATURES_FILE
-        dataset_hash = compute_file_hash(data_file)
-        preserve_nan = not legacy_imputation
-        X_train, X_test, y_train, y_test, scale_pos_weight = utils.prepare_data(
-            df, outcome, feature_set, random_state=random_state, preserve_nan=preserve_nan
-        )
-    except Exception as e:
-        logger.error(f"Failed to prepare data: {e}")
-        return
-
-    if smoke_test:
-        logger.info("SMOKE TEST: Reducing data size.")
-        X_train = X_train.head(100)
-        y_train = y_train.head(100)
-        X_test = X_test.head(50)
-        y_test = y_test.head(50)
-        if model_type == "xgboost":
-            params['n_estimators'] = 10
-
-    # Set reproducibility controls
-    positive_count = int((y_train == 1).sum())
-    negative_count = int((y_train == 0).sum())
-    if positive_count == 0 or negative_count == 0:
-        raise ValueError("Training data must contain both classes for calibration and evaluation.")
-
-    n_splits = params.get('n_splits', 5)
-    min_class = min(positive_count, negative_count)
-    if n_splits > min_class:
-        logger.warning(
-            "Reducing n_splits from %s to %s to match minority class count.",
-            n_splits,
-            min_class,
-        )
-        n_splits = min_class
-
-    if 'scale_pos_weight' not in params:
-        params['scale_pos_weight'] = scale_pos_weight
-
-    model_label = "XGBoost" if model_type == "xgboost" else "EBM"
-    sample_weight = None
-
-    if model_type == "xgboost":
-        model_params = {
-            "objective": "binary:logistic",
-            "eval_metric": "aucpr",
-            "tree_method": "hist",
-            "n_jobs": -1,
-            **params,
-        }
-        oof_fit_params = None
-    elif model_type == "ebm":
-        try:
-            from interpret.glassbox import ExplainableBoostingClassifier
-        except ImportError as exc:
-            logger.error("interpret library is required for EBM training: %s", exc)
-            return
-
-        ebm_defaults = {
-            "interactions": 0,
-            "missing": "gain",
-            "inner_bags": 20,
-            "outer_bags": 14,
-            "max_bins": 1024,
-            "random_state": random_state,
-            "n_jobs": -2,
-        }
-
-        ebm_params = {**ebm_defaults, **params}
-        
-        # Override for smoke test to prevent hanging
-        # Override for smoke test to prevent hanging
-        # Only force n_jobs=1 if the dataset is effectively small, ignoring the smoke_test flag
-        # to allow debugging/testing of multithreading performance if larger samples are used.
-        if len(y_train) < 50:
-             logger.info(f"EBM: Dataset size {len(y_train)} < 50; forcing n_jobs=1 to prevent hangs.")
-             ebm_params['n_jobs'] = 1
-             ebm_params['inner_bags'] = 2
-             ebm_params['outer_bags'] = 2
-        else:
-             logger.info(f"EBM: Dataset size {len(y_train)} >= 50; using configured n_jobs={ebm_params.get('n_jobs')}")
-             
-        ebm_params.pop("scale_pos_weight", None)
-        model_params = ebm_params
-        pos_weight = params.get("scale_pos_weight", scale_pos_weight)
-        sample_weight = np.where(y_train.values == 1, pos_weight, 1.0)
-        oof_fit_params = {"sample_weight": sample_weight}
-    else:
-        logger.error("Unsupported model_type: %s", model_type)
-        return
-
-    logger.info("Generating out-of-fold predictions for calibration...")
-    if model_type == "xgboost":
-        oof_model = xgb.XGBClassifier(**model_params)
-    else:
-        oof_model = ExplainableBoostingClassifier(**model_params)
-    oof_predictions, fold_indices = generate_stratified_oof_predictions(
-        oof_model,
-        X_train.values,
-        y_train.values,
-        n_splits=n_splits,
-        random_state=random_state,
-        sample_weight=oof_fit_params.get("sample_weight") if oof_fit_params else None,
-    )
-
-    if len(oof_predictions) != len(X_train):
-        raise ValueError("OOF predictions length mismatch with training data.")
-
-    recalibration_model = fit_logistic_recalibration(y_train.values, oof_predictions)
-    calibrated_oof = apply_logistic_recalibration(oof_predictions, recalibration_model)
-
-    threshold, youden_j, sensitivity, specificity = find_youden_j_threshold(
-        y_train.values, calibrated_oof
-    )
-
-    if set(X_train.index) & set(X_test.index):
-        raise AssertionError("Train and test indices overlap; calibration would leak test data.")
-
-    logger.info("Training final model on full training data...")
-    if model_type == "xgboost":
-        final_model = xgb.XGBClassifier(**model_params)
-        final_model.fit(X_train, y_train)
-    else:
-        final_model = ExplainableBoostingClassifier(**model_params)
-        final_model.fit(X_train, y_train, sample_weight=sample_weight)
-
-    logger.info("Generating predictions on test set...")
-    test_pred_proba = final_model.predict_proba(X_test)[:, 1]
-    test_pred_calibrated = apply_logistic_recalibration(test_pred_proba, recalibration_model)
-    if hasattr(final_model, "decision_function"):
-        try:
-            test_pred_logit = final_model.decision_function(X_test)
-        except Exception:
-            test_pred_logit = _safe_logit(test_pred_proba)
-    else:
-        test_pred_logit = _safe_logit(test_pred_proba)
-
-    output_dir = utils.RESULTS_DIR / 'models' / model_type / outcome / branch / feature_set
-    predictions_dir = output_dir / 'predictions'
-    artifacts_dir = output_dir / 'artifacts'
+    output_dir = utils.RESULTS_DIR / "models" / model_type / outcome / branch / feature_set
+    predictions_dir = output_dir / "predictions"
+    artifacts_dir = output_dir / "artifacts"
+    folds_dir = artifacts_dir / "folds"
     output_dir.mkdir(parents=True, exist_ok=True)
     predictions_dir.mkdir(parents=True, exist_ok=True)
     artifacts_dir.mkdir(parents=True, exist_ok=True)
 
-    train_predictions = pd.DataFrame({
-        'caseid': df.loc[X_train.index, 'caseid'],
-        'y_true': y_train.values,
-        'y_prob_raw': oof_predictions,
-        'y_prob_calibrated': calibrated_oof,
-        'threshold': threshold,
-        'y_pred_label': (calibrated_oof >= threshold).astype(int),
-        'fold': fold_indices,
-        'is_oof': True,
-        'outcome': outcome,
-        'branch': branch,
-        'feature_set': feature_set,
-        'model_name': model_label,
-        'pipeline': PIPELINE_NAME,
-    })
+    df = utils.load_data(branch)
+    data_file = utils.FULL_FEATURES_FILE if branch == "non_windowed" else utils.WINDOWED_FEATURES_FILE
+    dataset_hash = compute_file_hash(data_file)
+    preserve_nan = not legacy_imputation
+    base_random_state = 42
+    working_df, X, y, caseids, groups = select_modeling_dataset(df, outcome, feature_set)
 
-    test_predictions = pd.DataFrame({
-        'caseid': df.loc[X_test.index, 'caseid'],
-        'y_true': y_test.values,
-        'y_prob_raw': test_pred_proba,
-        'y_prob_calibrated': test_pred_calibrated,
-        'threshold': threshold,
-        'y_pred_label': (test_pred_calibrated >= threshold).astype(int),
-        'fold': -1,
-        'is_oof': False,
-        'outcome': outcome,
-        'branch': branch,
-        'feature_set': feature_set,
-        'model_name': model_label,
-        'pipeline': PIPELINE_NAME,
-    })
+    if smoke_test:
+        logger.info("SMOKE TEST: reducing trials/folds/workers for %s.", validation_scheme)
+        n_trials = min(n_trials, 2)
+        outer_folds = min(outer_folds, 3)
+        inner_folds = min(inner_folds, 3)
+        max_workers = 1
+        threads_per_model = min(threads_per_model, 2)
 
-    write_prediction_files(predictions_dir, train_predictions, test_predictions, logger)
+    if repeats > 1:
+        raise ValueError(
+            "Repeated nested CV is not implemented correctly in reporting yet. "
+            "Use repeats=1 for the current supported workflow."
+        )
 
-    calibration_payload: Dict[str, float] = {
-        'intercept': recalibration_model.intercept,
-        'slope': recalibration_model.slope,
-        'eps': recalibration_model.eps,
-    }
-    threshold_payload: Dict[str, float] = {
-        'threshold': threshold,
-        'youden_j': youden_j,
-        'sensitivity': sensitivity,
-        'specificity': specificity,
-    }
-    metadata_payload = {
-        'seed': random_state,
-        'folds': n_splits,
-        'dataset_hash': dataset_hash,
-        'model_type': model_type,
-        'counts': {
-            'train': {
-                'total': int(len(y_train)),
-                'positive': positive_count,
-                'negative': negative_count,
+    available_cpus = max(1, os.cpu_count() or 1)
+    if threads_per_model < 1:
+        raise ValueError("threads_per_model must be at least 1.")
+    if max_workers < 1:
+        raise ValueError("max_workers must be at least 1.")
+    if threads_per_model > available_cpus:
+        logger.warning(
+            "Reducing threads_per_model from %s to %s to fit the available CPU budget.",
+            threads_per_model,
+            available_cpus,
+        )
+        threads_per_model = available_cpus
+    if validation_scheme == "nested_cv":
+        max_feasible_workers = max(1, available_cpus // max(1, threads_per_model))
+        if max_workers > max_feasible_workers:
+            logger.warning(
+                "Reducing max_workers from %s to %s to avoid oversubscribing %s CPUs "
+                "(threads_per_model=%s).",
+                max_workers,
+                max_feasible_workers,
+                available_cpus,
+                threads_per_model,
+            )
+            max_workers = max_feasible_workers
+
+    model_label = "XGBoost" if model_type == "xgboost" else "EBM"
+    pipeline_name = f"{PIPELINE_NAME}_{validation_scheme}"
+    validation_fingerprint = build_validation_fingerprint(
+        dataset_hash=dataset_hash,
+        validation_scheme=validation_scheme,
+        model_type=model_type,
+        outcome=outcome,
+        branch=branch,
+        feature_set=feature_set,
+        outer_folds=outer_folds,
+        inner_folds=inner_folds,
+        repeats=repeats,
+        n_trials=n_trials,
+        threads_per_model=threads_per_model,
+        preserve_nan=preserve_nan,
+        base_random_state=base_random_state,
+    )
+
+    def _save_root_artifacts(
+        train_predictions: pd.DataFrame,
+        test_predictions: pd.DataFrame,
+        *,
+        calibration_payload: Dict[str, object],
+        threshold_payload: Dict[str, object],
+        metadata_payload: Dict[str, object],
+        train_allow_duplicate_caseids: bool = False,
+        test_allow_duplicate_caseids: bool = False,
+        allow_varying_thresholds: bool = False,
+    ) -> None:
+        write_prediction_files(
+            predictions_dir,
+            train_predictions,
+            test_predictions,
+            logger,
+            train_allow_duplicate_caseids=train_allow_duplicate_caseids,
+            test_allow_duplicate_caseids=test_allow_duplicate_caseids,
+            allow_varying_thresholds=allow_varying_thresholds,
+        )
+        write_json(artifacts_dir / "calibration.json", calibration_payload)
+        write_json(artifacts_dir / "threshold.json", threshold_payload)
+        write_json(artifacts_dir / "metadata.json", metadata_payload)
+        logger.info("Saved calibration/threshold/metadata artifacts to %s", artifacts_dir)
+
+    def _save_holdout_outputs(result) -> None:
+        train_predictions = result.train_predictions.reset_index(drop=True)
+        test_predictions = result.test_predictions.reset_index(drop=True)
+        calibration_payload = {
+            "intercept": result.calibration_model.intercept,
+            "slope": result.calibration_model.slope,
+            "eps": result.calibration_model.eps,
+            "validation_scheme": validation_scheme,
+        }
+        threshold_payload = {
+            **result.threshold_payload,
+            "validation_scheme": validation_scheme,
+        }
+        metadata_payload = {
+            **result.metadata_payload,
+            "dataset_hash": dataset_hash,
+            "validation_protocol_version": VALIDATION_PROTOCOL_VERSION,
+            "model_type": model_type,
+            "validation_scheme": validation_scheme,
+        }
+        _save_root_artifacts(
+            train_predictions,
+            test_predictions,
+            calibration_payload=calibration_payload,
+            threshold_payload=threshold_payload,
+            metadata_payload=metadata_payload,
+            train_allow_duplicate_caseids=False,
+            test_allow_duplicate_caseids=False,
+            allow_varying_thresholds=False,
+        )
+        model_path = save_model_bundle(
+            output_dir,
+            model_type=model_type,
+            model=result.final_model,
+            preprocessor=result.final_preprocessor,
+        )
+        logger.info("Saved model bundle to %s", model_path)
+        if not smoke_test and model_type == "xgboost" and result.transformed_test_features is not None:
+            save_shap_plots(result.final_model, result.transformed_test_features, output_dir)
+            logger.info("Saved SHAP plots.")
+        elif model_type != "xgboost":
+            logger.info("Skipping SHAP generation for model type %s", model_type)
+
+        if not smoke_test and model_type == "ebm" and export_ebm_explanations_flag:
+            export_ebm_explanations(
+                result.final_model,
+                artifacts_dir,
+                base_random_state,
+                local_sample_size,
+                X_local=result.transformed_test_features,
+                y_local=test_predictions["y_true"],
+                caseids=test_predictions["caseid"],
+                raw_probabilities=test_predictions["y_prob_raw"],
+                raw_logits=result.raw_test_logits,
+                calibrated_probabilities=test_predictions["y_prob_calibrated"],
+                threshold=result.threshold_payload["threshold"],
+                calibration_model=result.calibration_model,
+            )
+        elif model_type == "ebm":
+            logger.info("Skipping EBM explanation export (disabled or smoke test)")
+
+    def _save_final_refit_bundle() -> None:
+        final_refit_dir = artifacts_dir / "final_refit"
+        final_refit_dir.mkdir(parents=True, exist_ok=True)
+        best_params, best_score, actual_inner = tune_model(
+            X,
+            y,
+            groups,
+            model_type=model_type,
+            n_trials=n_trials,
+            requested_splits=inner_folds,
+            random_state=base_random_state,
+            preserve_nan=preserve_nan,
+            threads_per_model=threads_per_model,
+        )
+        oof_predictions, fold_indices, actual_calibration = generate_cross_fitted_predictions(
+            X,
+            y,
+            groups,
+            model_type=model_type,
+            best_params=best_params,
+            requested_splits=inner_folds,
+            random_state=base_random_state,
+            preserve_nan=preserve_nan,
+            threads_per_model=threads_per_model,
+        )
+        from model_creation.postprocessing import apply_logistic_recalibration, fit_logistic_recalibration, find_youden_j_threshold
+
+        recalibration_model = fit_logistic_recalibration(y.values, oof_predictions)
+        calibrated_oof = apply_logistic_recalibration(oof_predictions, recalibration_model)
+        threshold, youden_j, sensitivity, specificity = find_youden_j_threshold(y.values, calibrated_oof)
+        effective_refit_params = get_effective_refit_params(model_type, best_params)
+        final_preprocessor, final_model, _ = fit_final_model(
+            X,
+            y,
+            model_type=model_type,
+            best_params=best_params,
+            random_state=base_random_state,
+            preserve_nan=preserve_nan,
+            threads_per_model=threads_per_model,
+        )
+        model_path = save_model_bundle(
+            final_refit_dir,
+            model_type=model_type,
+            model=final_model,
+            preprocessor=final_preprocessor,
+        )
+        refit_oof = pd.DataFrame(
+            {
+                "caseid": caseids.values,
+                "y_true": y.values,
+                "y_prob_raw": oof_predictions,
+                "y_prob_calibrated": calibrated_oof,
+                "threshold": threshold,
+                "y_pred_label": (calibrated_oof >= threshold).astype(int),
+                "fold": fold_indices,
+                "is_oof": True,
+                "outcome": outcome,
+                "branch": branch,
+                "feature_set": feature_set,
+                "model_name": model_label,
+                "pipeline": f"{pipeline_name}_final_refit",
+                "validation_scheme": "final_refit",
+                "outer_fold_id": -1,
+                "repeat_id": 0,
+            }
+        )
+        if groups is not None:
+            refit_oof["subjectid"] = groups.values
+        refit_oof.to_csv(final_refit_dir / "train_oof.csv", index=False)
+        write_json(
+            final_refit_dir / "calibration.json",
+            {
+                "intercept": recalibration_model.intercept,
+                "slope": recalibration_model.slope,
+                "eps": recalibration_model.eps,
             },
-            'test': {
-                'total': int(len(y_test)),
-                'positive': int((y_test == 1).sum()),
-                'negative': int((y_test == 0).sum()),
+        )
+        write_json(
+            final_refit_dir / "threshold.json",
+            {
+                "threshold": threshold,
+                "youden_j": youden_j,
+                "sensitivity": sensitivity,
+                "specificity": specificity,
+            },
+        )
+        write_json(
+            final_refit_dir / "metadata.json",
+            {
+                "dataset_hash": dataset_hash,
+                "validation_protocol_version": VALIDATION_PROTOCOL_VERSION,
+                "source_validation_fingerprint": validation_fingerprint,
+                "best_score": best_score,
+                "best_params": best_params,
+                "effective_refit_params": effective_refit_params,
+                "refit_param_overrides": get_refit_param_overrides(model_type, best_params),
+                "actual_inner_folds": actual_inner,
+                "actual_calibration_folds": actual_calibration,
+                "model_path": str(model_path.name),
+            },
+        )
+
+    if validation_scheme == "holdout":
+        train_mask = working_df["split_group"] == "train" if "split_group" in working_df.columns else None
+        test_mask = working_df["split_group"] == "test" if "split_group" in working_df.columns else None
+        if train_mask is None or test_mask is None:
+            if groups is None:
+                raise ValueError("Holdout validation requires patient groups or an existing split_group column.")
+            split_train_idx, split_test_idx = utils.select_patient_level_holdout_positions(
+                y, groups, random_state=base_random_state
+            )
+        else:
+            split_train_idx = np.flatnonzero(train_mask.to_numpy())
+            split_test_idx = np.flatnonzero(test_mask.to_numpy())
+        result = run_outer_split(
+            df=working_df,
+            X=X,
+            y=y,
+            caseids=caseids,
+            groups=groups,
+            train_idx=split_train_idx,
+            test_idx=split_test_idx,
+            outcome=outcome,
+            branch=branch,
+            feature_set=feature_set,
+            model_type=model_type,
+            model_label=model_label,
+            pipeline_name=pipeline_name,
+            validation_scheme=validation_scheme,
+            n_trials=n_trials,
+            inner_folds=inner_folds,
+            random_state=base_random_state,
+            preserve_nan=preserve_nan,
+            threads_per_model=threads_per_model,
+            repeat_id=0,
+            outer_fold_id=0,
+            return_fitted_model=True,
+        )
+        params_dir = utils.RESULTS_DIR / "params" / model_type / outcome / branch
+        params_dir.mkdir(parents=True, exist_ok=True)
+        with (params_dir / f"{feature_set}.json").open("w") as fp:
+            json.dump(result.best_params, fp, indent=4)
+        _save_holdout_outputs(result)
+        final_refit_saved = False
+        if save_final_refit:
+            logger.info("Running optional final refit on the full dataset.")
+            _save_final_refit_bundle()
+            final_refit_saved = True
+        write_validation_manifest(
+            artifacts_dir,
+            validation_fingerprint=validation_fingerprint,
+            summary_metadata={
+                "outer_folds": 1,
+                "inner_folds": int(result.metadata_payload["actual_inner_folds"]),
+                "repeats": 1,
+                "threads_per_model": threads_per_model,
+                "n_trials": n_trials,
+                "resume": False,
+                "final_refit_saved": final_refit_saved,
+            },
+        )
+        logger.info("Training and evaluation complete.")
+        return
+
+    manifest_entries: List[Dict[str, object]] = []
+    outer_jobs: Dict[Tuple[int, int], Dict[str, object]] = {}
+    actual_outer_folds = 0
+
+    for repeat_id in range(repeats):
+        repeat_seed = base_random_state + repeat_id
+        split_list, resolved_outer_folds = build_cv_splits(
+            X,
+            y,
+            groups,
+            outer_folds,
+            repeat_seed,
+        )
+        actual_outer_folds = max(actual_outer_folds, resolved_outer_folds)
+        for outer_fold_id, (train_idx, test_idx) in enumerate(split_list):
+            fold_dir = folds_dir / f"repeat_{repeat_id:02d}" / f"outer_{outer_fold_id:02d}"
+            outer_jobs[(repeat_id, outer_fold_id)] = {
+                "train_idx": train_idx,
+                "test_idx": test_idx,
+                "fold_dir": fold_dir,
+                "random_state": repeat_seed + outer_fold_id,
+            }
+
+    results_by_key: Dict[Tuple[int, int], object] = {}
+    if resume:
+        for key, meta in outer_jobs.items():
+            if is_outer_fold_checkpoint_complete(meta["fold_dir"]):
+                checkpoint_matches, mismatch_reason = checkpoint_matches_validation_fingerprint(
+                    meta["fold_dir"],
+                    validation_fingerprint,
+                )
+                if not checkpoint_matches:
+                    logger.warning(
+                        "Ignoring checkpoint for repeat=%s outer=%s: %s",
+                        key[0],
+                        key[1],
+                        mismatch_reason,
+                    )
+                    continue
+                logger.info("Resuming from completed outer fold %s.", key)
+                results_by_key[key] = load_outer_fold_checkpoint(meta["fold_dir"])
+                manifest_entries.append(
+                    {
+                        "repeat_id": key[0],
+                        "outer_fold_id": key[1],
+                        "status": "resumed",
+                        "path": str(meta["fold_dir"]),
+                    }
+                )
+
+    pending = [(key, meta) for key, meta in outer_jobs.items() if key not in results_by_key]
+    logger.info(
+        "Running nested CV with %s outer jobs (%s resumed, %s pending, max_workers=%s, threads_per_model=%s).",
+        len(outer_jobs),
+        len(results_by_key),
+        len(pending),
+        max_workers,
+        threads_per_model,
+    )
+
+    if pending:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_map = {
+                executor.submit(
+                    run_outer_split,
+                    df=working_df,
+                    X=X,
+                    y=y,
+                    caseids=caseids,
+                    groups=groups,
+                    train_idx=meta["train_idx"],
+                    test_idx=meta["test_idx"],
+                    outcome=outcome,
+                    branch=branch,
+                    feature_set=feature_set,
+                    model_type=model_type,
+                    model_label=model_label,
+                    pipeline_name=pipeline_name,
+                    validation_scheme=validation_scheme,
+                    n_trials=n_trials,
+                    inner_folds=inner_folds,
+                    random_state=meta["random_state"],
+                    preserve_nan=preserve_nan,
+                    threads_per_model=threads_per_model,
+                    repeat_id=key[0],
+                    outer_fold_id=key[1],
+                ): (key, meta)
+                for key, meta in pending
+            }
+            for future in concurrent.futures.as_completed(future_map):
+                key, meta = future_map[future]
+                result = future.result()
+                save_outer_fold_checkpoint(
+                    meta["fold_dir"],
+                    result,
+                    validation_fingerprint=validation_fingerprint,
+                )
+                results_by_key[key] = result
+                manifest_entries.append(
+                    {
+                        "repeat_id": key[0],
+                        "outer_fold_id": key[1],
+                        "status": "completed",
+                        "path": str(meta["fold_dir"]),
+                        "best_score": result.best_score,
+                    }
+                )
+                logger.info("Completed nested outer fold repeat=%s outer=%s.", key[0], key[1])
+
+    ordered_keys = sorted(results_by_key)
+    train_predictions = pd.concat(
+        [results_by_key[key].train_predictions for key in ordered_keys], ignore_index=True
+    )
+    test_predictions = pd.concat(
+        [results_by_key[key].test_predictions for key in ordered_keys], ignore_index=True
+    )
+    train_predictions = train_predictions.sort_values(["repeat_id", "outer_fold_id", "caseid"]).reset_index(drop=True)
+    test_predictions = test_predictions.sort_values(["repeat_id", "outer_fold_id", "caseid"]).reset_index(drop=True)
+    _assert_nested_test_prediction_coverage(test_predictions, caseids)
+
+    overall_positive = int((test_predictions["y_true"] == 1).sum())
+    overall_negative = int((test_predictions["y_true"] == 0).sum())
+    _save_root_artifacts(
+        train_predictions,
+        test_predictions,
+        calibration_payload={
+            "validation_scheme": validation_scheme,
+            "per_fold": True,
+            "fold_artifacts_dir": "folds",
+            "fold_count": len(ordered_keys),
+        },
+        threshold_payload={
+            "validation_scheme": validation_scheme,
+            "per_fold": True,
+            "threshold_source": "rowwise_prediction_metadata",
+            "fold_count": len(ordered_keys),
+        },
+        metadata_payload={
+            "seed": base_random_state,
+            "outer_folds": actual_outer_folds,
+            "inner_folds": inner_folds,
+            "repeats": repeats,
+            "dataset_hash": dataset_hash,
+            "validation_protocol_version": VALIDATION_PROTOCOL_VERSION,
+            "model_type": model_type,
+            "validation_scheme": validation_scheme,
+            "counts": {
+                "train": {
+                    "total": int(len(train_predictions)),
+                    "positive": int((train_predictions["y_true"] == 1).sum()),
+                    "negative": int((train_predictions["y_true"] == 0).sum()),
+                },
+                "test": {
+                    "total": int(len(test_predictions)),
+                    "positive": overall_positive,
+                    "negative": overall_negative,
+                },
             },
         },
-    }
+        train_allow_duplicate_caseids=train_predictions["caseid"].duplicated().any(),
+        test_allow_duplicate_caseids=False,
+        allow_varying_thresholds=True,
+    )
+    final_refit_saved = False
+    if save_final_refit:
+        logger.info("Running optional final refit on the full dataset.")
+        _save_final_refit_bundle()
+        final_refit_saved = True
 
-    write_json(artifacts_dir / 'calibration.json', calibration_payload)
-    write_json(artifacts_dir / 'threshold.json', threshold_payload)
-    write_json(artifacts_dir / 'metadata.json', metadata_payload)
-    logger.info("Saved calibration and threshold artifacts to %s", artifacts_dir)
-
-    # Save model
-    if model_type == "xgboost":
-        model_path = output_dir / "model.json"
-        final_model.save_model(model_path)
-    else:
-        import pickle
-        model_path = output_dir / "model.pkl"
-        with open(model_path, 'wb') as f:
-            pickle.dump(final_model, f)
-
-    logger.info("Saved model to %s", model_path)
-
-    # SHAP Feature Importance (XGBoost only)
-    if not smoke_test and model_type == "xgboost":
-        save_shap_plots(final_model, X_test, output_dir)
-        logger.info("Saved SHAP plots.")
-    elif model_type != "xgboost":
-        logger.info("Skipping SHAP generation for model type %s", model_type)
-
-    if not smoke_test and model_type == "ebm" and export_ebm_explanations_flag:
-        export_ebm_explanations(
-            final_model,
-            artifacts_dir,
-            random_state,
-            local_sample_size,
-            X_local=X_test,
-            y_local=y_test,
-            caseids=df.loc[X_test.index, "caseid"],
-            raw_probabilities=test_pred_proba,
-            raw_logits=test_pred_logit,
-            calibrated_probabilities=test_pred_calibrated,
-            threshold=threshold,
-            calibration_model=recalibration_model,
-        )
-    elif model_type == "ebm":
-        logger.info("Skipping EBM explanation export (disabled or smoke test)")
+    write_validation_manifest(
+        artifacts_dir,
+        validation_fingerprint=validation_fingerprint,
+        summary_metadata={
+            "outer_folds": actual_outer_folds,
+            "inner_folds": inner_folds,
+            "repeats": repeats,
+            "threads_per_model": threads_per_model,
+            "max_workers": max_workers,
+            "n_trials": n_trials,
+            "resume": resume,
+            "fold_manifest": "folds_manifest.json",
+            "final_refit_saved": final_refit_saved,
+        },
+    )
+    write_json(artifacts_dir / "folds_manifest.json", {"folds": manifest_entries})
 
     logger.info("Training and evaluation complete.")
 
@@ -1128,6 +1429,30 @@ if __name__ == "__main__":
         default=100,
         help="Number of training samples to include in local EBM explanations",
     )
+    parser.add_argument(
+        "--validation-scheme",
+        type=str,
+        choices=["nested_cv", "holdout"],
+        default="nested_cv",
+        help="Validation scheme to run (default: nested_cv).",
+    )
+    parser.add_argument("--outer-folds", type=int, default=5, help="Number of outer folds for nested CV.")
+    parser.add_argument("--inner-folds", type=int, default=5, help="Number of inner folds for HPO/calibration.")
+    parser.add_argument(
+        "--repeats",
+        type=int,
+        default=1,
+        help="Number of outer-CV repetitions. Values greater than 1 are currently unsupported.",
+    )
+    parser.add_argument("--max-workers", type=int, default=4, help="Parallel outer-fold workers.")
+    parser.add_argument("--threads-per-model", type=int, default=8, help="Threads allocated to each fitted model.")
+    parser.add_argument("--resume", action="store_true", help="Resume from completed outer-fold checkpoints.")
+    parser.add_argument(
+        "--save-final-refit",
+        action="store_true",
+        help="After validation, tune/refit on all available data and save the final artifact bundle.",
+    )
+    parser.add_argument("--n-trials", type=int, default=100, help="Optuna trials per tuning run.")
 
     args = parser.parse_args()
 
@@ -1140,4 +1465,13 @@ if __name__ == "__main__":
         args.legacy_imputation,
         args.export_ebm_explanations,
         args.local_sample_size,
+        args.validation_scheme,
+        args.outer_folds,
+        args.inner_folds,
+        args.repeats,
+        args.max_workers,
+        args.threads_per_model,
+        args.resume,
+        args.save_final_refit,
+        args.n_trials,
     )

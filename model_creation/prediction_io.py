@@ -33,6 +33,12 @@ _NON_NULL_COLUMNS: Sequence[str] = (
     "y_pred_label",
     "threshold",
 )
+_OPTIONAL_NON_NULL_COLUMNS: Sequence[str] = (
+    "subjectid",
+    "subject_id",
+    "repeat_id",
+    "outer_fold_id",
+)
 
 
 def validate_prediction_dataframe(
@@ -66,15 +72,36 @@ def validate_prediction_dataframe(
         if df[col].isna().any():
             raise ValueError(f"{path} contains null values in column '{col}'")
 
-    if require_unique_caseids and df["caseid"].duplicated().any():
-        dupes = df[df["caseid"].duplicated()]["caseid"].unique()
-        raise ValueError(f"{path} has duplicate caseids: {dupes}")
+    for col in _OPTIONAL_NON_NULL_COLUMNS:
+        if col in df.columns and df[col].isna().any():
+            raise ValueError(f"{path} contains null values in optional metadata column '{col}'")
 
-    thresholds = df["threshold"].dropna().unique()
-    if require_single_threshold and len(thresholds) != 1:
-        raise ValueError(f"{path} must contain a single threshold; found {thresholds}")
+    caseid_duplicated = df["caseid"].duplicated().any()
+    if require_unique_caseids:
+        if caseid_duplicated:
+            dupes = df[df["caseid"].duplicated()]["caseid"].unique()
+            raise ValueError(f"{path} has duplicate caseids: {dupes}")
+    elif caseid_duplicated:
+        identity_columns = [column for column in ("repeat_id", "outer_fold_id") if column in df.columns]
+        if not identity_columns:
+            dupes = df[df["caseid"].duplicated()]["caseid"].unique()
+            raise ValueError(
+                f"{path} has duplicate caseids without repeat_id/outer_fold_id metadata: {dupes}"
+            )
+        duplicated_rows = df.duplicated(subset=["caseid", *identity_columns], keep=False)
+        if duplicated_rows.any():
+            dupes = df.loc[duplicated_rows, ["caseid", *identity_columns]].drop_duplicates()
+            raise ValueError(
+                f"{path} has duplicate caseids that are not uniquely disambiguated by "
+                f"{identity_columns}: {dupes.to_dict(orient='records')}"
+            )
 
-    threshold = float(thresholds[0])
+    thresholds = np.asarray(df["threshold"], dtype=float)
+    unique_thresholds = np.unique(thresholds)
+    if require_single_threshold and len(unique_thresholds) != 1:
+        raise ValueError(f"{path} must contain a single threshold; found {unique_thresholds}")
+
+    threshold = float(np.median(thresholds))
 
     y_true_values = set(df["y_true"].dropna().unique())
     if not y_true_values.issubset({0, 1}):
@@ -83,10 +110,10 @@ def validate_prediction_dataframe(
     if not ((0 <= df["y_prob_calibrated"]).all() and (df["y_prob_calibrated"] <= 1).all()):
         raise ValueError(f"{path} contains calibrated probabilities outside [0, 1]")
 
-    predicted = (df["y_prob_calibrated"] >= threshold).astype(int)
+    predicted = (df["y_prob_calibrated"] >= df["threshold"]).astype(int)
     if not np.array_equal(predicted.values, df["y_pred_label"].astype(int).values):
         raise ValueError(
-            f"{path} predicted labels do not match applying threshold {threshold} to y_prob_calibrated"
+            f"{path} predicted labels do not match applying row-wise threshold(s) to y_prob_calibrated"
         )
 
     return threshold
@@ -97,19 +124,47 @@ def write_prediction_files(
     train_df: pd.DataFrame,
     test_df: pd.DataFrame,
     logger: Optional[logging.Logger] = None,
+    *,
+    allow_duplicate_caseids: Optional[bool] = None,
+    train_allow_duplicate_caseids: Optional[bool] = None,
+    test_allow_duplicate_caseids: Optional[bool] = None,
+    allow_varying_thresholds: bool = False,
 ) -> None:
     """Validate and persist train/test prediction files with a shared schema."""
 
     log = logger or logging.getLogger(__name__)
 
+    if allow_duplicate_caseids is not None:
+        if train_allow_duplicate_caseids is None:
+            train_allow_duplicate_caseids = allow_duplicate_caseids
+        if test_allow_duplicate_caseids is None:
+            test_allow_duplicate_caseids = allow_duplicate_caseids
+
+    if train_allow_duplicate_caseids is None:
+        train_allow_duplicate_caseids = False
+    if test_allow_duplicate_caseids is None:
+        test_allow_duplicate_caseids = False
+
     predictions_dir.mkdir(parents=True, exist_ok=True)
     train_path = predictions_dir / "train_oof.csv"
     test_path = predictions_dir / "test.csv"
 
-    train_threshold = validate_prediction_dataframe(train_df, train_path)
-    test_threshold = validate_prediction_dataframe(test_df, test_path)
+    train_threshold = validate_prediction_dataframe(
+        train_df,
+        train_path,
+        require_unique_caseids=not train_allow_duplicate_caseids,
+        require_single_threshold=not allow_varying_thresholds,
+    )
+    test_threshold = validate_prediction_dataframe(
+        test_df,
+        test_path,
+        require_unique_caseids=not test_allow_duplicate_caseids,
+        require_single_threshold=not allow_varying_thresholds,
+    )
 
-    if not math.isclose(train_threshold, test_threshold, rel_tol=1e-9, abs_tol=1e-12):
+    if not allow_varying_thresholds and not math.isclose(
+        train_threshold, test_threshold, rel_tol=1e-9, abs_tol=1e-12
+    ):
         raise ValueError(
             f"Train/test thresholds differ (train={train_threshold}, test={test_threshold}); "
             "artifacts must share a single threshold."

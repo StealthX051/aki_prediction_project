@@ -91,7 +91,7 @@ def main(impute_missing: Optional[bool] = None):
 
     # 4. Imputation Strategy
     # Exclude non-feature columns from imputation
-    meta_cols = ['caseid', OUTCOME, 'split_group', 'y_severe_aki', 'y_inhosp_mortality', 'y_icu_admit', 'y_prolonged_los_postop']
+    meta_cols = ['caseid', 'subjectid', OUTCOME, 'split_group', 'y_severe_aki', 'y_inhosp_mortality', 'y_icu_admit', 'y_prolonged_los_postop']
     feature_cols = [c for c in preop_df.columns if c not in meta_cols]
 
     if impute_missing:

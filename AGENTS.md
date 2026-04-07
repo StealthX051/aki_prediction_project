@@ -40,6 +40,19 @@ Read the smallest relevant document first.
 - Do not edit generated artifacts, logs, or large result trees just to keep the
   repository tidy.
 
+## Environment
+
+- Use the Conda environment in `environment.yml` as the default runtime for
+  this repository.
+- Before running pipeline commands, smoke tests, or repo scripts, activate it:
+  `conda activate aki_prediction_project`.
+- If dependencies change, sync the environment with
+  `conda env update -f environment.yml --prune`.
+- If a task needs the pinned test extras, install them into the activated Conda
+  environment with `python -m pip install -r requirements-test.txt`.
+- Do not introduce a second, parallel `venv` workflow in docs or automation
+  unless the repository is explicitly redesigned around that.
+
 ## Repository map
 
 - `data_preparation/`: production preprocessing pipeline (`step_01` through
@@ -88,6 +101,17 @@ Read the smallest relevant document first.
 - Do not run the full experiment grid (`./run_experiments.sh`,
   `./run_experiments_aeon.sh`) unless the task truly requires it.
 
+## Documentation
+
+- When updating docs, prefer concise, high-signal edits to the smallest
+  relevant file.
+- Do not layer new text on top of stale text. Remove or replace outdated,
+  duplicate, bloated, or misleading content.
+- Verify commands, paths, filenames, and environment instructions against the
+  actual repository before finalizing doc changes.
+- Keep root docs brief and operational; put narrow workflow detail in the
+  linked `.agent/` docs instead of auto-loading everything into context.
+
 ## Task-specific docs
 
 - Pipeline execution: `.agent/workflows/run-catch22-pipeline.md`
@@ -98,8 +122,10 @@ Read the smallest relevant document first.
 
 ## Subagents
 
-- Spawn subagents only when the user asks or when the work is clearly parallel
-  and independently scoped.
+- Use subagents when the task benefits from parallel exploration, bounded
+  implementation work, or independent verification.
+- Zero, one, or many subagents are all acceptable; choose the smallest number
+  that materially helps.
 - Prefer `explorer` for read-heavy repo mapping and evidence gathering.
 - Keep subagent prompts narrow and outcome-oriented to limit context pollution
   and duplicated work.

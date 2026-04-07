@@ -11,7 +11,7 @@ Patients were included when all of the following were satisfied:
     * At least one postoperative creatinine measurement within 7 days of surgery (filtering performed before labeling).
     * Preoperative creatinine <= 4.0 mg/dL to exclude baseline end-stage kidney disease.
     * ASA physical status V-VI excluded.
-    * Sample independence enforced by randomly selecting one surgery per patient (`subjectid`, seed=42).
+    * Multiple surgeries per patient are retained, but every hold-out split and cross-validation fold is grouped on patient identifier (`subjectid`) so no patient spans train/validation/test partitions.
 
 **Outcome Definition**
 * **Primary**: Postoperative AKI per **KDIGO** creatinine criteria - any rise >= 0.3 mg/dL within 48 hours or >= 1.5x baseline within 72 hours.
@@ -25,7 +25,7 @@ Preoperative variables were drawn from VitalDB clinical and laboratory tables. L
 
 #### Variable Definitions
 * **Demographics**: Age, sex, height, weight, BMI.
-* **Surgical context**: Emergency operation (`emop`), department (rare levels <30 merged to "other" using training counts), approach, ASA class, operation type (`optype`), anesthesia type (`ane_type`).
+* **Surgical context**: Emergency operation (`emop`), department, approach, ASA class, operation type (`optype`), anesthesia type (`ane_type`).
 * **Comorbidities/tests**: Hypertension, diabetes, ECG findings, pulmonary function tests.
 * **Laboratory values**: Hemoglobin, platelets, INR (`preop_pt`), aPTT, sodium, potassium, glucose, albumin, AST, ALT, BUN, creatinine, bicarbonate, ABG components (pH, base excess, PaO2, PaCO2, SaO2), plus CRP, lactate, and WBC from `lab_data.csv`.
 
@@ -34,12 +34,12 @@ Preoperative variables were drawn from VitalDB clinical and laboratory tables. L
 * **eGFR (CKD-EPI 2021)**: Creatinine converted to mg/dL with unit checks (>20 assumed umol/L/88.4); nonpositive values set missing. Formula mirrors the National Kidney Foundation specification. The raw `preop_gfr` column is excluded.
 * **Physiology flags (QA only)**: High BUN (>27), hypoalbuminemia (<3.5), sex-specific anemia (Hb <13.0 male, <12.0 female), hyponatremia (<135), metabolic acidosis (HCO3 <22 or BE < -2), hypercapnia (PaCO2 >45), hypoxemia (PaO2 <80 or SaO2 <95). These helpers are dropped before modeling.
 
-#### Split, Encoding, and Outliers
-* **Hold-out split**: A single 80/20 stratified split on `aki_label` is created before any encoding or winsorization and stored as `split_group`; all downstream merges preserve this split.
-* **Categoricals**: Departments with <30 training cases collapse to "other". One-hot encoding is fit using training levels; test columns are aligned to the training design matrix.
-* **Outlier handling**: Training-set percentiles drive winsorization. Values below the 1st percentile are replaced with draws from the [0.5th, 5th] percentile range; values above the 99.5th percentile are replaced using [95th, 99.5th] percentiles. Percentiles are computed on numeric training data only.
-* **Imputation**: Default behavior preserves `NaN`. An opt-in flag (`--impute-missing` or `IMPUTE_MISSING=True`) restores the legacy sentinel (-99) for compatibility with older workflows. Aeon fusion models invoke median imputation with missingness indicators (`SimpleImputer(add_indicator=True)`) after replacing any sentinel values with `NaN`.
-* **Outputs**: Preop processing saves `data/processed/aki_preop_processed.csv` with `split_group` retained for all downstream branches.
+#### Split and Fold-local Preprocessing
+* **Hold-out metadata**: A single patient-grouped, approximately 80/20 stratified split on `aki_label` is created in Step 03 and stored as `split_group` for optional backward-compatible holdout analyses. All downstream merges preserve this split, and no `subjectid` may appear in both train and test.
+* **No learned preprocessing in Step 03**: The saved `data/processed/aki_preop_processed.csv` retains raw categorical columns, raw numeric columns, derived features, and `split_group`, but it does not apply train-fitted encoding, rare-category collapsing, clipping, or imputation.
+* **Categoricals**: In modeling, departments with <30 training rows within the current training partition collapse to `other`, then one-hot encoding is fit on that same partition only; validation/test rows use `handle_unknown="ignore"`.
+* **Numeric preprocessing**: Continuous preoperative variables are clipped using quantiles learned on the current training partition only. Optional imputation, when requested, also fits on the current training partition only.
+* **Imputation**: Default behavior preserves `NaN`. Step 03's `--impute-missing` flag is now a backward-compatible no-op, and Step 05's `--impute-missing` flag remains a backward-compatible sentinel-fill path for merged tables only. Fold-local modeling-time imputation in the Catch22 branch is controlled by `--legacy_imputation` on Step 06/07. Aeon fusion models still apply their own downstream median-imputation path after replacing any sentinel values with `NaN`.
 
 ### Waveform Signal Processing (Catch22 Branch)
 Filtering and resampling follow channel-specific specifications in `data_preparation/waveform_processing.py`, grounded in prior signal-processing literature:
@@ -62,25 +62,33 @@ We use **Catch24** (22 canonical Catch22 features plus mean and standard deviati
 
 **Branches and feature sets**: Both non-windowed and windowed branches are trained. Feature grids include `preop_only`, single-waveform sets (`pleth_only`, `ecg_only`, `co2_only`, `awp_only`), `all_waveforms`, and `preop_and_all_waveforms`, plus ablations `preop_and_<waveform>` and `preop_and_all_minus_<waveform>`. Two-channel waveform-only models are intentionally excluded outside the all-waveform condition.
 
+**Validation design**:
+* The primary internal validation procedure is patient-grouped nested cross-validation with 5 outer folds and 5 inner folds (`repeats=1` by default). Repeated nested CV is intentionally disabled in the current implementation (`repeats > 1` raises an error) until repeat-aware aggregation and uncertainty estimation are added. The legacy single holdout remains available as a secondary mode but is no longer the default analysis.
+* Every split, calibration fold, threshold-selection fold, and bootstrap resample is grouped on `subjectid` to prevent patient-level leakage when multiple operations belong to the same patient.
+* Outer test folds are used exactly once: after model selection, calibration fitting, and threshold selection have already been completed on the corresponding outer-training cohort.
+* Interrupted nested runs may resume from fold checkpoints only when the stored validation fingerprint exactly matches the active run configuration; otherwise stale checkpoints are ignored and recomputed.
+* The primary Catch22 shell launcher (`run_experiments.sh`) treats any failed validation configuration as a failed run: it completes the requested grid, skips pooled reporting on partial runs, and exits nonzero so stale artifacts are not mistaken for current evidence.
+
 **XGBoost**:
 * Objective `binary:logistic`, `tree_method=hist`, `eval_metric=aucpr`.
-* Optuna HPO on the training set with stratified CV (up to 5 folds; reduced when the minority class is small) and early stopping (50 rounds). `scale_pos_weight` is derived from the training split. Default HPO budget is 100 trials unless smoke-test mode is invoked.
-* Final models refit on full training data. SHAP summary plots are produced for test sets.
+* Optuna HPO runs inside the current training cohort with patient-grouped stratified CV (up to 5 folds; reduced when the minority class or unique patient count is small). `n_estimators` is tuned directly; the scored validation fold is not reused for early stopping. `scale_pos_weight` is recomputed inside each fold-training subset rather than once globally.
+* Final models refit on the full outer-training data (or the full dataset for the optional final refit). SHAP summary plots are produced for holdout evaluations and optional final refits.
 
 **Explainable Boosting Machines**:
-* Optuna search space: `max_bins in {32,64,128,256}`, `max_leaves in {2,3}`, `smoothing_rounds in {0,25,50,75,100,150,200,350,500}`, `learning_rate in {0.0025-0.04}`, `validation_size in {0.1,0.15,0.2}`, `early_stopping_rounds in {100,200}`, `early_stopping_tolerance in {0,1e-5}`, `min_samples_leaf in {2,3,4,5,10}`, `min_hessian in {0,1e-6,1e-4,1e-2}`, `greedy_ratio in {0,5,10}`, `cyclic_progress in {0,1}` with `interactions=0`, `missing="gain"`, `inner_bags=0`, `outer_bags=1`, `n_jobs=-2`. Datasets with <50 rows force single-threaded, low-bag settings to avoid hangs.
-* Final training uses `inner_bags=20`, `outer_bags=14`, `max_bins=1024`, `n_jobs=-2` (or reduced for very small data). Optional EBM XAI exports include global/interaction plots, local attributions, per-term partial dependence, and an HTML index with display-dictionary labels; term exports run in a bounded thread pool with timeouts and retries.
+* Optuna search space: `max_bins in {32,64,128,256}`, `max_leaves in {2,3}`, `smoothing_rounds in {0,25,50,75,100,150,200,350,500}`, `learning_rate in {0.0025-0.04}`, `validation_size in {0.1,0.15,0.2}`, `early_stopping_rounds in {100,200}`, `early_stopping_tolerance in {0,1e-5}`, `min_samples_leaf in {2,3,4,5,10}`, `min_hessian in {0,1e-6,1e-4,1e-2}`, `greedy_ratio in {0,5,10}`, `cyclic_progress in {0,1}` with `interactions=0`, `missing="gain"`, `inner_bags=0`, and `outer_bags=1`.
+* Frozen bins are computed inside each fold-training subset only, never once on the full outer-training data, so inner validation rows do not influence EBM discretization. The fold cache keys these bins by the candidate `max_bins` value so HPO, grouped calibration, outer-fold refits, and optional full-data refits all use a coherent discretization contract.
+* HPO itself stays on the lighter bagging settings above for runtime control, but post-HPO grouped calibration fits, outer-fold final models, and optional full-data refits switch to `inner_bags=20` and `outer_bags=14` while honoring the selected `max_bins`. Optional EBM XAI exports include global/interaction plots, local attributions, per-term partial dependence, and an HTML index with display-dictionary labels; term exports run in a bounded thread pool with timeouts and retries.
 
 ## Post-hoc Analysis and Statistical Evaluation
-* **Calibration and thresholding**: Stratified out-of-fold predictions on the training split feed a logistic recalibration model (`calibration.json`). Calibrated OOF probabilities are thresholded by Youden's J statistic (`threshold.json`). The same calibrator and threshold are applied to held-out test predictions; no test-time refitting occurs.
-* **Test metrics**: Primary metric AUPRC; secondary metrics AUROC, F1, sensitivity, specificity, accuracy, precision, and Brier score computed on calibrated test probabilities.
-* **Bootstrapping**: `results_recreation/metrics_summary.py` validates artifacts, then runs 1,000 stratified, non-parametric bootstrap resamples of test predictions (configurable). Stored thresholds remain fixed. Percentile (2.5, 97.5) CIs are attached per Outcome x Branch x Feature Set x Model, with paired delta-CIs against a reference (default `preop_only`) when predictions share identical case sets. Joblib process pools are used with guarded fallbacks to threads/sequential execution and retryable timeouts.
+* **Calibration and thresholding**: Within each outer fold, patient-grouped out-of-fold predictions on the outer-training cohort feed a logistic recalibration model (`calibration.json`). Calibrated outer-train OOF probabilities are thresholded by Youden's J statistic (`threshold.json`). The locked calibrator and threshold are then applied unchanged to the corresponding outer-test fold; no outer-test outcomes are used for recalibration or threshold selection. In nested mode, pooled `test.csv` predictions must contain exactly one row per operation.
+* **Evaluation target**: Performance is reported at the operation level using pooled outer-fold predictions (or the legacy holdout test cohort when holdout mode is invoked). Primary metric is AUPRC; secondary metrics include AUROC, F1, sensitivity, specificity, accuracy, precision, and Brier score computed from calibrated probabilities and stored binary labels.
+* **Bootstrapping**: `results_recreation/metrics_summary.py` validates artifacts, then runs 1,000 stratified, patient-clustered non-parametric bootstrap resamples of the saved evaluation predictions (configurable). Patients are resampled with replacement and all of each sampled patient's operations are retained in each replicate. Percentile (2.5, 97.5) CIs are attached per Outcome x Branch x Feature Set x Model, with paired delta-CIs against a reference (default `preop_only`) when predictions share identical case and patient ordering. Joblib process pools are used with guarded fallbacks to threads/sequential execution and retryable timeouts.
 * **Interpretability**: XGBoost SHAP summaries are saved for test data. EBM relies on native additive explanations when exports are enabled; SHAP is not run for EBMs.
 
 ## Reporting Artifacts
 All figures and tables regenerate from saved artifacts using `metadata/display_dictionary.json` for consistent labels/units.
 * **Cohort flow**: `reporting/cohort_flow.py` converts `results/metadata/cohort_flow_counts.json` into SVG/PNG consort diagrams, consolidating waveform checks into a single availability box and rendering the terminal AKI split when present.
-* **Baseline table**: `reporting/preop_descriptives.py` uses raw cohort data (pre-encoding) and winsorized continuous variables; Shapiro-Wilk testing guides mean+/-SD vs. median[IQR] display. Outputs: HTML/LaTeX/DOCX at `results/tables/preop_descriptives.*`.
+* **Baseline table**: `reporting/preop_descriptives.py` uses raw cohort data or `aki_preop_processed.csv`, both of which retain raw categorical variables after Step 03; Shapiro-Wilk testing guides mean+/-SD vs. median[IQR] display. Outputs: HTML/LaTeX/DOCX at `results/tables/preop_descriptives.*`.
 * **Missingness table**: `reporting/missingness_table.py` summarizes feature-level missingness from `data/processed/aki_features_master_wide.csv` to CSV/HTML for supplements and QA.
 
 ## Experimental Pipeline: Time-Series Classification (Aeon)
