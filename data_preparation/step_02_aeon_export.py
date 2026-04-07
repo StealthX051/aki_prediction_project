@@ -16,6 +16,7 @@ from data_preparation.inputs import (
     AEON_FIXED_LENGTH,
     AEON_OUT_DIR # Ensure this is used
 )
+from data_preparation.outcome_registry import DEFAULT_OUTCOME_SPEC
 from data_preparation.waveform_processing import process_signal, load_and_validate_case, WAVEFORM_SPECS
 from data_preparation.aeon_io import collate_and_save_aeon, AeonExportConfig
 
@@ -104,12 +105,22 @@ def main():
 
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
     logging.info(f"Starting Aeon Export (Freq=1Hz, Padding to {AEON_FIXED_LENGTH})...")
+    logging.warning(
+        "Aeon export remains experimental and is not part of the validated paper pipeline. "
+        "It still assumes the legacy default outcome semantics."
+    )
+    if OUTCOME != DEFAULT_OUTCOME_SPEC.target_col:
+        raise ValueError(
+            f"Aeon export currently supports only the legacy default outcome "
+            f"'{DEFAULT_OUTCOME_SPEC.name}' ({DEFAULT_OUTCOME_SPEC.target_col})."
+        )
 
     # Load Cohort
     if not os.path.exists(COHORT_FILE):
         logging.error(f"Cohort file not found: {COHORT_FILE}")
         return
     cohort_df = pd.read_csv(COHORT_FILE)
+    cohort_df = cohort_df.dropna(subset=[OUTCOME]).copy()
     logging.info(f"Loaded {len(cohort_df)} cases.")
 
     # Expand Cohort (Case x Waveform)

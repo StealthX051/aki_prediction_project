@@ -10,6 +10,11 @@ from tqdm import tqdm
 import time
 from collections import defaultdict
 
+from data_preparation.artifact_metadata import (
+    STEP_01_COHORT_ARTIFACT,
+    ArtifactCompatibilityError,
+    read_versioned_csv,
+)
 from data_preparation.inputs import (
     COHORT_FILE, 
     CATCH_22_FILE,
@@ -29,6 +34,7 @@ from data_preparation.inputs import (
 from data_preparation.waveform_processing import WAVEFORM_SPECS, process_signal, harmonize_sr, load_and_validate_case
 from data_preparation.aeon_io import collate_and_save_aeon, AeonExportConfig, AeonSeriesPayload
 
+COHORT_REQUIRED_COLUMNS = ["caseid", "opstart", "opend"]
 
 # Create mapping from VitalDB ID to Spec Key
 ID_TO_SPEC_KEY = {spec['id']: key for key, spec in WAVEFORM_SPECS.items()}
@@ -37,7 +43,7 @@ ID_TO_SPEC_KEY = {spec['id']: key for key, spec in WAVEFORM_SPECS.items()}
 if GENERATE_WINDOWED_FEATURES:
     assert WIN_SEC is not None and SLIDE_SEC is not None, "WIN_SEC and SLIDE_SEC must be set for windowed extraction."
 
-def _process_case(case: Tuple[int, float, float, int, str]) -> Tuple[Dict[str, Any], Dict[str, float], Dict[str, Optional[AeonSeriesPayload]]]:
+def _process_case(case: Tuple[int, float, float, str]) -> Tuple[Dict[str, Any], Dict[str, float], Dict[str, Optional[AeonSeriesPayload]]]:
     """
     Processes a single case/waveform pair.
     Returns:
@@ -45,7 +51,7 @@ def _process_case(case: Tuple[int, float, float, int, str]) -> Tuple[Dict[str, A
         - timings: Dict of timing metrics.
         - payloads: Dict with keys 'full' and/or 'windowed' containing Aeon payloads.
     """
-    caseid, opstart, opend, outcome, waveform_key = case
+    caseid, opstart, opend, waveform_key = case
     timings = {}
     results = {}
     payloads = {}
@@ -103,7 +109,6 @@ def _process_case(case: Tuple[int, float, float, int, str]) -> Tuple[Dict[str, A
                 out = {n: v for n, v in zip(all_feature_results['names'], all_feature_results['values'])}
                 out['caseid'] = caseid
                 out['waveform'] = waveform_key 
-                out[OUTCOME] = outcome 
                 results['full'] = out
                 
                 if EXPORT_AEON:
@@ -163,7 +168,6 @@ def _process_case(case: Tuple[int, float, float, int, str]) -> Tuple[Dict[str, A
                     }
                     out['caseid'] = caseid
                     out['waveform'] = waveform_key
-                    out[OUTCOME] = outcome
                     results['windowed'] = out
 
                     if EXPORT_AEON:
@@ -229,9 +233,16 @@ def main():
 
     # Load Cohort
     try:
-        cohort_df = pd.read_csv(COHORT_FILE)
+        cohort_df, _ = read_versioned_csv(
+            COHORT_FILE,
+            artifact_role=STEP_01_COHORT_ARTIFACT,
+            required_columns=COHORT_REQUIRED_COLUMNS,
+        )
     except FileNotFoundError:
         logging.error(f"Cohort file not found at {COHORT_FILE}. Exiting.")
+        return
+    except ArtifactCompatibilityError as exc:
+        logging.error("%s", exc)
         return
     logging.info(f"Loaded {len(cohort_df)} cases from {COHORT_FILE}")
 
@@ -286,7 +297,7 @@ def main():
         return
 
     cases_to_process = list(
-        cohort_to_process[['caseid', 'opstart', 'opend', OUTCOME, 'waveform']]
+        cohort_to_process[['caseid', 'opstart', 'opend', 'waveform']]
         .itertuples(index=False, name=None)
     )
     

@@ -903,13 +903,18 @@ def train_evaluate(
     dataset_hash = compute_file_hash(data_file)
     preserve_nan = not legacy_imputation
     base_random_state = 42
-    working_df, X, y, caseids, groups = select_modeling_dataset(df, outcome, feature_set)
+    working_df, X, y, caseids, groups = select_modeling_dataset(
+        df,
+        outcome,
+        feature_set,
+        require_holdout_split=(validation_scheme == "holdout"),
+    )
 
     if smoke_test:
         logger.info("SMOKE TEST: reducing trials/folds/workers for %s.", validation_scheme)
         n_trials = min(n_trials, 2)
-        outer_folds = min(outer_folds, 3)
-        inner_folds = min(inner_folds, 3)
+        outer_folds = min(outer_folds, 2)
+        inner_folds = min(inner_folds, 2)
         max_workers = 1
         threads_per_model = min(threads_per_model, 2)
 
@@ -1151,17 +1156,10 @@ def train_evaluate(
         )
 
     if validation_scheme == "holdout":
-        train_mask = working_df["split_group"] == "train" if "split_group" in working_df.columns else None
-        test_mask = working_df["split_group"] == "test" if "split_group" in working_df.columns else None
-        if train_mask is None or test_mask is None:
-            if groups is None:
-                raise ValueError("Holdout validation requires patient groups or an existing split_group column.")
-            split_train_idx, split_test_idx = utils.select_patient_level_holdout_positions(
-                y, groups, random_state=base_random_state
-            )
-        else:
-            split_train_idx = np.flatnonzero(train_mask.to_numpy())
-            split_test_idx = np.flatnonzero(test_mask.to_numpy())
+        train_mask = working_df["split_group"] == "train"
+        test_mask = working_df["split_group"] == "test"
+        split_train_idx = np.flatnonzero(train_mask.to_numpy())
+        split_test_idx = np.flatnonzero(test_mask.to_numpy())
         result = run_outer_split(
             df=working_df,
             X=X,

@@ -4,9 +4,23 @@ import numpy as np
 from pathlib import Path
 import logging
 from typing import Tuple, List, Dict, Optional
-from sklearn.model_selection import StratifiedGroupKFold, train_test_split
+from sklearn.model_selection import StratifiedGroupKFold
 
 from artifact_paths import get_paper_dir, get_processed_dir, get_results_dir
+from data_preparation.artifact_metadata import (
+    STEP_05_MERGED_ARTIFACT,
+    ArtifactCompatibilityError,
+    read_versioned_csv,
+)
+from data_preparation.outcome_registry import (
+    ALL_ELIGIBILITY_COLUMNS,
+    ALL_OUTCOME_COLUMNS,
+    ALL_SPLIT_COLUMNS,
+    LEGACY_SPLIT_ALIAS,
+    TRAINABLE_OUTCOME_SPECS,
+    TRAINABLE_OUTCOME_NAMES,
+    get_trainable_outcome_spec,
+)
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -29,13 +43,7 @@ FULL_FEATURES_FILE = DATA_DIR / 'aki_features_master_wide.csv'
 WINDOWED_FEATURES_FILE = DATA_DIR / 'aki_features_master_wide_windowed.csv'
 
 # Outcomes
-OUTCOMES = {
-    'any_aki': 'aki_label',
-    'severe_aki': 'y_severe_aki',
-    'mortality': 'y_inhosp_mortality',
-    'extended_los': 'y_prolonged_los_postop',
-    'icu_admission': 'y_icu_admit'
-}
+OUTCOMES = {spec.name: spec.target_col for spec in TRAINABLE_OUTCOME_SPECS}
 
 # Waveform Prefixes
 WAVEFORM_PREFIXES = {
@@ -53,6 +61,49 @@ CONTINUOUS_PREOP_COLS = [
 ]
 
 PATIENT_GROUP_COLUMNS = ("subjectid", "subject_id")
+MERGED_REQUIRED_COLUMNS = [
+    "caseid",
+    "subjectid",
+    *ALL_OUTCOME_COLUMNS,
+    *ALL_ELIGIBILITY_COLUMNS,
+    *ALL_SPLIT_COLUMNS,
+]
+
+
+def prepare_working_dataset_for_outcome(
+    df: pd.DataFrame,
+    outcome_name: str,
+    *,
+    require_holdout_split: bool = False,
+) -> Tuple[pd.DataFrame, object]:
+    spec = get_trainable_outcome_spec(outcome_name)
+    if spec.target_col not in df.columns:
+        raise ValueError(f"Target column {spec.target_col} not found in dataframe.")
+
+    working_df = df.copy()
+
+    if spec.eligibility_col not in working_df.columns:
+        raise ValueError(
+            f"Eligibility column {spec.eligibility_col} not found in dataframe for outcome '{outcome_name}'."
+        )
+
+    working_df = working_df[working_df[spec.eligibility_col] == 1].copy()
+    working_df = working_df.dropna(subset=[spec.target_col]).copy()
+
+    if spec.split_col and spec.split_col in working_df.columns:
+        working_df[LEGACY_SPLIT_ALIAS] = working_df[spec.split_col]
+    elif LEGACY_SPLIT_ALIAS in working_df.columns:
+        working_df = working_df.drop(columns=[LEGACY_SPLIT_ALIAS])
+
+    if require_holdout_split:
+        working_df = require_persisted_holdout_split(
+            working_df,
+            spec=spec,
+            outcome_name=outcome_name,
+            source_metadata=df.attrs.get("artifact_metadata"),
+        )
+
+    return working_df, spec
 
 def load_data(branch: str) -> pd.DataFrame:
     """
@@ -69,7 +120,16 @@ def load_data(branch: str) -> pd.DataFrame:
         raise FileNotFoundError(f"Data file not found: {file_path}")
 
     logger.info(f"Loading data from {file_path}...")
-    df = pd.read_csv(file_path)
+    try:
+        df, metadata = read_versioned_csv(
+            file_path,
+            artifact_role=STEP_05_MERGED_ARTIFACT,
+            required_columns=MERGED_REQUIRED_COLUMNS,
+        )
+    except (ArtifactCompatibilityError, FileNotFoundError):
+        raise
+
+    df.attrs["artifact_metadata"] = metadata
     logger.info(f"Data loaded. Shape: {df.shape}")
     return df
 
@@ -90,8 +150,10 @@ def get_feature_sets(df: pd.DataFrame) -> Dict[str, List[str]]:
         waveform_cols.extend([c for c in all_cols if c.startswith(prefix)])
         
     # Identify excluded columns (IDs, outcomes, split_group)
-    excluded_cols = set(['caseid', 'subjectid', 'subject_id', 'hadm_id', 'split_group'])
-    excluded_cols.update(OUTCOMES.values())
+    excluded_cols = set(['caseid', 'subjectid', 'subject_id', 'hadm_id', LEGACY_SPLIT_ALIAS])
+    excluded_cols.update(ALL_OUTCOME_COLUMNS)
+    excluded_cols.update(ALL_ELIGIBILITY_COLUMNS)
+    excluded_cols.update(ALL_SPLIT_COLUMNS)
     
     # Preop cols = All cols - Waveform cols - Excluded cols
     preop_cols = [c for c in all_cols if c not in waveform_cols and c not in excluded_cols]
@@ -147,6 +209,91 @@ def get_patient_groups(df: pd.DataFrame, indices: Optional[pd.Index] = None) -> 
     if groups.isna().any():
         raise ValueError(f"Patient group column '{group_col}' contains missing values.")
     return groups
+
+
+def _describe_split_status(
+    source_metadata: Optional[dict],
+    outcome_name: str,
+) -> Optional[dict]:
+    if not source_metadata:
+        return None
+
+    split_status = source_metadata.get("split_status")
+    if not isinstance(split_status, dict):
+        return None
+
+    outcome_status = split_status.get(outcome_name)
+    return outcome_status if isinstance(outcome_status, dict) else None
+
+
+def require_persisted_holdout_split(
+    df: pd.DataFrame,
+    *,
+    spec,
+    outcome_name: str,
+    source_metadata: Optional[dict] = None,
+) -> pd.DataFrame:
+    split_col = spec.split_col
+    if split_col is None:
+        raise ValueError(f"Outcome '{outcome_name}' does not define a persisted holdout split.")
+
+    status_payload = _describe_split_status(source_metadata, outcome_name)
+    status = (status_payload or {}).get("status")
+    reason = (status_payload or {}).get("reason")
+    if status == "unsupported_in_artifact":
+        raise ValueError(
+            f"Outcome '{outcome_name}' is unsupported in this processed artifact for holdout use: {reason}. "
+            "Rebuild Step 03 and Step 05 on a cohort with enough patient-level class support or use nested_cv."
+        )
+    if status == "invalid":
+        raise ValueError(
+            f"Outcome '{outcome_name}' has an invalid persisted holdout split in this artifact: {reason}. "
+            "Rebuild Step 03 and Step 05."
+        )
+
+    if split_col not in df.columns:
+        raise ValueError(
+            f"Holdout validation for outcome '{outcome_name}' requires persisted split column '{split_col}'. "
+            "Run Step 03 and Step 05 to rebuild processed artifacts."
+        )
+
+    split_series = df[split_col]
+    invalid_values = sorted(
+        set(split_series.dropna().astype(str)) - {"train", "test"}
+    )
+    if invalid_values:
+        raise ValueError(
+            f"Persisted split column '{split_col}' contains invalid values {invalid_values} for outcome '{outcome_name}'."
+        )
+
+    if split_series.isna().any():
+        missing_count = int(split_series.isna().sum())
+        raise ValueError(
+            f"Persisted split column '{split_col}' is missing assignments for {missing_count} eligible labeled "
+            f"rows in outcome '{outcome_name}'. Rebuild Step 03 and Step 05."
+        )
+
+    train_mask = split_series == "train"
+    test_mask = split_series == "test"
+    if not train_mask.any() or not test_mask.any():
+        raise ValueError(
+            f"Persisted split column '{split_col}' must contain at least one train row and one test row "
+            f"for outcome '{outcome_name}'."
+        )
+
+    group_col = get_patient_group_column(df)
+    if group_col is not None:
+        train_groups = set(df.loc[train_mask, group_col])
+        test_groups = set(df.loc[test_mask, group_col])
+        overlap = sorted(train_groups & test_groups)
+        if overlap:
+            raise ValueError(
+                f"Persisted split column '{split_col}' leaks patients across train/test via '{group_col}': {overlap[:5]}"
+            )
+
+    working_df = df.copy()
+    working_df[LEGACY_SPLIT_ALIAS] = split_series.astype("object")
+    return working_df
 
 
 def select_patient_level_holdout_positions(
@@ -225,15 +372,12 @@ def prepare_data(
             handle them; if False, apply legacy imputation (-99 for pre-op,
             0 for waveform features).
     """
-    target_col = OUTCOMES.get(outcome_name)
-    if not target_col:
-        raise ValueError(f"Invalid outcome: {outcome_name}. Available: {list(OUTCOMES.keys())}")
-
-    if target_col not in df.columns:
-        raise ValueError(f"Target column {target_col} not found in dataframe.")
-
-    # Drop rows with missing target
-    df = df.dropna(subset=[target_col])
+    df, spec = prepare_working_dataset_for_outcome(
+        df,
+        outcome_name,
+        require_holdout_split=True,
+    )
+    target_col = spec.target_col
     
     # Get feature columns
     feature_sets = get_feature_sets(df)
@@ -256,47 +400,13 @@ def prepare_data(
             else:
                 X[col] = X[col].fillna(0)
 
-    # Split data
-    # Use 'split_group' if available to respect the original split
-    group_col = get_patient_group_column(df)
-    if 'split_group' in df.columns:
-        logger.info("Using existing 'split_group' column for train/test split.")
-        train_mask = df['split_group'] == 'train'
-        test_mask = df['split_group'] == 'test'
+    train_mask = df[LEGACY_SPLIT_ALIAS] == 'train'
+    test_mask = df[LEGACY_SPLIT_ALIAS] == 'test'
 
-        if group_col is not None:
-            train_groups = set(df.loc[train_mask, group_col])
-            test_groups = set(df.loc[test_mask, group_col])
-            overlap = train_groups & test_groups
-            if overlap:
-                raise ValueError(
-                    f"Existing split_group leaks patients across train/test via '{group_col}': {sorted(overlap)[:5]}"
-                )
-        
-        X_train = X[train_mask]
-        y_train = y[train_mask]
-        X_test = X[test_mask]
-        y_test = y[test_mask]
-    else:
-        if group_col is not None:
-            logger.warning(
-                "'split_group' column not found. Performing patient-level grouped holdout split using '%s'.",
-                group_col,
-            )
-            train_idx, test_idx = select_patient_level_holdout_positions(
-                y,
-                df[group_col],
-                random_state=random_state,
-            )
-            X_train = X.iloc[train_idx]
-            y_train = y.iloc[train_idx]
-            X_test = X.iloc[test_idx]
-            y_test = y.iloc[test_idx]
-        else:
-            logger.warning("'split_group' column not found. Performing random stratified split.")
-            X_train, X_test, y_train, y_test = train_test_split(
-                X, y, test_size=0.2, random_state=random_state, stratify=y
-            )
+    X_train = X[train_mask]
+    y_train = y[train_mask]
+    X_test = X[test_mask]
+    y_test = y[test_mask]
 
     # Calculate scale_pos_weight
     neg = (y_train == 0).sum()

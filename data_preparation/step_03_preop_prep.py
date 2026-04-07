@@ -11,12 +11,26 @@ from sklearn.model_selection import StratifiedGroupKFold
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.append(str(PROJECT_ROOT))
 
+from data_preparation.artifact_metadata import (
+    STEP_01_COHORT_ARTIFACT,
+    STEP_03_PREOP_ARTIFACT,
+    ArtifactCompatibilityError,
+    read_versioned_csv,
+    write_artifact_metadata,
+)
 from data_preparation.inputs import (
     COHORT_FILE,
     PREOP_PROCESSED_FILE,
-    OUTCOME,
     LAB_DATA_FILE,
     IMPUTE_MISSING,
+)
+from data_preparation.outcome_registry import (
+    ALL_ELIGIBILITY_COLUMNS,
+    ALL_OUTCOME_COLUMNS,
+    ALL_SPLIT_COLUMNS,
+    DEFAULT_OUTCOME_SPEC,
+    LEGACY_SPLIT_ALIAS,
+    TRAINABLE_OUTCOME_SPECS,
 )
 
 # --- Configuration ---
@@ -27,11 +41,8 @@ RANDOM_STATE = 42
 PREOP_FEATURES_TO_SELECT = [
     'caseid',
     'subjectid',
-    OUTCOME,
-    'y_severe_aki',
-    'y_inhosp_mortality',
-    'y_icu_admit',
-    'y_prolonged_los_postop',
+    *ALL_OUTCOME_COLUMNS,
+    *ALL_ELIGIBILITY_COLUMNS,
 
     # Demographics & body size
     'age',
@@ -164,6 +175,12 @@ PREOP_LABS_FROM_LABDATA = [
     'wbc',   # white blood cells
     'crp',   # C-reactive protein
     'lac',   # lactate
+]
+
+COHORT_REQUIRED_COLUMNS = [
+    *[col for col in PREOP_FEATURES_TO_SELECT if col not in {"preop_wbc", "preop_crp", "preop_lac"}],
+    'opstart',
+    'opend',
 ]
 
 def _convert_creatinine_to_mg_dl(scr_series: pd.Series) -> pd.Series:
@@ -372,6 +389,82 @@ def select_patient_level_holdout_indices(
 
     return df.index[best_train_pos], df.index[best_test_pos]
 
+
+def assign_outcome_specific_splits(
+    df: pd.DataFrame,
+) -> tuple[pd.DataFrame, dict[str, dict[str, object]]]:
+    split_df = df.copy()
+    split_status: dict[str, dict[str, object]] = {}
+
+    for spec in TRAINABLE_OUTCOME_SPECS:
+        split_df[spec.split_col] = pd.Series(pd.NA, index=split_df.index, dtype="object")
+
+    for spec in TRAINABLE_OUTCOME_SPECS:
+        eligible_mask = split_df[spec.eligibility_col].eq(1)
+        outcome_ready_df = split_df.loc[eligible_mask].dropna(subset=[spec.target_col]).copy()
+        status_payload: dict[str, object] = {
+            "status": "unsupported_in_artifact",
+            "eligible_rows": int(eligible_mask.sum()),
+            "labeled_rows": int(len(outcome_ready_df)),
+            "split_column": spec.split_col,
+        }
+
+        if outcome_ready_df.empty:
+            status_payload["reason"] = "no eligible labeled rows available"
+            split_status[spec.name] = status_payload
+            print(
+                f"{spec.name} holdout split unavailable in this artifact: "
+                f"{status_payload['reason']}."
+            )
+            continue
+
+        try:
+            train_idx, test_idx = select_patient_level_holdout_indices(
+                outcome_ready_df,
+                outcome_col=spec.target_col,
+                group_col='subjectid',
+                target_test_size=0.2,
+                random_state=RANDOM_STATE,
+            )
+        except ValueError as exc:
+            status_payload["reason"] = str(exc)
+            split_status[spec.name] = status_payload
+            print(f"{spec.name} holdout split unavailable in this artifact: {exc}")
+            continue
+
+        split_df.loc[train_idx, spec.split_col] = 'train'
+        split_df.loc[test_idx, spec.split_col] = 'test'
+
+        assigned = split_df.loc[outcome_ready_df.index, spec.split_col]
+        missing_assignments = int(assigned.isna().sum())
+        if missing_assignments:
+            status_payload["status"] = "invalid"
+            status_payload["reason"] = (
+                f"{missing_assignments} eligible labeled rows were not assigned to train/test"
+            )
+        else:
+            train_subjects = set(split_df.loc[split_df[spec.split_col] == 'train', 'subjectid'])
+            test_subjects = set(split_df.loc[split_df[spec.split_col] == 'test', 'subjectid'])
+            overlap = sorted(train_subjects & test_subjects)
+            if overlap:
+                status_payload["status"] = "invalid"
+                status_payload["reason"] = (
+                    f"patient overlap detected across train/test split: {overlap[:5]}"
+                )
+            else:
+                status_payload["status"] = "ready"
+                status_payload["train_rows"] = int((split_df[spec.split_col] == 'train').sum())
+                status_payload["test_rows"] = int((split_df[spec.split_col] == 'test').sum())
+
+        split_status[spec.name] = status_payload
+        print(
+            f"{spec.name} holdout split status: {status_payload['status']} "
+            f"(eligible={status_payload['eligible_rows']}, labeled={status_payload['labeled_rows']})"
+        )
+
+    split_df[LEGACY_SPLIT_ALIAS] = split_df[DEFAULT_OUTCOME_SPEC.split_col]
+    return split_df, split_status
+
 def main(impute_missing: Optional[bool] = None):
     parser = argparse.ArgumentParser(
         description="Prepare the preoperative dataset and assign the patient-grouped holdout split."
@@ -399,7 +492,11 @@ def main(impute_missing: Optional[bool] = None):
 
     # 1. Load Data
     try:
-        cohort_df = pd.read_csv(COHORT_FILE)
+        cohort_df, _ = read_versioned_csv(
+            COHORT_FILE,
+            artifact_role=STEP_01_COHORT_ARTIFACT,
+            required_columns=COHORT_REQUIRED_COLUMNS,
+        )
         print(f"Loaded cohort data. Shape: {cohort_df.shape}")
 
         # 1b. Merge extra preop labs from lab_data.csv using dt < 0
@@ -414,6 +511,9 @@ def main(impute_missing: Optional[bool] = None):
                   "Skipping additional preop labs from lab_data.csv.")
     except FileNotFoundError:
         print(f"ERROR: Cohort file not found at {COHORT_FILE}")
+        sys.exit(1)
+    except ArtifactCompatibilityError as exc:
+        print(f"ERROR: {exc}")
         sys.exit(1)
 
     # 2. Select Columns
@@ -433,27 +533,19 @@ def main(impute_missing: Optional[bool] = None):
         sys.exit(1)
 
     # 3. Train/Test Split
-    print("Performing patient-level grouped train/test split (~80/20)...")
-    train_idx, test_idx = select_patient_level_holdout_indices(
-        preop_df,
-        outcome_col=OUTCOME,
-        group_col='subjectid',
-        target_test_size=0.2,
-        random_state=RANDOM_STATE,
-    )
-    
-    # Assign split group
-    preop_df['split_group'] = 'train' # Default
-    preop_df.loc[test_idx, 'split_group'] = 'test'
-    
-    # Create views for processing (we process the whole DF but use train stats)
-    train_mask = preop_df['split_group'] == 'train'
-    test_mask = preop_df['split_group'] == 'test'
-    
+    print("Performing patient-level grouped train/test split (~80/20) per trainable outcome...")
+    preop_df, split_status = assign_outcome_specific_splits(preop_df)
+
+    train_mask = preop_df[LEGACY_SPLIT_ALIAS] == 'train'
+    test_mask = preop_df[LEGACY_SPLIT_ALIAS] == 'test'
+
     X_train = preop_df.loc[train_mask].copy()
     X_test = preop_df.loc[test_mask].copy()
-    
-    print(f"Train set: {len(X_train)}, Test set: {len(X_test)}")
+
+    print(f"Default AKI train set: {len(X_train)}, Test set: {len(X_test)}")
+    for split_col in ALL_SPLIT_COLUMNS:
+        split_counts = preop_df[split_col].value_counts(dropna=False)
+        print(f"{split_col} distribution:\n{split_counts}")
 
     print("Skipping train-fitted preprocessing in Step 03.")
     print("Categorical encoding, outlier handling, and optional imputation now occur inside model-time folds only.")
@@ -463,6 +555,16 @@ def main(impute_missing: Optional[bool] = None):
     # 4. Save
     print(f"Saving processed data to {PREOP_PROCESSED_FILE}...")
     preop_df.to_csv(PREOP_PROCESSED_FILE, index=False)
+    write_artifact_metadata(
+        PREOP_PROCESSED_FILE,
+        artifact_role=STEP_03_PREOP_ARTIFACT,
+        available_columns=preop_df.columns,
+        extra_metadata={
+            "split_status": split_status,
+            "upstream_artifact": str(COHORT_FILE),
+            "upstream_schema_version": 1,
+        },
+    )
     print("Done.")
 
 if __name__ == "__main__":

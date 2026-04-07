@@ -72,15 +72,15 @@ def select_modeling_dataset(
     df: pd.DataFrame,
     outcome_name: str,
     feature_set_name: str,
+    *,
+    require_holdout_split: bool = False,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series, Optional[pd.Series]]:
-    target_col = utils.OUTCOMES.get(outcome_name)
-    if target_col is None:
-        raise ValueError(f"Invalid outcome: {outcome_name}. Available: {list(utils.OUTCOMES.keys())}")
-
-    if target_col not in df.columns:
-        raise ValueError(f"Target column {target_col} not found in dataframe.")
-
-    working_df = df.dropna(subset=[target_col]).copy()
+    working_df, spec = utils.prepare_working_dataset_for_outcome(
+        df,
+        outcome_name,
+        require_holdout_split=require_holdout_split,
+    )
+    target_col = spec.target_col
     feature_sets = utils.get_feature_sets(working_df)
     if feature_set_name not in feature_sets:
         raise ValueError(

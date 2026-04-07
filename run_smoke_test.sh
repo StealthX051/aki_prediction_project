@@ -13,6 +13,7 @@ HPO_TRIALS=${HPO_TRIALS:-2}
 PYTHON_BIN=${PYTHON_BIN:-python}
 PARALLEL_BACKEND=${PARALLEL_BACKEND:-processes}
 USER_LOG_FILE="${LOG_FILE:-}"
+SMOKE_OUTCOMES=${SMOKE_OUTCOMES:-"any_aki,icu_admission"}
 
 read -r -a PYTHON_CMD <<< "$PYTHON_BIN"
 if [[ ${#PYTHON_CMD[@]} -eq 0 ]]; then
@@ -55,6 +56,7 @@ export RAW_DIR="$RAW_SOURCE_DIR"
 export RESULTS_DIR="$SMOKE_RESULTS_DIR"
 export PAPER_DIR="$SMOKE_PAPER_DIR"
 export GENERATE_WINDOWED_FEATURES="True"
+export SMOKE_OUTCOMES
 
 aki_refresh_repo_symlinks "$ROOT_DIR"
 
@@ -68,30 +70,11 @@ echo "--- Step 01: Cohort construction ---" | tee -a "$LOG_FILE"
 run_python -m data_preparation.step_01_cohort_construction 2>&1 | tee -a "$LOG_FILE"
 
 echo "--- Trimming cohort to $CASE_LIMIT cases ---" | tee -a "$LOG_FILE"
-run_python - <<PY 2>&1 | tee -a "$LOG_FILE"
-from pathlib import Path
-import pandas as pd
-
-cohort_path = Path("$COHORT_PATH")
-limit = $CASE_LIMIT
-cohort_path.parent.mkdir(parents=True, exist_ok=True)
-df = pd.read_csv(cohort_path)
-
-pos = df[df["aki_label"] == 1]
-neg = df[df["aki_label"] == 0]
-
-n_pos = min(len(pos), max(2, limit // 2))
-n_neg = max(0, limit - n_pos)
-
-df_smoke = pd.concat([pos.head(n_pos), neg.head(n_neg)])
-df_smoke = df_smoke.sample(frac=1, random_state=42).reset_index(drop=True)
-
-df_smoke.to_csv(cohort_path, index=False)
-print(
-    f"Cohort trimmed to {len(df_smoke)} rows at {cohort_path} "
-    f"(Pos: {n_pos}, Neg: {n_neg})"
-)
-PY
+run_python -m data_preparation.smoke_trim_cohort \
+    --cohort-path "$COHORT_PATH" \
+    --limit "$CASE_LIMIT" \
+    --outcomes "$SMOKE_OUTCOMES" \
+    2>&1 | tee -a "$LOG_FILE"
 
 echo "--- Step 02: Catch22 feature extraction ---" | tee -a "$LOG_FILE"
 run_python -m data_preparation.step_02_catch_22 2>&1 | tee -a "$LOG_FILE"
@@ -105,19 +88,22 @@ run_python -m data_preparation.step_04_intraop_prep 2>&1 | tee -a "$LOG_FILE"
 echo "--- Step 05: Data merge ---" | tee -a "$LOG_FILE"
 run_python -m data_preparation.step_05_data_merge 2>&1 | tee -a "$LOG_FILE"
 
-echo "--- Step 07: Nested validation (smoke) ---" | tee -a "$LOG_FILE"
-run_python -m model_creation.step_07_train_evaluate \
-    --outcome any_aki \
-    --branch windowed \
-    --feature_set all_waveforms \
-    --model_type xgboost \
-    --validation-scheme nested_cv \
-    --outer-folds 3 \
-    --inner-folds 3 \
-    --max-workers 1 \
-    --threads-per-model 2 \
-    --n-trials "$HPO_TRIALS" \
-    --smoke_test 2>&1 | tee -a "$LOG_FILE"
+IFS=',' read -r -a SMOKE_OUTCOME_LIST <<< "$SMOKE_OUTCOMES"
+for outcome in "${SMOKE_OUTCOME_LIST[@]}"; do
+    outcome="${outcome// /}"
+    [[ -z "$outcome" ]] && continue
+    echo "--- Step 07: Holdout validation (smoke, ${outcome}) ---" | tee -a "$LOG_FILE"
+    run_python -m model_creation.step_07_train_evaluate \
+        --outcome "$outcome" \
+        --branch windowed \
+        --feature_set all_waveforms \
+        --model_type xgboost \
+        --validation-scheme holdout \
+        --max-workers 1 \
+        --threads-per-model 2 \
+        --n-trials "$HPO_TRIALS" \
+        --smoke_test 2>&1 | tee -a "$LOG_FILE"
+done
 
 echo "--- Reporting: metrics summary ---" | tee -a "$LOG_FILE"
 run_python -m results_recreation.metrics_summary \

@@ -19,6 +19,12 @@ from typing import Sequence
 import pandas as pd
 
 from artifact_paths import enforce_storage_policy, get_paper_dir, get_processed_dir, get_results_dir
+from data_preparation.outcome_registry import (
+    ALL_ELIGIBILITY_COLUMNS,
+    ALL_OUTCOME_COLUMNS,
+    ALL_SPLIT_COLUMNS,
+    LEGACY_SPLIT_ALIAS,
+)
 from reporting.display_dictionary import DisplayDictionary, load_display_dictionary
 from reporting.manuscript_assets import export_dataframe_bundle, refresh_paper_bundle
 
@@ -31,14 +37,16 @@ PAPER_DIR = get_paper_dir(PROJECT_ROOT)
 TABLES_DIR = PAPER_DIR / "tables"
 
 DEFAULT_DATASET_PATH = Path(os.getenv("MERGED_DATASET_PATH", get_processed_dir(PROJECT_ROOT) / "aki_features_master_wide.csv"))
-OUTCOME_COLUMNS = (
-    "aki_label",
-    "y_severe_aki",
-    "y_inhosp_mortality",
-    "y_prolonged_los_postop",
-    "y_icu_admit",
-)
-EXCLUDED_COLUMNS = {"caseid", "subjectid", "subject_id", "hadm_id", "split_group", *OUTCOME_COLUMNS}
+EXCLUDED_COLUMNS = {
+    "caseid",
+    "subjectid",
+    "subject_id",
+    "hadm_id",
+    LEGACY_SPLIT_ALIAS,
+    *ALL_OUTCOME_COLUMNS,
+    *ALL_ELIGIBILITY_COLUMNS,
+    *ALL_SPLIT_COLUMNS,
+}
 
 
 def _load_dataset(path: Path) -> pd.DataFrame:

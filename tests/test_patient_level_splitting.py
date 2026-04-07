@@ -24,6 +24,8 @@ def _multi_operation_df() -> pd.DataFrame:
             "feature1": np.linspace(0.0, 1.0, len(subject_ids)),
             "feature2": np.linspace(1.0, 2.0, len(subject_ids)),
             "aki_label": aki_label,
+            "eligible_any_aki": np.ones(len(subject_ids), dtype=int),
+            "split_group_any_aki": ["train"] * 16 + ["test"] * 4,
         }
     )
 
@@ -40,7 +42,7 @@ def test_select_patient_level_holdout_indices_keeps_patients_disjoint():
     assert len(test_idx) == 4
 
 
-def test_prepare_data_uses_patient_grouped_holdout_when_split_group_missing():
+def test_prepare_data_uses_persisted_outcome_specific_holdout_split():
     df = _multi_operation_df()
 
     X_train, X_test, y_train, y_test, _ = utils.prepare_data(
@@ -57,18 +59,35 @@ def test_prepare_data_uses_patient_grouped_holdout_when_split_group_missing():
     assert len(y_train) + len(y_test) == len(df)
 
 
-def test_prepare_data_rejects_existing_patient_overlap_in_split_group():
+def test_prepare_data_rejects_stale_legacy_split_group_for_non_aki_outcome():
+    df = pd.DataFrame(
+        {
+            "caseid": [1, 2, 3, 4],
+            "subjectid": [100, 100, 200, 200],
+            "feature1": [0.1, 0.2, 0.3, 0.4],
+            "y_icu_admit": [0, 1, 0, 1],
+            "eligible_icu_admission": [1, 1, 1, 1],
+            "split_group": ["train", "test", "train", "test"],
+        }
+    )
+
+    with pytest.raises(ValueError, match="requires persisted split column 'split_group_icu_admission'"):
+        utils.prepare_data(df, outcome_name="icu_admission", feature_set_name="preop_only")
+
+
+def test_prepare_data_rejects_existing_patient_overlap_in_persisted_split():
     df = pd.DataFrame(
         {
             "caseid": [1, 2, 3, 4],
             "subjectid": [100, 100, 200, 200],
             "feature1": [0.1, 0.2, 0.3, 0.4],
             "aki_label": [0, 1, 0, 1],
-            "split_group": ["train", "test", "train", "test"],
+            "eligible_any_aki": [1, 1, 1, 1],
+            "split_group_any_aki": ["train", "test", "train", "test"],
         }
     )
 
-    with pytest.raises(ValueError, match="split_group leaks patients"):
+    with pytest.raises(ValueError, match="leaks patients"):
         utils.prepare_data(df, outcome_name="any_aki", feature_set_name="preop_only")
 
 
@@ -79,6 +98,7 @@ def test_select_patient_level_holdout_requires_multiple_patients_per_class():
             "subjectid": [100, 100, 100, 200, 300, 400],
             "feature1": np.linspace(0.0, 1.0, 6),
             "aki_label": [1, 1, 1, 0, 0, 0],
+            "eligible_any_aki": [1, 1, 1, 1, 1, 1],
         }
     )
 

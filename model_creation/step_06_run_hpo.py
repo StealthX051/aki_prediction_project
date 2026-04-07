@@ -43,16 +43,16 @@ def run_hpo(
 
     try:
         df = utils.load_data(branch)
-        working_df, X, y, _, groups = select_modeling_dataset(df, outcome, feature_set)
-        if "split_group" in working_df.columns:
-            train_mask = working_df["split_group"] == "train"
-            X_train = X.loc[train_mask]
-            y_train = y.loc[train_mask]
-            train_groups = groups.loc[train_mask] if groups is not None else None
-        else:
-            X_train = X
-            y_train = y
-            train_groups = groups
+        working_df, X, y, _, groups = select_modeling_dataset(
+            df,
+            outcome,
+            feature_set,
+            require_holdout_split=True,
+        )
+        train_mask = working_df["split_group"] == "train"
+        X_train = X.loc[train_mask]
+        y_train = y.loc[train_mask]
+        train_groups = groups.loc[train_mask] if groups is not None else None
     except Exception as exc:  # noqa: BLE001
         logger.exception("Failed to prepare data: %s", exc)
         raise SystemExit(1) from exc

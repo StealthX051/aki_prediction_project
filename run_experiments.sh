@@ -233,14 +233,23 @@ ALL_FEATURE_SETS=("${PRIMARY_SETS[@]}" "${ABLATION_SETS_1[@]}" "${ABLATION_SETS_
 ensure_data_prepared() {
     local full_file="${PROCESSED_DIR}/aki_features_master_wide.csv"
     local windowed_file="${PROCESSED_DIR}/aki_features_master_wide_windowed.csv"
+    local validation_cmd=(-m data_preparation.validate_processed_artifacts)
 
     if [[ "$PREP_MODE" == "skip" ]]; then
         echo "Skipping data prep (PREP_MODE=skip)." | tee -a "$LOG_FILE"
+        run_python "${validation_cmd[@]}" 2>&1 | tee -a "$LOG_FILE" || {
+            echo "Existing processed data failed schema validation. Rebuild with --prep force." | tee -a "$LOG_FILE"
+            exit 1
+        }
         return
     fi
 
     if [[ "$PREP_MODE" != "force" && -f "$full_file" && -f "$windowed_file" ]]; then
         echo "Reusing existing processed data at ${PROCESSED_DIR} (use --prep force to rebuild)." | tee -a "$LOG_FILE"
+        run_python "${validation_cmd[@]}" 2>&1 | tee -a "$LOG_FILE" || {
+            echo "Existing processed data failed schema validation. Rebuild with --prep force." | tee -a "$LOG_FILE"
+            exit 1
+        }
         return
     fi
 

@@ -9,17 +9,45 @@ import pandas as pd
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.append(str(PROJECT_ROOT))
 
+from data_preparation.artifact_metadata import (
+    STEP_03_PREOP_ARTIFACT,
+    STEP_05_MERGED_ARTIFACT,
+    ArtifactCompatibilityError,
+    read_versioned_csv,
+    write_artifact_metadata,
+)
 from data_preparation.inputs import (
     PREOP_PROCESSED_FILE,
     INTRAOP_WIDE_FILE,
     INTRAOP_WIDE_WINDOWED_FILE,
     WIDE_FEATURES_FILE,
     WIDE_FEATURES_WINDOWED_FILE,
-    OUTCOME,
     IMPUTE_MISSING,
 )
+from data_preparation.outcome_registry import (
+    ALL_ELIGIBILITY_COLUMNS,
+    ALL_OUTCOME_COLUMNS,
+    ALL_SPLIT_COLUMNS,
+)
 
-def merge_and_save(preop_df, intraop_path, output_path, mode_name, impute_missing: bool):
+PREOP_REQUIRED_COLUMNS = [
+    "caseid",
+    "subjectid",
+    *ALL_OUTCOME_COLUMNS,
+    *ALL_ELIGIBILITY_COLUMNS,
+    *ALL_SPLIT_COLUMNS,
+]
+
+
+def merge_and_save(
+    preop_df,
+    intraop_path,
+    output_path,
+    mode_name,
+    impute_missing: bool,
+    *,
+    preop_metadata: Optional[dict] = None,
+):
     print(f"\n--- Merging {mode_name} Data ---")
     print(f"Intraop Input: {intraop_path}")
     
@@ -45,9 +73,18 @@ def merge_and_save(preop_df, intraop_path, output_path, mode_name, impute_missin
     master_df = pd.merge(
         intraop_df,
         preop_df,
-        on=['caseid', OUTCOME],
-        how='left'
+        on=['caseid'],
+        how='left',
+        validate='one_to_one',
+        indicator=True,
     )
+
+    unmatched_rows = int((master_df["_merge"] != "both").sum())
+    if unmatched_rows:
+        raise ValueError(
+            f"Merge failed for {unmatched_rows} rows in {mode_name}; missing preop metadata for some caseids."
+        )
+    master_df = master_df.drop(columns=["_merge"])
     
     # 3. Check for Merge Issues
     merge_nan_count = master_df.isnull().sum().sum()
@@ -59,29 +96,22 @@ def merge_and_save(preop_df, intraop_path, output_path, mode_name, impute_missin
         else:
             print("Leaving NaNs in merged output (imputation disabled).")
 
-    # 4. Verify Split Group
-    if 'split_group' not in master_df.columns:
-        print("ERROR: 'split_group' column missing after merge! This is critical.")
-        # Attempt to recover if possible, or fail?
-        # If preop_df has it, it should be there.
-        # If intraop_df has rows not in preop_df, they will have NaN split_group.
-        # We should check for that.
-        pass
-    else:
-        missing_split = master_df['split_group'].isnull().sum()
-        if missing_split > 0:
-            print(f"WARNING: {missing_split} rows have missing 'split_group'.")
-            # These are likely patients in waveform file but not in preop file.
-            # We should probably drop them or assign them to 'train'/'test' randomly?
-            # For safety, let's drop them as they lack preop data.
-            print("Dropping rows with missing split_group/preop data...")
-            master_df = master_df.dropna(subset=['split_group'])
-
     print(f"Final merged shape: {master_df.shape}")
 
     # 5. Save
     print(f"Saving to {output_path}...")
     master_df.to_csv(output_path, index=False)
+    write_artifact_metadata(
+        output_path,
+        artifact_role=STEP_05_MERGED_ARTIFACT,
+        available_columns=master_df.columns,
+        extra_metadata={
+            "mode_name": mode_name,
+            "split_status": dict((preop_metadata or {}).get("split_status") or {}),
+            "upstream_artifact": str(PREOP_PROCESSED_FILE),
+            "upstream_schema_version": 1,
+        },
+    )
     print(f"Done with {mode_name}.")
 
 def main(impute_missing: Optional[bool] = None):
@@ -110,7 +140,15 @@ def main(impute_missing: Optional[bool] = None):
         print("ERROR: Preop processed file not found. Run step_03 first.")
         sys.exit(1)
         
-    preop_df = pd.read_csv(PREOP_PROCESSED_FILE)
+    try:
+        preop_df, preop_metadata = read_versioned_csv(
+            PREOP_PROCESSED_FILE,
+            artifact_role=STEP_03_PREOP_ARTIFACT,
+            required_columns=PREOP_REQUIRED_COLUMNS,
+        )
+    except ArtifactCompatibilityError as exc:
+        print(f"ERROR: {exc}")
+        sys.exit(1)
     print(f"Preop Data Shape: {preop_df.shape}")
     
     # Define tasks
@@ -120,7 +158,14 @@ def main(impute_missing: Optional[bool] = None):
     ]
     
     for intraop_p, output_p, name in tasks:
-        merge_and_save(preop_df, intraop_p, output_p, name, impute_missing)
+        merge_and_save(
+            preop_df,
+            intraop_p,
+            output_p,
+            name,
+            impute_missing,
+            preop_metadata=preop_metadata,
+        )
 
 if __name__ == "__main__":
     main()

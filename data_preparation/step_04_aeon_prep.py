@@ -20,6 +20,13 @@ from data_preparation.inputs import (
     COHORT_FILE,
     IMPUTE_MISSING,
 )
+from data_preparation.outcome_registry import (
+    ALL_ELIGIBILITY_COLUMNS,
+    ALL_OUTCOME_COLUMNS,
+    ALL_SPLIT_COLUMNS,
+    DEFAULT_OUTCOME_SPEC,
+    LEGACY_SPLIT_ALIAS,
+)
 
 def main(impute_missing: Optional[bool] = None):
     parser = argparse.ArgumentParser(
@@ -43,6 +50,15 @@ def main(impute_missing: Optional[bool] = None):
 
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
     logging.info("Starting Aeon Preop Preparation...")
+    logging.warning(
+        "Aeon preprocessing remains experimental and is not part of the validated paper pipeline. "
+        "It still assumes the legacy default outcome and split semantics."
+    )
+    if OUTCOME != DEFAULT_OUTCOME_SPEC.target_col:
+        raise ValueError(
+            f"Aeon preprocessing currently supports only the legacy default outcome "
+            f"'{DEFAULT_OUTCOME_SPEC.name}' ({DEFAULT_OUTCOME_SPEC.target_col})."
+        )
 
     # Define paths
     aeon_y_path = Path(AEON_OUT_DIR) / 'y_nonwindowed.csv'
@@ -91,7 +107,8 @@ def main(impute_missing: Optional[bool] = None):
 
     # 4. Imputation Strategy
     # Exclude non-feature columns from imputation
-    meta_cols = ['caseid', 'subjectid', OUTCOME, 'split_group', 'y_severe_aki', 'y_inhosp_mortality', 'y_icu_admit', 'y_prolonged_los_postop']
+    meta_cols = ['caseid', 'subjectid', OUTCOME, LEGACY_SPLIT_ALIAS, *ALL_OUTCOME_COLUMNS, *ALL_ELIGIBILITY_COLUMNS, *ALL_SPLIT_COLUMNS]
+    meta_cols = [col for col in dict.fromkeys(meta_cols) if col in preop_df.columns]
     feature_cols = [c for c in preop_df.columns if c not in meta_cols]
 
     if impute_missing:
@@ -99,7 +116,7 @@ def main(impute_missing: Optional[bool] = None):
         preop_df[feature_cols] = preop_df[feature_cols].replace(-99, np.nan)
 
         # Split Train/Test for fitting imputer
-        train_mask = preop_df['split_group'] == 'train'
+        train_mask = preop_df[LEGACY_SPLIT_ALIAS] == 'train'
         X_train = preop_df.loc[train_mask, feature_cols]
 
         if X_train.empty:

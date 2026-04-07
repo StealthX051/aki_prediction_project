@@ -11,7 +11,6 @@ from data_preparation.inputs import (
     CATCH_22_WINDOWED_FILE,
     INTRAOP_WIDE_FILE,
     INTRAOP_WIDE_WINDOWED_FILE,
-    OUTCOME
 )
 
 def process_waveform_file(input_path, output_path, mode_name):
@@ -32,7 +31,7 @@ def process_waveform_file(input_path, output_path, mode_name):
 
     # 2. Pivot to Wide Format
     print("Pivoting to wide format...")
-    id_cols = ['caseid', OUTCOME]
+    id_cols = ['caseid']
     pivot_col = 'waveform'
     
     # Identify feature columns (all cols that are not ID or pivot cols)

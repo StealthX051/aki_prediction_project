@@ -6,7 +6,7 @@ This project implements a machine learning pipeline to predict Postoperative Acu
 The pipeline consists of three main stages:
 1.  **Cohort Selection**: Filtering patients based on clinical criteria and waveform availability.
 2.  **Feature Extraction**: Extracting time-series features (Catch22) from high-frequency waveforms.
-3.  **Modeling**: Training XGBoost and Explainable Boosting Machine (EBM) classifiers to predict AKI (primary) and ICU admission (secondary).
+3.  **Modeling**: Training XGBoost and Explainable Boosting Machine (EBM) classifiers to predict AKI (primary) and ICU admission (secondary), with mortality retained as a supported broader-cohort outcome outside the default run grid.
 
 ## 🗂️ Results layout (quick reference)
 - **Canonical generated-artifact root**: `/media/volume/catch22/data/aki_prediction_project` by default. Set via `AKI_ARTIFACT_ROOT`.
@@ -15,7 +15,7 @@ The pipeline consists of three main stages:
 - **Paper surface**: derived from `AKI_ARTIFACT_ROOT` as `results/catch22/paper` unless `PAPER_DIR` is set explicitly. Symlinks from `experiments/{tables,figures,metadata}` point here for convenience.
 - **XAI surfacing**: `results/catch22/xai/ebm/<o>/<b>/<fs>/ebm_xai` and `results/catch22/xai/shap/xgboost/<o>/<b>/<fs>/shap_summary_*.png` (symlinks to artifacts under experiments).
 - **Archive**: `results/catch22/archive/legacy` holds legacy grids (`results/xgboost_*`).
-- **Aeon**: parallel structure under `results/aeon/experiments` and `results/aeon/paper`.
+- **Aeon**: parallel structure under `results/aeon/experiments` and `results/aeon/paper` for the experimental branch only; it is not part of the validated paper pipeline.
 - Key publication files (defaults):
   - Metrics: `results/catch22/paper/tables/metrics_summary.{csv,md,docx,pdf}`
   - Figures: `results/catch22/paper/figures/` (Catch22 paper figures emitted as `.svg` + publication `.png`)
@@ -67,7 +67,7 @@ Ensure you have access to the VitalDB API. The `vitaldb` Python package is used 
 
 ## 🚀 Execution Guide (Refactored Pipeline)
 
-**Recommended**: This new pipeline uses modular scripts for better reproducibility, data leakage prevention, and support for both full and windowed datasets. The Catch22 + XGBoost/EBM workflow is the primary, production-ready path; Aeon remains **experimental**.
+**Recommended**: This new pipeline uses modular scripts for better reproducibility, data leakage prevention, and support for both full and windowed datasets. The Catch22 + XGBoost/EBM workflow is the primary, production-ready path; Aeon remains **experimental** and is not kept in strict feature-parity with the modular Catch22 cohort logic.
 
 ### Advantages over Legacy Pipeline
 *   **Reproducibility**: Modular Python scripts replace monolithic notebooks, making execution deterministic and easier to automate.
@@ -87,13 +87,16 @@ Central configuration file. Defines input/output paths, mandatory waveforms/colu
 ### Step 2: Cohort Construction
 **File**: `data_preparation/step_01_cohort_construction.py`
 Filters the raw dataset to create a valid cohort.
-*   **Logic**: Selects operations with all `MANDATORY_WAVEFORMS` and `MANDATORY_COLUMNS`. Multiple operations per patient are retained, but later train/validation/test splits are grouped by patient ID.
-*   **Output**: A cohort CSV containing valid `caseid`s and the following derived outcomes:
-    *   `aki_label`: Primary outcome (KDIGO AKI).
+*   **Logic**: Builds a shared outer cohort using outcome-agnostic criteria only: required `opend`, all `MANDATORY_WAVEFORMS`, and ASA I-IV. Multiple operations per patient are retained, but later train/validation/test splits are grouped by patient ID.
+*   **Output**: A cohort CSV containing valid `caseid`s, shared derived outcomes, and per-outcome eligibility metadata.
+    *   `eligible_any_aki` / `eligible_severe_aki`: Require baseline creatinine present, baseline creatinine `<= 4.0`, and at least one postoperative creatinine in the adjudication window.
+    *   `eligible_icu_admission` / `eligible_mortality`: Require only the shared outer cohort plus a non-missing source label.
+    *   `aki_label`: Primary outcome (KDIGO AKI) for AKI-eligible rows only; ineligible rows are left missing rather than forced to `0`.
     *   `y_icu_admit`: ICU admission (>0 days) — secondary outcome used in the current experiment grid.
-    *   `y_inhosp_mortality`: In-hospital mortality (retained for archival analyses but not part of the current runs).
+    *   `y_inhosp_mortality`: In-hospital mortality — supported by the modular cohort path but not part of the default experiment launcher.
     *   `y_prolonged_los_postop`: Prolonged postoperative LOS (>= 75th percentile; archival only).
     *   `y_severe_aki`: Severe AKI (KDIGO Stage 2 or 3; archival only).
+    *   Versioned sidecar metadata: each Step 01/03/05 CSV now writes a `.metadata.json` sidecar so downstream steps can fail fast on stale processed artifacts instead of mixing schemas silently.
 ```bash
 python -m data_preparation.step_01_cohort_construction
 ```
@@ -104,8 +107,10 @@ skips no-op steps, uses friendly labels, and now renders a CONSORT-style layout:
 waveform checks are grouped into a single “High-fidelity Waveform Availability” box
 with a footnote listing required channels, exclusion reasons are drawn to the right
 with horizontal arrows, and the AKI vs. No AKI split uses a centered T-junction from
-the Final Cohort box. Per-step removals are shown in the exclusion boxes, and AKI
-False/True counts are displayed when present in the counts JSON produced by step 01.
+the Final Cohort box. The default counts JSON remains AKI-specific even though the
+saved cohort now contains the broader shared outer cohort. Per-step removals are
+shown in the exclusion boxes, and AKI False/True counts are displayed when present
+in the counts JSON produced by step 01.
 
 ```bash
 python -m reporting.cohort_flow --counts-file results/catch22/paper/metadata/cohort_flow_counts.json
@@ -146,8 +151,8 @@ We extract a comprehensive set of preoperative variables from `clinical_data.csv
     *   Clinical flag helpers (e.g., `bun_high`, `hypoalbuminemia`) are computed for intermediate use but removed before the processed preop table is saved.
 
 #### 2. Processing Steps
-*   **Splitting**: Performs an approximately 80/20 patient-grouped stratified split based on the outcome and saves it as `split_group` for the optional legacy holdout workflow.
-*   **Deterministic only**: Step 03 now stops after raw feature derivation plus `split_group` assignment. No train-fitted encoding, rare-category collapsing, outlier clipping, or imputation rules are baked into `aki_preop_processed.csv`.
+*   **Splitting**: Performs approximately 80/20 patient-grouped stratified splits for each trainable outcome and saves them as `split_group_any_aki`, `split_group_severe_aki`, `split_group_icu_admission`, and `split_group_mortality`. Outcomes that are too sparse to support a valid grouped holdout split are marked in the Step 03 metadata sidecar instead of blocking unrelated outcomes. A backward-compatible `split_group` alias still points at the AKI split.
+*   **Deterministic only**: Step 03 now stops after raw feature derivation plus outcome-specific split assignment. No train-fitted encoding, rare-category collapsing, outlier clipping, or imputation rules are baked into `aki_preop_processed.csv`.
 *   **Leakage control**: All learned preprocessing now happens inside model-time folds only, so inner CV, calibration, and holdout training all fit preprocessing statistics on the current training partition only.
 *   **Missingness**: The saved processed tables keep `NaN` values by default. Step 03 still accepts `--impute-missing` for CLI compatibility, but that flag is now a no-op and does not modify the saved outputs.
 
@@ -171,8 +176,8 @@ python data_preparation/step_04_intraop_prep.py
 **File**: `data_preparation/step_05_data_merge.py`
 Combines preop and intraop data into master datasets.
 *   **Technical Details**:
-    *   Merges intraop features with processed preop data on `caseid`.
-    *   **Integrity Check**: Ensures every row has a valid `split_group` from Step 3.
+    *   Merges intraop features with processed preop data on `caseid` only, then carries all outcome, eligibility, and split metadata forward unchanged.
+    *   **Integrity Check**: Validates one-to-one `caseid` coverage between the intraop and preop tables rather than dropping rows based on a single outcome split.
     *   **Missing Data**: Leaves NaNs in place by default. `--impute-missing` (or `IMPUTE_MISSING=True`) is a backward-compatible Step 05-only option that fills merge-introduced NaNs with `-99`; the primary nested-CV pipeline should leave NaNs intact.
     *   Outputs final wide CSVs ready for training.
 ```bash
@@ -187,12 +192,12 @@ python data_preparation/step_05_data_merge.py --impute-missing
 `model_creation/step_07_train_evaluate.py` is now the primary entrypoint. By default it runs a leakage-hardened patient-grouped nested CV workflow (`--validation-scheme nested_cv`) rather than a single holdout split. Inputs retain NaNs by default; pass `--legacy_imputation` only if you intentionally want fold-local modeling-time imputation instead of preserving missing values for the estimators. This flag is separate from Step 03/05's backward-compatible `--impute-missing` switches.
 
 *   **Primary validation mode**: `nested_cv` with patient-grouped `5 outer x 5 inner` CV, `repeats=1`, `max_workers=4`, `threads_per_model=8`, and Optuna `n_trials=100` per outer fit. `repeats > 1` is currently rejected because repeat-aware reporting is not implemented yet.
-*   **Legacy mode**: `holdout` remains available via `--validation-scheme holdout` and still respects the patient-grouped `split_group` created in Step 03.
+*   **Legacy mode**: `holdout` remains available via `--validation-scheme holdout`, but it now requires the persisted outcome-specific split created in Step 03. Downstream code no longer regenerates, guesses, or reuses stale generic `split_group` assignments for non-AKI outcomes.
 *   **Fold-local preprocessing**: rare-category merging, one-hot encoding, numeric clipping, and optional imputation are all fit inside each training partition only. HPO, calibration, and threshold tuning never inspect held-out fold outcomes.
 *   **Nested postprocessing**: after inner HPO, each outer fold generates grouped OOF predictions on outer-train, fits logistic recalibration on those predictions only, chooses the Youden-J threshold on calibrated outer-train OOF predictions only, then freezes both objects before scoring outer-test.
 *   **Strict resume safety**: nested checkpoints are reused only when the stored validation fingerprint matches the current run configuration exactly; stale fold checkpoints are ignored and recomputed rather than mixed into the new run.
 *   **Optional final refit**: `--save-final-refit` now works in both `nested_cv` and `holdout` mode and saves an additive full-data artifact bundle without changing the reported validation metrics.
-*   **Standalone HPO helper**: `model_creation/step_06_run_hpo.py` remains available for ad hoc tuning on the legacy holdout training cohort, but the default experiment runner no longer requires a separate Step 06 pass. Invalid configs or data-prep failures now terminate Step 06 with a nonzero exit code instead of logging-and-continuing.
+*   **Standalone HPO helper**: `model_creation/step_06_run_hpo.py` remains available for ad hoc tuning on the persisted outcome-specific holdout training cohort, but the default experiment runner no longer requires a separate Step 06 pass. Invalid configs, stale processed artifacts, or missing holdout metadata now terminate Step 06 with a nonzero exit code instead of logging-and-continuing.
 *   **Shared utilities**: `model_creation/validation.py`, `model_creation/preprocessing.py`, `model_creation/postprocessing.py`, and `model_creation/prediction_io.py` implement grouped splitting, fold-local preprocessing, calibration/thresholding, checkpointing, and prediction validation.
 
 ```bash
@@ -257,12 +262,12 @@ Use the provided shell script to sweep the default grid of outcomes, branches, f
 *   **Fixed Application at Evaluation Time**: The stored calibrator and threshold are applied **without further fitting** when evaluating each outer test fold (or the held-out cohort in holdout mode); these same fixed row-level outputs are later reused by the reporting scripts.
 
 #### Available Options
-*   **Outcomes**: `any_aki`, `icu_admission` (current scope). Other derived labels remain in the cohort for archival analyses but are not exercised by the standard run scripts.
+*   **Outcomes**: `any_aki`, `icu_admission`, and `mortality` are supported by the modular cohort code. The standard run scripts currently exercise `any_aki` and `icu_admission`; other retained labels remain archival unless launched explicitly.
 *   **Branches**: `non_windowed` (Full Case), `windowed` (Segmented).
 *   **Feature Sets**: `preop_only`, `all_waveforms`, `preop_and_all_waveforms`, `pleth_only`, `ecg_only`, etc.
 *   **Model Types**: `xgboost` (default) or `ebm`.
 *   **Default Grid (`run_experiments.sh`)**: Primary runs cover preop-only, single-waveform models (`pleth_only`, `ecg_only`, `co2_only`, `awp_only`), all waveforms, and fused preop + all waveforms. Ablations pair preop with each single waveform (`preop_and_<waveform>`) and with all waveforms minus one (`preop_and_all_minus_<waveform>`). Two-channel waveform-only combinations (e.g., **AWP+CO2** or **ECG+PLETH**) are intentionally excluded from default sweeps and should be launched manually if needed.
-*   **Model Families**: `run_experiments.sh` now supports staging and reuse. By default it runs both `xgboost` and `ebm`, uses `nested_cv`, resumes completed outer folds when the validation fingerprint matches, and keeps configs sequential while parallelizing outer folds within each config. PREP modes remain `--prep auto` (default), `--prep force`, and `--prep skip`. Validation knobs (`--validation-scheme`, `--outer-folds`, `--inner-folds`, `--repeats`, `--max-workers`, `--threads-per-model`, `--n-trials`, `--resume`, `--save-final-refit`) are available directly on the shell runner.
+*   **Model Families**: `run_experiments.sh` now supports staging and reuse. By default it runs both `xgboost` and `ebm`, uses `nested_cv`, resumes completed outer folds when the validation fingerprint matches, and keeps configs sequential while parallelizing outer folds within each config. PREP modes remain `--prep auto` (default), `--prep force`, and `--prep skip`. `--prep auto` and `--prep skip` both validate the Step 01/03/05 `.metadata.json` sidecars before reuse and fail fast on stale processed artifacts; `--prep force` rebuilds them. Validation knobs (`--validation-scheme`, `--outer-folds`, `--inner-folds`, `--repeats`, `--max-workers`, `--threads-per-model`, `--n-trials`, `--resume`, `--save-final-refit`) are available directly on the shell runner.
 *   **Launcher failure contract**: the main launcher finishes the requested grid, prints a compact summary of failed configurations, skips `metrics_summary`/`make_report` on partial runs, and exits nonzero if any validation job failed. This prevents stale artifacts from earlier runs being mistaken for current outputs.
 *   **Reporting/Plotting Defaults**: `reporting.make_report` now runs with quantile calibration bins (`CALIBRATION_BIN_STRATEGY=quantile`, `CALIBRATION_N_BINS=10`), per-bin counts on the calibration curve, probability histograms beneath the calibration plot, auto x-axis zoom with a full-range inset, and parallel plotting (`PLOT_N_JOBS=-2`). PR curves render as step functions with a prevalence baseline; class-count annotations are off by default (`PR_SHOW_CLASS_BALANCE=false`). These defaults are exported by the run scripts; override via env if needed (e.g., `CALIBRATION_SHOW_BIN_COUNTS`, `CALIBRATION_MAX_COUNT_ANNOTATE`, `CALIBRATION_SHOW_PROB_HIST`, `CALIBRATION_SHOW_XLIM_INSET`, `PLOT_PREFER_CALIBRATED`, `PR_SHOW_CLASS_BALANCE`).
 
@@ -294,7 +299,8 @@ CASE_LIMIT=5 HPO_TRIALS=1 SMOKE_ROOT=/tmp/aki_smoke RAW_SOURCE_DIR=/data/raw ./r
 
 Key behaviors:
 * Activates environment variable overrides added to `data_preparation.inputs` and `model_creation.utils` so cohort, features, merged data, and results are written under `SMOKE_ROOT`.
-* Trims the generated cohort to `CASE_LIMIT` rows, then runs Steps 1–5, a reduced nested-CV training/evaluation pass (`--validation-scheme nested_cv --outer-folds 3 --inner-folds 3 --n-trials HPO_TRIALS --smoke_test`), and `results_recreation.metrics_summary` against the smoke results tree.
+* Trims the generated cohort to `CASE_LIMIT` rows with `data_preparation.smoke_trim_cohort`, preserving both classes for the active smoke outcomes only (`SMOKE_OUTCOMES`, default `any_aki,icu_admission`). The trim step does not try to guarantee unrelated sparse outcomes such as mortality.
+* Runs Steps 1-5, then executes Step 07 in `holdout` mode for each smoke outcome (`--validation-scheme holdout --n-trials HPO_TRIALS --smoke_test`). Smoke intentionally uses the persisted Step 03 holdout splits rather than nested CV because the sampled cohort is too small for stable grouped inner/outer folds.
 * Logs progress to `$SMOKE_ROOT/smoke_test.log` and leaves artifacts under `$SMOKE_ROOT/data/processed` and `$SMOKE_ROOT/results` for inspection.
 * Reporting: smoke scripts now run `metrics_summary` with stratified/paired bootstrap (Δ vs `preop_only`, all cores) and `reporting/make_report` to emit the main + Δ tables/figures bundle.
 
@@ -356,7 +362,9 @@ consistent across manuscripts and dashboards.
 
 - **Preoperative descriptive table** — Summarize baseline characteristics using
   the raw cohort CSV or `aki_preop_processed.csv`, both of which now retain the
-  raw categorical columns needed for counts. Each continuous variable
+  raw categorical columns needed for counts. The default `--report-cohort paper_default`
+  view matches the AKI paper cohort rather than the broader shared outer cohort.
+  Each continuous variable
   undergoes a Shapiro–Wilk test; report mean ± SD if normal, otherwise median (IQR).
   Binary categoricals render as False/True; all labels/units come from the display
   dictionary. Outputs: CSV/Markdown/DOCX/PDF plus preserved HTML/LaTeX at
@@ -366,6 +374,7 @@ consistent across manuscripts and dashboards.
   python -m reporting.preop_descriptives \
     --dataset data/processed/aki_pleth_ecg_co2_awp.csv \
     --processed-dataset data/processed/aki_preop_processed.csv \
+    --report-cohort paper_default \
     --display-dictionary metadata/display_dictionary.json
   ```
 
@@ -457,7 +466,7 @@ This branch implements an end-to-end Deep Learning/State-of-the-Art Time Series 
 | Component | Script | Description |
 | :--- | :--- | :--- |
 | **Export** | `data_preparation/step_02_aeon_export.py` | Loads waveforms, rescales to 1 Hz, and writes per-case sequences padded/truncated to **57,600** samples (16 hours) in `.npz` format. <br> **Args**: `--limit` (debug) |
-| **Preop Prep** | `data_preparation/step_04_aeon_prep.py` | Prepares tabular data: preserves `NaN` by default; add `--impute-missing` to apply median imputation with missingness indicators. |
+| **Preop Prep** | `data_preparation/step_04_aeon_prep.py` | Prepares tabular data: preserves `NaN` by default; add `--impute-missing` to apply median imputation with missingness indicators. This branch remains experimental and is not guaranteed to mirror the modular Catch22 cohort/split semantics exactly. |
 | **Training** | `model_creation_aeon/step_06_aeon_train.py` | Trains separate or fused models. <br> **Models**: `multirocket` (default `n_kernels=10000`), `minirocket`, `freshprince`. <br> **HPO**: Optuna optimization (100 trials) for linear head (`C`) maximizing AUPRC. Class weight is fixed to 'balanced'. <br> **Fusion**: Concatenates preop features with Rocket embeddings. <br> **Outputs**: Saves `predictions.csv` for unified analysis. |
 | **Reference** | `model_creation_aeon/classifiers.py` | Contains `RocketFused` and `FreshPrinceFused` class definitions. |
 | **Analysis** | `results_recreation/metrics_summary.py` | Aggregates saved `predictions/test.csv` from the Aeon runs (same schema as Catch22), then feeds `reporting/make_report.py` for tables/figures. |
@@ -501,4 +510,4 @@ Or individual experiments:
 ```bash
 bash run_experiments_aeon.sh
 ```
-The Aeon experiment script currently evaluates the `any_aki` and `icu_admission` outcomes.
+The Aeon experiment script currently evaluates the `any_aki` and `icu_admission` outcomes. Treat it as an exploratory branch rather than a validated paper path; the modular outcome-specific split contract described above is enforced in the Catch22 pipeline, not retrofitted across every Aeon helper.

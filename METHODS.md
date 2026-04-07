@@ -4,19 +4,22 @@
 This retrospective observational study used high-resolution intraoperative data from **VitalDB** (Vital Signs DataBase), an open-access repository of 6,388 non-cardiac surgical cases from Seoul National University Hospital.
 
 ## Cohort Selection
-Patients were included when all of the following were satisfied:
-1.  **Data availability**: Preoperative creatinine (`preop_cr`) and operation end time (`opend`) were present.
+The saved Step 01 cohort is now a **shared outer cohort** used across outcomes. Patients are included in that outer cohort when all of the following are satisfied:
+1.  **Data availability**: Operation end time (`opend`) was present.
 2.  **Waveform availability (strict)**: All four high-fidelity intraoperative channels were required - `SNUADC/PLETH`, `SNUADC/ECG_II` (with `SNUADC/ECG_V5` substitution when necessary), `Primus/CO2`, and `Primus/AWP`. Intersection logic across VitalDB case lists enforced a complete four-channel set, and missing channels removed the case. Each segment was drawn from `opstart`-`opend`; segments with >5% NaNs were discarded and shorter gaps were linearly interpolated.
 3.  **Clinical criteria**:
-    * At least one postoperative creatinine measurement within 7 days of surgery (filtering performed before labeling).
-    * Preoperative creatinine <= 4.0 mg/dL to exclude baseline end-stage kidney disease.
     * ASA physical status V-VI excluded.
     * Multiple surgeries per patient are retained, but every hold-out split and cross-validation fold is grouped on patient identifier (`subjectid`) so no patient spans train/validation/test partitions.
+
+Outcome-specific eligibility is then layered on top of the shared outer cohort:
+* **AKI / severe AKI cohort**: Requires preoperative creatinine present, preoperative creatinine <= 4.0 mg/dL, and at least one postoperative creatinine measurement within 7 days of surgery.
+* **ICU admission / mortality cohort**: Uses the shared outer cohort only and requires a non-missing source label; no creatinine availability requirement is imposed.
 
 **Outcome Definition**
 * **Primary**: Postoperative AKI per **KDIGO** creatinine criteria - any rise >= 0.3 mg/dL within 48 hours or >= 1.5x baseline within 72 hours.
 * **Secondary (active grid)**: Postoperative ICU admission (`y_icu_admit`, length of stay > 0 days).
-* **Archival labels**: Severe AKI (`y_severe_aki`), in-hospital mortality (`y_inhosp_mortality`), and prolonged postoperative length of stay (`y_prolonged_los_postop`) remain available but are not trained in the current experiment sweep.
+* **Additional supported label**: In-hospital mortality (`y_inhosp_mortality`) is retained in the shared cohort and can be trained on under the broader non-AKI cohort definition.
+* **Archival labels**: Severe AKI (`y_severe_aki`) remains available under the AKI-eligible cohort, and prolonged postoperative length of stay (`y_prolonged_los_postop`) remains archival only because its current threshold is cohort-derived.
 
 ## Data Preprocessing
 
@@ -35,8 +38,9 @@ Preoperative variables were drawn from VitalDB clinical and laboratory tables. L
 * **Physiology flags (QA only)**: High BUN (>27), hypoalbuminemia (<3.5), sex-specific anemia (Hb <13.0 male, <12.0 female), hyponatremia (<135), metabolic acidosis (HCO3 <22 or BE < -2), hypercapnia (PaCO2 >45), hypoxemia (PaO2 <80 or SaO2 <95). These helpers are dropped before modeling.
 
 #### Split and Fold-local Preprocessing
-* **Hold-out metadata**: A single patient-grouped, approximately 80/20 stratified split on `aki_label` is created in Step 03 and stored as `split_group` for optional backward-compatible holdout analyses. All downstream merges preserve this split, and no `subjectid` may appear in both train and test.
-* **No learned preprocessing in Step 03**: The saved `data/processed/aki_preop_processed.csv` retains raw categorical columns, raw numeric columns, derived features, and `split_group`, but it does not apply train-fitted encoding, rare-category collapsing, clipping, or imputation.
+* **Hold-out metadata**: Step 03 creates one patient-grouped, approximately 80/20 stratified split per trainable outcome (`split_group_any_aki`, `split_group_severe_aki`, `split_group_icu_admission`, `split_group_mortality`). Each split is created only inside that outcome's eligible cohort. Outcomes that cannot support a valid grouped holdout split in a given artifact are marked `unsupported_in_artifact` in the Step 03 metadata sidecar rather than blocking other outcomes. A backward-compatible `split_group` alias is retained for the AKI split only after the active outcome-specific split has been validated. All downstream merges preserve these columns, and no `subjectid` may appear in both train and test within any outcome-specific split.
+* **No learned preprocessing in Step 03**: The saved `data/processed/aki_preop_processed.csv` retains raw categorical columns, raw numeric columns, derived features, outcome eligibility columns, and split metadata, but it does not apply train-fitted encoding, rare-category collapsing, clipping, or imputation.
+* **Processed artifact compatibility**: Step 01, Step 03, and Step 05 each emit a `.metadata.json` sidecar with a schema version and column inventory. Downstream loaders verify these sidecars and fail fast with rebuild instructions when stale processed artifacts are reused.
 * **Categoricals**: In modeling, departments with <30 training rows within the current training partition collapse to `other`, then one-hot encoding is fit on that same partition only; validation/test rows use `handle_unknown="ignore"`.
 * **Numeric preprocessing**: Continuous preoperative variables are clipped using quantiles learned on the current training partition only. Optional imputation, when requested, also fits on the current training partition only.
 * **Imputation**: Default behavior preserves `NaN`. Step 03's `--impute-missing` flag is now a backward-compatible no-op, and Step 05's `--impute-missing` flag remains a backward-compatible sentinel-fill path for merged tables only. Fold-local modeling-time imputation in the Catch22 branch is controlled by `--legacy_imputation` on Step 06/07. Aeon fusion models still apply their own downstream median-imputation path after replacing any sentinel values with `NaN`.
@@ -56,7 +60,7 @@ We use **Catch24** (22 canonical Catch22 features plus mean and standard deviati
    * Per case, this yields 24 features per channel (96 across four channels) before merging with preop features.
 2. **Windowed**: 10-second windows with 5-second overlap; per-window Catch24 features are aggregated by mean, standard deviation, minimum, and maximum for each feature/channel, yielding fixed-length vectors.
    * Each channel produces 24 features x 4 statistics = 96 aggregated features; with four channels this yields 384 intraoperative features prior to fusion with preop data.
-3. **Wide assembly**: Long-form waveform features are pivoted to wide format (`data_preparation/step_04_intraop_prep.py`) and merged with preop data on `caseid`, `aki_label`, and `split_group` (`step_05_data_merge.py`). Rows missing `split_group` after the merge are dropped to preserve the original split. Non-windowed and windowed branches are saved as `aki_features_master_wide.csv` and `aki_features_master_wide_windowed.csv`.
+3. **Wide assembly**: Long-form waveform features are pivoted to wide format (`data_preparation/step_04_intraop_prep.py`) and merged with preop data on `caseid` only (`step_05_data_merge.py`). The merged tables carry outcome labels, eligibility flags, and split metadata forward unchanged. Non-windowed and windowed branches are saved as `aki_features_master_wide.csv` and `aki_features_master_wide_windowed.csv`.
 
 ## Model Development
 
@@ -88,11 +92,11 @@ We use **Catch24** (22 canonical Catch22 features plus mean and standard deviati
 ## Reporting Artifacts
 All figures and tables regenerate from saved artifacts using `metadata/display_dictionary.json` for consistent labels/units.
 * **Cohort flow**: `reporting/cohort_flow.py` converts `results/metadata/cohort_flow_counts.json` into SVG/PNG consort diagrams, consolidating waveform checks into a single availability box and rendering the terminal AKI split when present.
-* **Baseline table**: `reporting/preop_descriptives.py` uses raw cohort data or `aki_preop_processed.csv`, both of which retain raw categorical variables after Step 03; Shapiro-Wilk testing guides mean+/-SD vs. median[IQR] display. Outputs: HTML/LaTeX/DOCX at `results/tables/preop_descriptives.*`.
+* **Baseline table**: `reporting/preop_descriptives.py` uses raw cohort data or `aki_preop_processed.csv`, both of which retain raw categorical variables after Step 03; Shapiro-Wilk testing guides mean+/-SD vs. median[IQR] display. The default `--report-cohort paper_default` view matches the AKI paper cohort rather than the broader shared outer cohort. Outputs: HTML/LaTeX/DOCX at `results/tables/preop_descriptives.*`.
 * **Missingness table**: `reporting/missingness_table.py` summarizes feature-level missingness from `data/processed/aki_features_master_wide.csv` to CSV/HTML for supplements and QA.
 
 ## Experimental Pipeline: Time-Series Classification (Aeon)
-This parallel pipeline benchmarks modern time-series classifiers against the Catch22/XGBoost baseline.
+This parallel pipeline benchmarks modern time-series classifiers against the Catch22/XGBoost baseline. It remains experimental and is not the validated paper path for the modular outcome-specific cohort workflow.
 
 ### Data Preprocessing (Aeon)
 * Waveforms are filtered as above, resampled to channel-specific targets, then downsampled to **1 Hz** per case; cases with >5% NaNs are dropped, and remaining gaps are interpolated.

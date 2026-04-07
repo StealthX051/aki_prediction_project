@@ -30,6 +30,8 @@ def _mock_df() -> pd.DataFrame:
             "feature1": [0.1, 0.2, 0.3, 0.4, 0.5, 0.6],
             "feature2": [1.0, 1.1, 1.2, 1.3, 1.4, 1.5],
             "aki_label": [0, 1, 0, 1, 0, 1],
+            "eligible_any_aki": [1, 1, 1, 1, 1, 1],
+            "split_group_any_aki": ["train", "train", "train", "train", "test", "test"],
         }
     )
 

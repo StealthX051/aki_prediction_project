@@ -26,6 +26,7 @@ from scipy.stats import shapiro
 
 from artifact_paths import enforce_storage_policy, get_paper_dir, get_results_dir
 from data_preparation.inputs import COHORT_FILE, PREOP_PROCESSED_FILE
+from data_preparation.outcome_registry import DEFAULT_OUTCOME_SPEC
 from data_preparation.step_03_preop_prep import CATEGORICAL_COLS, CONTINUOUS_COLS
 from reporting.display_dictionary import DisplayDictionary, load_display_dictionary
 from reporting.manuscript_assets import refresh_paper_bundle, write_markdown_sections, write_pdf_sections
@@ -47,6 +48,7 @@ BINARY_LABELS: Dict[str, Dict[str, str]] = {
     "preop_htn": {"0": "False", "1": "True"},
     "preop_dm": {"0": "False", "1": "True"},
 }
+REPORT_COHORT_CHOICES = ("paper_default", "outer")
 
 
 def _load_preop_data(path: Path) -> pd.DataFrame:
@@ -74,6 +76,22 @@ def _load_optional_processed_data(path: Optional[Path]) -> Optional[pd.DataFrame
 
     logger.info("Loading processed preoperative data from %s", path)
     return pd.read_csv(path)
+
+
+def _filter_to_report_cohort(df: pd.DataFrame, report_cohort: str) -> pd.DataFrame:
+    if report_cohort == "outer":
+        return df.copy()
+
+    eligibility_col = DEFAULT_OUTCOME_SPEC.eligibility_col
+    target_col = DEFAULT_OUTCOME_SPEC.target_col
+    required = [eligibility_col, target_col]
+    missing = [col for col in required if col not in df.columns]
+    if missing:
+        raise ValueError(
+            f"Dataset is missing columns required for report_cohort='{report_cohort}': {missing}"
+        )
+
+    return df[df[eligibility_col].eq(1) & df[target_col].isin([0, 1])].copy()
 
 
 def _shapiro_p_value(values: pd.Series, max_sample: int, random_state: int) -> Optional[float]:
@@ -317,6 +335,15 @@ def parse_args() -> argparse.Namespace:
         help="Filename prefix for saved tables under results/tables.",
     )
     parser.add_argument(
+        "--report-cohort",
+        choices=REPORT_COHORT_CHOICES,
+        default="paper_default",
+        help=(
+            "Select the reporting cohort. 'paper_default' restricts to the AKI modeling cohort used by the paper; "
+            "'outer' uses the broader shared outer cohort."
+        ),
+    )
+    parser.add_argument(
         "--alpha",
         type=float,
         default=0.05,
@@ -340,8 +367,10 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
 
-    df_raw = _load_preop_data(args.dataset)
+    df_raw = _filter_to_report_cohort(_load_preop_data(args.dataset), args.report_cohort)
     df_processed = _load_optional_processed_data(args.processed_dataset)
+    if df_processed is not None:
+        df_processed = _filter_to_report_cohort(df_processed, args.report_cohort)
     if df_processed is not None and len(df_processed) != len(df_raw):
         logger.warning(
             "Processed dataset length (%s) does not match raw dataset length (%s); ignoring processed dataset.",

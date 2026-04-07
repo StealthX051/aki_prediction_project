@@ -2,6 +2,7 @@ import os
 from pathlib import Path
 
 from artifact_paths import get_data_dir, get_processed_dir, get_raw_dir, get_results_dir
+from data_preparation.outcome_registry import DEFAULT_OUTCOME_COLUMN
 
 # --- Project Paths ---
 # Resolve project root relative to this file (data_preparation/inputs.py)
@@ -25,17 +26,14 @@ CATCH_22_ERROR_FILE = Path(os.getenv("CATCH_22_ERROR_FILE", PROCESSED_DIR / 'aki
 # list should look like: ['general surgery', 'thoracic surgery']
 DEPARTMENTS = None 
 # Add required columns to this list (ie your outcome variables)
-MANDATORY_COLUMNS = ['preop_cr', 'opend']
+OUTER_COHORT_MANDATORY_COLUMNS = ['opend']
+AKI_COHORT_FLOW_MANDATORY_COLUMNS = ['preop_cr', 'opend']
+MANDATORY_COLUMNS = AKI_COHORT_FLOW_MANDATORY_COLUMNS
 # Add required waveforms to this list. needs to be the name of the track in VitalDB
 MANDATORY_WAVEFORMS = ['SNUADC/PLETH', 'SNUADC/ECG_II', 'Primus/CO2', 'Primus/AWP']
 # If a required waveform is missing, but another waveform in the substitution list is present, use that instead
 # Set acceptable substitutions here
 WAVEFORM_SUBSTITUTIONS = {'SNUADC/ECG_II': ['SNUADC/ECG_V5'],}
-# custom filters to apply (import from custom_filters folder)
-from data_preparation.custom_filters.preop_cr import filter_preop_cr
-from data_preparation.custom_filters.postop_cr import filter_postop_cr
-from data_preparation.custom_filters.aki_label import add_aki_label
-CUSTOM_FILTERS = [filter_preop_cr, filter_postop_cr, add_aki_label]
 # window length and slide length for catch-22 feature extraction (in seconds). None is entire waveform
 WIN_SEC = 10
 SLIDE_SEC = 5
@@ -49,7 +47,7 @@ TARGET_SR = 10
 # Reduced to 10 Hz to manage computational complexity of catch22 on long sequences.
 FULL_FEATURE_TARGET_SR = 10
 # name of column for outcome variable
-OUTCOME = 'aki_label'
+OUTCOME = DEFAULT_OUTCOME_COLUMN
 
 # === NEW: AEON export controls ===
 EXPORT_AEON = False
