@@ -31,12 +31,17 @@ conda activate aki_prediction_project
 python -m pip install -r requirements-test.txt
 ```
 
-Update an existing CPU environment with:
+For dependency changes, preserve the validated environment and create a separate
+candidate from the edited manifests:
 
 ```bash
-conda env update -f environment.yml --prune
+conda env create -f environment.yml -n aki_prediction_project_candidate
+conda activate aki_prediction_project_candidate
 python -m pip install -r requirements-test.txt
 ```
+
+Follow the [dependency change procedure](locks/README.md#changing-dependencies)
+before promoting a candidate or replacing the locks.
 
 `requirements-cpu.txt` pins the runtime; `requirements-test.txt` adds pytest.
 Both use the tested transitive constraints in `locks/`. Install `xgboost-cpu`,

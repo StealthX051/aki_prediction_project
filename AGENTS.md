@@ -42,7 +42,9 @@ Open the smallest relevant document first.
 - The supported default is Linux x86_64 / Python 3.12 CPU. The old GPU profile
   in `environments/legacy-gpu.yml` is retained only as a reference.
 - Activate `aki_prediction_project` before running project commands.
-- Sync dependency changes with `conda env update -f environment.yml --prune`.
+- Preserve validated environments when changing dependencies. Create a separate
+  candidate; use `conda env update -f environment.yml --prune` only for disposable
+  candidates. Follow the lock-refresh and fresh-rebuild procedure in `locks/README.md`.
 - Install pinned test extras with
   `python -m pip install -r requirements-test.txt` when needed.
 - Keep runtime pins in `requirements-cpu.txt` and exact replay locks in `locks/`.
@@ -50,6 +52,8 @@ Open the smallest relevant document first.
 - Use `bash scripts/cpu/verify-offline.sh` for environment checks without research
   data. See `locks/README.md` for a fresh binary rebuild.
 - Do not introduce a parallel `venv` workflow unless explicitly asked.
+- Use the configured Git author identity. Never substitute a Codex identity;
+  resolve missing identity from the user's confirmed repository identity first.
 
 ## Repository map
 
