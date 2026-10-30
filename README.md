@@ -22,6 +22,11 @@ the source CSVs and waveform downloads to run the pipeline.
 
 ## Environment
 
+**Validation status:** This CPU migration has passed a fresh environment rebuild,
+native-library checks and 81 offline tests. Real-data pipeline reproduction and
+numerical/scientific agreement with the original research results have **not yet
+been validated**.
+
 The default `environment.yml` supports the primary Catch22 CPU pipeline on
 Linux x86_64 with Python 3.12.16. Run these commands from the repository root:
 
