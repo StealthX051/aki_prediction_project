@@ -28,51 +28,41 @@ numerical/scientific agreement with the original research results have **not yet
 been validated**.
 
 The default `environment.yml` supports the primary Catch22 CPU pipeline on
-Linux x86_64 with Python 3.12.16. Run these commands from the repository root:
+Linux x86_64 with Python 3.12.16. Prerequisites are Conda and a C compiler
+(for building `pycatch22` when needed). On this VM, load Conda with
+`source "$HOME/miniforge3/etc/profile.d/conda.sh"`. From the repository root:
 
 ```bash
 conda env create -f environment.yml
 conda activate aki_prediction_project
 python -m pip install -r requirements-test.txt
+python -m pip check
 ```
 
-For dependency changes, preserve the validated environment and create a separate
-candidate from the edited manifests:
-
-```bash
-conda env create -f environment.yml -n aki_prediction_project_candidate
-conda activate aki_prediction_project_candidate
-python -m pip install -r requirements-test.txt
-```
-
-Follow the [dependency change procedure](locks/README.md#changing-dependencies)
-before promoting a candidate or replacing the locks.
-
-`requirements-cpu.txt` pins the runtime; `requirements-test.txt` adds pytest.
-Both use the tested transitive constraints in `locks/`. Install `xgboost-cpu`,
-which provides the `xgboost` import; never install it alongside `xgboost`.
-`interpret-core==0.7.8` supplies EBM and is a migration candidate, pending
-comparison with the original research environment. Catch24 remains pinned to
-`pycatch22==0.4.5`.
-
-For exact Linux binary replay, including tests, use the captured wheelhouse
-and [lock rebuild instructions](locks/README.md). The old Python 3.9 GPU and
-experimental manifest is retained as `environments/legacy-gpu.yml` for reference.
-It is not a supported CPU install route. Aeon, PyTorch/CUDA, AutoGluon, notebooks,
-and Kaleido/Chrome static EBM exports are outside this CPU profile.
-
-Validate the installed environment without research inputs or live services:
+This downloads packages from their hosts using the pinned runtime requirements
+and transitive constraints in Git. `requirements-test.txt` adds pytest. To check
+the environment locally with synthetic inputs and the offline test suite:
 
 ```bash
 bash scripts/cpu/verify-offline.sh
 ```
 
-This runs actual Catch24, XGBoost, SHAP, EBM and report-export checks before the
-offline pytest suite, with bounded threads and fresh temporary outputs. It
-explicitly excludes the legacy `tests/test_vitaldb.py` diagnostic, which lacks
-reliable assertions. Offline success establishes environment compatibility;
-scientific reproduction still requires verified source data and comparison
-with original artifacts.
+The check covers Catch24, CPU XGBoost, EBM, SHAP and report exports. It explicitly
+excludes the legacy live-service diagnostic `tests/test_vitaldb.py`.
+
+When changing dependencies, edit the manifests and constraints together, create
+a separate candidate with `conda env create -f environment.yml -n <new-name>`,
+and repeat the checks. See [lock maintenance](locks/README.md#changing-dependencies).
+
+Use `xgboost-cpu`, which provides the `xgboost` import; never install both
+XGBoost distributions. `interpret-core==0.7.8` supplies EBM and remains a migration
+candidate pending comparison with the original research environment.
+`pycatch22` stays pinned to `0.4.5`.
+
+[Exact binary replay](locks/README.md) using retained wheels is optional.
+The old GPU manifest remains in `environments/legacy-gpu.yml` for reference.
+Aeon, PyTorch/CUDA, AutoGluon, notebooks and Kaleido/Chrome static EBM exports
+are outside the CPU profile.
 
 ## Quick start
 

@@ -52,6 +52,8 @@ Open the smallest relevant document first.
 - Use `bash scripts/cpu/verify-offline.sh` for environment checks without research
   data. See `locks/README.md` for a fresh binary rebuild.
 - Do not introduce a parallel `venv` workflow unless explicitly asked.
+- Keep environment maintenance simple: pinned manifests, Conda recreation and
+  local checks. Do not add CI or binary-backup infrastructure unless requested.
 - Use the configured Git author identity. Never substitute a Codex identity;
   resolve missing identity from the user's confirmed repository identity first.
 

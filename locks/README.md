@@ -5,6 +5,11 @@ October 30, 2026, from repository commit `b75138f`. They cover the primary
 Catch24/XGBoost/EBM pipeline plus pytest. They do not recover the original GPU
 environment or establish numerical equivalence of scientific results.
 
+For everyday environment recreation, use the Conda setup in the root README.
+It downloads the pinned package versions from their hosts. The captured-wheel
+procedure below is optional exact binary replay; it is not needed for ordinary
+development setup. CI and a separate binary archive are optional additions.
+
 - `conda-linux-64.explicit.txt`: 27 exact Conda URLs/builds with SHA256 hashes.
 - `requirements-linux-64.lock.txt`: 66 pinned pip distributions; also constrains
   ordinary installs from the root manifests.
@@ -78,9 +83,14 @@ Local logs and native reports are retained under the ignored directory
 `outputs/cpu-validation/2026-10-30/`. No real-data smoke or cloud/storage changes
 were performed; scientific result equivalence remains unverified.
 
+The ordinary README setup was also verified in a fresh environment using package
+hosts with pip caching disabled and no local wheelhouse. Installed distribution
+versions matched the snapshot, native checks passed, and all 81 offline tests
+passed. This is the default route for everyday recreation.
+
 ## Changing dependencies
 
-1. Keep the validated environment, its Git revision and its binary bundle intact.
+1. Keep the validated environment and its Git revision intact.
    Work on a separate branch and create a new Conda candidate from the edited
    manifests. Install Conda packages first and pip packages last. Avoid updating
    the validated mixed Conda/pip environment in place.
@@ -89,25 +99,24 @@ were performed; scientific result equivalence remains unverified.
    to Python, pycatch22 or EBM as requiring additional compatibility and numerical
    checks. Update the Python-version expectation in `verify_native.py` if needed.
 3. Capture the candidate's exact Conda export with `conda list --explicit --sha256`.
-   Regenerate the pip-only version lock, capture all compatible wheels into a new
-   external wheelhouse, and compute SHA256 hashes from those actual binaries.
+   Regenerate the pip-only version lock. If maintaining exact binary replay,
+   capture compatible wheels and refresh the wheel hashes together.
    Regenerate the installed-distribution snapshot from package metadata. Keep
    Conda-owned packaging tools out of the pip lock; do not copy `file://` build
    paths from `pip freeze`. Review all manifest/lock differences together.
-4. Run native checks and the complete offline suite, then replay the new locks
-   into a second fresh prefix with `rebuild-from-locks.sh`. Both must pass before
-   promoting the candidate. Version changes may alter predictions even when tests
+4. Recreate from the manifests in a fresh environment and run native checks and
+   the complete offline suite before promoting the candidate. Version changes
+   may alter predictions even when tests
    pass: use fixed, provenance-checked real-data inputs and compare features,
    splits, predictions, calibration and thresholds before replacing research runs.
-5. Retain the old and new Git revisions, wheelhouses, Conda package archives,
-   verification logs, input hashes and run settings. Back up binary bundles to a
-   durable location independent of this VM; a local cache or Git lock alone does
-   not guarantee future package availability. Keep patient data out of Git.
+5. Retain the old and new Git revisions, verification logs, input hashes and run
+   settings. Keep patient data out of Git. Archiving package binaries separately
+   is optional for longer-term preservation.
 
 Replay and verification are scripted; lock refresh and off-VM binary retention
 are not currently automated, and no hosted CI workflow is configured. The local
-wheelhouse and Conda cache are sufficient for the rebuild verified above, but
-independent archival retention still needs to be arranged.
+wheelhouse and Conda cache are sufficient for the exact binary rebuild verified
+above. Everyday setup uses the pinned manifests and package hosts.
 
 This procedure follows the upstream guidance for
 [pip repeatable installs](https://pip.pypa.io/en/stable/topics/repeatable-installs/)
