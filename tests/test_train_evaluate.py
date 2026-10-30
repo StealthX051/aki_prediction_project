@@ -15,17 +15,6 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.append(str(PROJECT_ROOT))
 
 
-class _DummyTreeExplainer:
-    def __init__(self, model):
-        self.model = model
-
-    def shap_values(self, X):
-        return np.zeros_like(X, dtype=float)
-
-
-dummy_shap = types.SimpleNamespace(TreeExplainer=_DummyTreeExplainer, summary_plot=lambda *args, **kwargs: None)
-sys.modules.setdefault("shap", dummy_shap)
-
 import model_creation.utils as utils
 import model_creation.step_06_run_hpo as hpo_module
 import model_creation.step_07_train_evaluate as train_module

@@ -22,7 +22,8 @@ the source CSVs and waveform downloads to run the pipeline.
 
 ## Environment
 
-Use the Conda environment in `environment.yml`.
+The default `environment.yml` supports the primary Catch22 CPU pipeline on
+Linux x86_64 with Python 3.12.16. Run these commands from the repository root:
 
 ```bash
 conda env create -f environment.yml
@@ -30,19 +31,46 @@ conda activate aki_prediction_project
 python -m pip install -r requirements-test.txt
 ```
 
-Update an existing environment with:
+Update an existing CPU environment with:
 
 ```bash
 conda env update -f environment.yml --prune
+python -m pip install -r requirements-test.txt
 ```
+
+`requirements-cpu.txt` pins the runtime; `requirements-test.txt` adds pytest.
+Both use the tested transitive constraints in `locks/`. Install `xgboost-cpu`,
+which provides the `xgboost` import; never install it alongside `xgboost`.
+`interpret-core==0.7.8` supplies EBM and is a migration candidate, pending
+comparison with the original research environment. Catch24 remains pinned to
+`pycatch22==0.4.5`.
+
+For exact Linux binary replay, including tests, use the captured wheelhouse
+and [lock rebuild instructions](locks/README.md). The old Python 3.9 GPU and
+experimental manifest is retained as `environments/legacy-gpu.yml` for reference.
+It is not a supported CPU install route. Aeon, PyTorch/CUDA, AutoGluon, notebooks,
+and Kaleido/Chrome static EBM exports are outside this CPU profile.
+
+Validate the installed environment without research inputs or live services:
+
+```bash
+bash scripts/cpu/verify-offline.sh
+```
+
+This runs actual Catch24, XGBoost, SHAP, EBM and report-export checks before the
+offline pytest suite, with bounded threads and fresh temporary outputs. It
+explicitly excludes the legacy `tests/test_vitaldb.py` diagnostic, which lacks
+reliable assertions. Offline success establishes environment compatibility;
+scientific reproduction still requires verified source data and comparison
+with original artifacts.
 
 ## Quick start
 
 The Python launcher is the canonical entrypoint.
 
 ```bash
-# Fastest end-to-end validation on isolated outputs
-python -m run_catch22 smoke
+# Real-data validation after source access and output paths have been verified
+python -m run_catch22 smoke --model-types xgboost,ebm
 
 # Full Catch22 experiment grid
 python -m run_catch22 experiments
@@ -51,11 +79,13 @@ python -m run_catch22 experiments
 python -m run_catch22 descriptive
 ```
 
-Recommended first check after code changes:
-
-```bash
-python -m run_catch22 smoke
-```
+Real-data smoke requires local `clinical_data.csv` and `lab_data.csv` plus live
+VitalDB access (`find_cases` and `load_case`); local waveform files alone do not
+replace those calls. `smoke` deletes its selected `SMOKE_ROOT` at startup and
+refreshes repository convenience symlinks. Choose a fresh disposable run root;
+never point it at a mountpoint or an existing data/results directory. Initial
+extraction should use a small CPU affinity subset derived from
+`os.sched_getaffinity(0)`; model thread limits do not bound extraction workers.
 
 ## Launcher behavior
 
