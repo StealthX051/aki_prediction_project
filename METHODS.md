@@ -7,10 +7,13 @@ definitions, preprocessing contract, modeling design, and evaluation rules for
 the Catch22 manuscript pipeline.
 
 The manuscript implementation uses Catch24/Catch22 with logistic regression,
-XGBoost, and EBM. Diagnostic runs verify the implementation; definitive
-manuscript estimates require separately recorded complete patient-grouped
-validation with five outer, three HPO, and five calibration folds.
-Aeon remains experimental and is documented separately.
+XGBoost, and EBM. The main AKI/ICU core analysis has completed; broader ICU and
+exploratory mortality analyses are specified below but have not been run at
+full budget. Diagnostic outputs verify implementation and are not manuscript
+performance estimates. All full analyses use five patient-grouped outer folds,
+three HPO folds, and five training-only calibration folds. Run inventories and
+execution status live in `RESULTS.md` and the evidence register; Aeon remains
+separate and experimental.
 
 ## Study design and data source
 
@@ -43,9 +46,11 @@ A case enters that cohort when all of the following are satisfied:
    - `Primus/CO2`
    - `Primus/AWP`
 
-Multiple operations per patient are retained. Downstream splitting, calibration,
-and resampling are grouped on `subjectid` so that one patient never spans both
-training and evaluation partitions within a single run.
+Multiple operations per patient are retained. All operations of a patient stay
+together within each outer, inner, and calibration split and each EBM internal
+training/validation bag. Each operation receives one outer-test prediction per
+configuration. A patient contributes training data to other outer-fold fits,
+as expected in cross-validation; patient separation applies within each split.
 
 ### Outcome-specific eligibility
 
@@ -57,7 +62,7 @@ Outcome-specific eligibility is layered onto the shared outer cohort:
     `opend` and at or before `opend + 72 hours`
 - `icu_admission` and `mortality` require:
   - the shared outer cohort
-  - a non-missing source label
+  - outcome-specific eligibility and a valid binary label
 
 This design allows the repository to preserve a common waveform-qualified cohort
 while still enforcing outcome-specific clinical requirements where needed.
@@ -77,10 +82,13 @@ alone establishes outcome stability; report uncertainty and fold-level support.
 
 The scope selector runs before feature selection. Every family/feature set
 within a scope, outcome, and processing branch uses the same operation roster.
+Those configurations also reuse the same outcome-specific fold assignments.
 Partial waveform-feature NaNs are retained; successful extraction of every
 channel is not an additional exclusion. Extraction failures can change branch
 membership, so branch-specific manifests and their intersection are recorded.
-Cross-branch differences must be interpreted with these denominators.
+An operation with no successful channel-extraction record is absent from that
+branch, including its clinical-only comparator. Cross-branch differences must
+be interpreted with these denominators.
 
 ## Outcome definitions
 
@@ -98,8 +106,10 @@ and postoperative creatinine are interpreted in mg/dL. Missing, nonnumeric,
 nonpositive, or infinite results do not establish ascertainment. Ineligible
 operations retain missing AKI stage, any-AKI, and severe-AKI labels.
 
-The 72-hour horizon is an intentional project-specific choice agreed with
-Dr. Kothari on December 10, 2025. It is not complete standard seven-day KDIGO
+Baseline creatinine is the source clinical-table `preop_cr` value. The pipeline
+does not independently select that baseline from a laboratory lookback window.
+The 72-hour horizon is an intentional study-specific choice, with its decision
+provenance recorded in the evidence register. It is not complete seven-day KDIGO
 ascertainment. A valid 72-hour measurement does not ensure a measurement within
 48 hours or complete surveillance throughout follow-up; absence of an observed
 rise is not proof that no AKI occurred. Measurement frequency and timing must
@@ -107,8 +117,11 @@ be reported as ascertainment limitations.
 
 ### Secondary and additional labels
 
-- `icu_admission`: postoperative ICU admission
-- `y_inhosp_mortality`: in-hospital mortality
+- `icu_admission`: positive source ICU length of stay (`los_icu`, with
+  `icu_days` as an alias); zero denotes no ICU admission, and nonfinite or
+  negative durations leave the outcome unascertained
+- `mortality` (`y_inhosp_mortality`): the source `death_inhosp` indicator,
+  representing in-hospital mortality rather than a fixed 30-day endpoint
 - `severe_aki`: KDIGO stage 2 or 3 AKI
 
 Among operations meeting the any-AKI definition, stage 3 is assigned for
@@ -118,10 +131,12 @@ absolute stage-3 threshold requires the acute rise established by the any-AKI
 definition: stable baseline/postoperative creatinine of 4.0 mg/dL is not AKI.
 Urine-output and renal-replacement-therapy criteria are not used.
 
-The active experiment grid focuses on `any_aki` and `icu_admission`. Mortality
-is supported by the modular pipeline but is not part of the default launcher
-grid. Severe AKI remains available primarily for archival or explicit secondary
-analysis.
+The main analysis evaluates `any_aki` and `icu_admission` in `main_shared`.
+The broader sensitivity analyses evaluate ICU admission in
+`icu_waveform_sensitivity` and exploratory in-hospital mortality in
+`mortality_waveform_sensitivity`. Mortality is not added to the main shared
+cohort's default outcome grid. Severe AKI is implemented but is outside these
+core manuscript comparisons.
 
 ## Clinical data preprocessing
 
@@ -135,8 +150,9 @@ The production preoperative table includes:
 - comorbidities and test flags
 - routine preoperative labs
 - arterial blood gas values
-- last finite numeric CRP, lactate, and WBC within 30 days before case recording
-  starts (`dt < 0` relative to case start)
+- last finite numeric CRP, lactate, and WBC in `[-30 days, 0)` relative to
+  case-recording start; this laboratory-selection rule does not redefine the
+  source baseline creatinine
 
 ### Derived variables
 
@@ -151,47 +167,25 @@ Source creatinine is explicitly in mg/dL; a high magnitude is not treated as
 evidence of another unit. Nonpositive/nonfinite creatinine values remain missing
 in predictors and eGFR derivation. eGFR requires a finite age and a recorded
 female/male sex; unknown inputs leave it missing. Unknown/nonfinite admission
-time leaves `inpatient_preop` missing. ICU admission requires finite,
+time leaves `inpatient_preop` missing. This indicator records admission before
+recording start (`adm < 0`); it is not a separately adjudicated administrative
+inpatient classification. ICU admission requires finite,
 nonnegative source ICU duration; invalid durations leave its label missing.
 
-### Persisted split metadata
+### Leakage protection and secondary holdout analysis
 
-Step 03 writes one patient-grouped, approximately 80/20 holdout split per
-trainable outcome:
+Clinical preparation preserves source values and outcome-specific eligibility;
+it does not fit encodings, clipping thresholds, or imputations. The modeling
+loader admits only registered preoperative and waveform predictors. Patient and
+operation identifiers, outcomes, eligibility flags, postoperative surveillance
+fields, and split metadata are excluded from predictors.
 
-- `split_group_any_aki`
-- `split_group_severe_aki`
-- `split_group_icu_admission`
-- `split_group_mortality`
-
-A backward-compatible `split_group` alias is retained only for the AKI split.
-Outcomes that are too sparse to support a valid grouped holdout split are marked
-as unsupported in the Step 03 metadata sidecar instead of blocking unrelated
-outcomes.
-
-### Leakage protection in preprocessing
-
-The persisted `aki_preop_processed.csv` does not contain training-fitted
-encoding, clipping, or imputation. Learned preprocessing is fit only inside the
-active training partition during model development.
-
-Step 01, Step 03, and Step 05 each emit `.metadata.json` sidecars. Reuse of
-processed artifacts is gated on successful sidecar validation so stale schemas
-fail fast instead of mixing incompatible outputs.
-
-Clinical/preoperative schema version 4 includes the corrected 72-hour
-contract, general anesthesia, source-unit correction, cohort provenance, and
-finite-input/missing-value guards for clinical derivations and ICU outcomes.
-Merged schema version 5 additionally requires the anti-alias extraction
-protocol; older merged schemas are rejected by the modeling loader. Older
-clinical/preoperative schemas (1–3) are also rejected for reuse;
-upgrading code does not regenerate or relabel historical artifacts. Step 01's
-follow-up diagnostic is `aki_has_postop_cr_72h`; postoperative diagnostics are
-excluded from Step 03's modeling-column selection.
-The production modeling loader additionally rejects unregistered preoperative
-predictor columns against the approved continuous/categorical fields and
-`inpatient_preop`. New metadata cannot silently become predictors through the
-feature selector's exclusions.
+Patient-grouped, approximately 80/20 holdout assignments are also retained per
+outcome for explicitly requested secondary analyses. They do not replace the
+nested cross-validation used for the manuscript. An unsupported sparse holdout
+outcome does not block other outcomes. Source, cohort, extraction, and processed
+file identities are checked before reuse; the exact schema/checkpoint contracts
+are described in [RESULTS.md](RESULTS.md).
 
 ## Waveform processing
 
@@ -215,18 +209,23 @@ predictions made earlier during surgery.
 
 ### Channel-specific filtering and resampling
 
+Channels use Butterworth filters with design order `N=4`, implemented as
+second-order sections with forward-backward filtering. The design order is
+reported explicitly because bandpass transformation and forward-backward
+application affect the resulting filter order/response.
+
 - PPG:
   - source: `SNUADC/PLETH`
-  - filtered and resampled from 500 Hz to 100 Hz
+  - bandpass 0.1-10 Hz; resampled from 500 Hz to 100 Hz
 - ECG:
   - source: `SNUADC/ECG_II` or fallback `SNUADC/ECG_V5`
-  - filtered and resampled from 500 Hz to 100 Hz
+  - bandpass 0.5-40 Hz; resampled from 500 Hz to 100 Hz
 - CO2:
   - source: `Primus/CO2`
-  - low-pass filtered and retained at 62.5 Hz
+  - low-pass 8 Hz; retained at 62.5 Hz
 - Airway pressure:
   - source: `Primus/AWP`
-  - low-pass filtered and retained at 62.5 Hz
+  - low-pass 12 Hz; retained at 62.5 Hz
 
 For full-case feature extraction, filtered signals are downsampled to 10 Hz for
 computational efficiency. Windowed extraction uses the filtered signal at the
@@ -238,27 +237,42 @@ extension uses only the operative segment; filter delay is compensated. The
 output grid starts at the first input sample and advances by `1 / target_sr`,
 with `ceil(n * target_sr / source_sr)` samples covering the half-open input
 duration. The final grid point can require endpoint extension beyond the last
-observed sample; no neighboring recording data are read. Same-rate signals are
-not filtered again. Full-series features describe this 10 Hz, band-limited
+observed sample; no neighboring recording data are read. Same-rate resampling calls add no resampling FIR;
+channel-specific Butterworth filtering still applies. Full-series features describe this 10 Hz, band-limited
 representation; preservation of higher-frequency ECG morphology is not claimed.
+The existing quality rules do not implement a separate spike/saturation detector
+or a blanket amplitude-based exclusion.
 
 ## Feature engineering
 
 The production branch uses Catch24 features: the 22 canonical Catch22
-statistics plus mean and standard deviation.
+statistics plus mean and standard deviation, obtained with
+`pycatch22.catch22_all(..., catch24=True)`. There is no additional project-level
+waveform z-scoring before this call. The mean and standard deviation describe
+the filtered/resampled signal, rather than unprocessed physiological levels.
 
 ### Non-windowed branch
 
 The `non_windowed` branch computes Catch24 on the full case after downsampling
-to 10 Hz.
+to 10 Hz. The filtered channel must first have population standard deviation
+at least `1e-6` at its channel-specific target rate.
 
 ### Windowed branch
 
 The `windowed` branch uses:
 
 - 10-second windows
-- 5-second overlap
+- nominal 5-second stride (approximately 50% overlap)
 - per-feature aggregation by mean, standard deviation, minimum, and maximum
+
+The stride uses integer sample counts: 500 samples at 100 Hz and 312 samples
+(4.992 seconds) at 62.5 Hz. Only complete windows are used; a terminal partial
+window is discarded. Windows
+with population standard deviation below `1e-6` are excluded. A channel with no
+valid windows fails extraction. PPG/ECG windows retain 100 Hz, and CO2/airway
+pressure windows retain 62.5 Hz. Whole-case versus windowed comparisons
+therefore change temporal resolution as well as windowing and aggregation;
+they are not an isolated test of windowing at a common sampling rate.
 
 Aggregation uses float64 and sample standard deviation (`ddof=1`). A single
 valid window has missing standard deviation. Undefined descriptors in any
@@ -302,6 +316,10 @@ the following feature-set families:
 
 Two-channel waveform-only combinations are intentionally excluded from the
 default grid.
+The core comparisons use preoperative clinical variables alone, all four
+waveforms alone, and their combination, in that fixed presentation order.
+Whole-case comparisons are the main presentation; windowed and additional
+feature-set comparisons are supplementary.
 
 ## Model development
 
@@ -336,6 +354,15 @@ selector code, and NumPy/scikit-learn versions. Persistent cache entries must
 pass patient-separation, coverage, class-support, and balance-score checks.
 No model-performance metric is used to choose a split.
 
+Within each outer-training partition, a seeded Optuna tree-structured Parzen
+estimator (TPE) search runs serially within that study. Its objective is the
+unweighted mean of the three inner-fold AP scores computed from raw model
+probabilities, before recalibration. Each outer fold selects its own
+hyperparameters. The default budgets are 20 LR trials and 50 XGBoost/EBM trials,
+with base random seed 42 and outer-fold seed offsets. The prespecified search
+domains below can be used for a supplementary methods table; final selected
+parameters are retained per outer fold.
+
 ### Fold-local preprocessing
 
 The following steps are fit on training data only within the active partition:
@@ -354,8 +381,11 @@ thresholds.
 For logistic regression, numeric median imputation, numeric standardization,
 and training-derived missingness indicators are fit inside each training fold.
 All-empty numeric columns use zero. One-hot columns and missingness indicators
-are not standardized. Unseen categorical levels are handled by the fitted
-encoder. XGBoost and EBM retain native NaN handling.
+are not standardized. XGBoost and EBM retain native NaN handling.
+Categorical variables are one-hot encoded using training-fitted categories;
+unseen levels are ignored by that encoder. Rare-category pooling applies
+specifically to departments observed fewer than 30 times in the active training
+partition. Missing departments remain separate from pooled rare departments.
 
 All three families coerce registered numeric predictors to numeric and treat
 nonnumeric/nonfinite values as missing before learning statistics. Numeric
@@ -402,23 +432,23 @@ diagnostics; only outer-test predictions evaluate the complete selected
 workflow.
 
 Holdout mode follows the same principle using the persisted Step 03 split.
+The classification threshold maximizes Youden's J (sensitivity + specificity
+minus one) over the observed calibrated training-OOF probabilities. A case is
+classified positive when its calibrated probability is at least the threshold;
+equal-J ties retain the lowest observed threshold. This threshold is used for
+classification metrics, not to choose the decision-curve threshold range.
 
-### Resume behavior
+### Reproducibility and optional full-data fitting
 
-Interrupted nested runs may resume from saved fold checkpoints only when the
-stored validation fingerprint matches the current run configuration exactly.
-Stale checkpoints are ignored and recomputed.
-Fingerprints include cohort and case/fold identities, preprocessing/model
-policies, source data, code, and environment. Nested fold bundles persist model,
-preprocessor, calibrator, and threshold. Bundle protocol 2 hashes every promised
-model, preprocessor, prediction, calibration, threshold, and best-parameter file.
-Strict nested reporting checks pooled predictions against the verified fold
-union. Missing or altered artifacts cannot be certified by their presence alone.
+Each outer fold saves its fitted preprocessing, model, recalibrator, threshold,
+and held-out predictions with source, environment, operation, and fold
+identities. Scheduling may change execution order but not partitions, seeds,
+HPO budgets, or learned preprocessing boundaries. Checkpoint and reuse rules
+are specified in [RESULTS.md](RESULTS.md).
 
-### Optional final refit
-
-An additive full-data refit can be saved after validation without changing the
-reported validation metrics.
+An optional full-data refit may be saved after validation. It is disabled for
+the core comparisons and cannot replace outer-test predictions as the source
+of reported performance.
 
 ## Model-specific notes
 
@@ -427,7 +457,8 @@ reported validation metrics.
 The model uses L2 regularization with `lbfgs`, no class/sample reweighting, and a
 seeded Optuna search over `C` from 1e-4 to 1e4 (20 trials by default). Convergence
 warnings trigger a bounded deterministic retry and unresolved failures are
-reported. Calibration and threshold selection follow the shared protocol.
+reported: the iteration limit increases from 5,000 to 10,000 if needed.
+Calibration and threshold selection follow the shared protocol.
 
 ### XGBoost
 
@@ -437,28 +468,56 @@ class imbalance handling is recomputed inside each fold-training subset rather
 than once globally.
 The imbalance ratio is applied once through `scale_pos_weight`; positive sample
 weights do not apply the same ratio a second time.
+The positive weight is the number of negative divided by positive operations
+in the fitting partition. The number of boosting rounds is tuned; outer-test
+data are not used as an early-stopping set.
 
 ### Explainable Boosting Machines
 
-EBM training uses a small-sample-oriented search space and retains optional
-explainability exports. When enabled, those exports include:
-
-- global term importances
-- local explanations
-- per-term partial dependence views
-- machine-readable JSON/CSV artifacts
+EBM is additive (`interactions=0`). Numeric cut points are derived from finite
+values in the active training partition using quantiles at the selected bin
+resolution, with duplicate cuts removed. Positive-operation sample weights use
+the fitting partition's negative-to-positive ratio; negative weights are one.
 
 Explicit deterministic patient-grouped internal training/validation bags are
 passed to EBM for early stopping in HPO, cross-fitting, and final fitting. These
-internal bags preserve existing bag counts and do not cross patient boundaries.
+internal partitions do not cross patient boundaries. HPO uses one outer bag and
+no inner bags. Calibration fits and final outer-training refits use 14 outer
+bags and 20 inner bags. Candidate validation fractions of patients are 0.10,
+0.15, and 0.20; training and validation sides must both contain both classes.
 Explicit diagnostic mode uses a bounded EBM compute profile: a 200-round cap,
 smoothing at most 50 rounds, one HPO outer bag, two refit outer bags, and no
 inner bags. Manuscript mode retains 14 refit outer and 20 inner bags and the
 original search. Compute profiles and thread environments are fingerprinted;
 bounded diagnostic artifacts cannot be relabeled as definitive results.
 
-The EBM path remains part of the primary validated grid, but the explanation
-artifacts are additive and do not alter reported predictive performance.
+The EBM path remains part of the primary grid. Explanation exports do not alter
+reported predictive performance.
+
+### Hyperparameter search domains
+
+Continuous domains are linear-scale unless marked logarithmic; listed values
+are categorical choices. TPE samples adaptively within these domains. Parameters not searched retain the recorded
+implementation/package defaults. All selected values remain local to the
+corresponding outer-training model.
+
+| Model | Parameter | Search domain |
+| --- | --- | --- |
+| LR | Inverse L2 penalty `C` | 1e-4 to 1e4, logarithmic |
+| XGBoost | Boosting rounds | 100 to 1,000, step 100 |
+| XGBoost | Learning rate | 1e-4 to 0.1, logarithmic |
+| XGBoost | Maximum depth | Integers 3 to 10 |
+| XGBoost | Row / column subsampling | Each 0.6 to 1.0 |
+| XGBoost | Split penalty `gamma` | 0 to 5 |
+| XGBoost | L1 / L2 penalties | Each 1e-8 to 1.0, logarithmic |
+| EBM | Maximum bins / leaves | Bins: 32, 64, 128, 256; leaves: 2, 3 |
+| EBM | Learning rate | 0.0025, 0.005, 0.01, 0.015, 0.02, 0.03, 0.04 |
+| EBM | Smoothing rounds | 0, 25, 50, 75, 100, 150, 200, 350, 500 |
+| EBM | Validation fraction | 0.10, 0.15, 0.20 |
+| EBM | Early-stopping rounds / tolerance | Rounds: 100, 200; tolerance: 0, 1e-5 |
+| EBM | Minimum samples per leaf | 2, 3, 4, 5, 10 |
+| EBM | Minimum Hessian | 0, 1e-6, 1e-4, 1e-2 |
+| EBM | Greedy ratio / cyclic progress | Greedy: 0, 5, 10; cyclic: 0, 1 |
 
 ## Evaluation and statistical analysis
 
@@ -485,6 +544,15 @@ Additional metrics:
 - accuracy
 - precision
 - Brier score
+
+AP, AUROC, and Brier score use pooled calibrated outer-test predictions;
+classification metrics use the saved classes from each fold's locked
+threshold. This evaluation differs from the raw-probability inner-fold AP used
+to select hyperparameters. AP is interpreted alongside the event prevalence of
+the same evaluated cohort. Calibration is assessed with Brier score and
+reliability curves comparing mean predicted risk with observed event frequency
+in up to 10 quantile bins; tied edges are collapsed. Held-out calibration
+intercept/slope and their confidence intervals are not estimated.
 
 ### Bootstrap uncertainty
 
@@ -542,26 +610,17 @@ survival/log-survival probabilities. Unique eligible DeLong contrasts receive
 Holm correction within cohort, validation scheme, outcome, and branch. No
 formal AP p-values or significance-based model selection are introduced.
 
-## Reporting artifacts
+### Decision-curve analysis
 
-Paper-facing outputs are rebuilt from saved artifacts under `reporting/`.
-Important components include:
-
-- `reporting.make_report` for consolidated tables and plots
-- `reporting.cohort_flow` for cohort flow figures
-- `reporting.preop_descriptives` for baseline descriptive tables
-- `reporting.missingness_table` for feature missingness summaries
-
-Display labels and units are centralized in
-`metadata/display_dictionary.json` so manuscript-facing outputs remain
-consistent across tables and figures.
-Publication descriptives use median (IQR), missingness, operation/patient counts,
-and display-only NSR/abnormal ECG grouping. Main ROC/PR figures and legend scores
-use pooled outer predictions, matching the tables; fold variability is an
-explicit optional view. Main calibration axes span [0,1]. Exploratory decision
-curves use saved calibrated predictions with model, treat-all, and treat-none
+Exploratory decision curves use saved calibrated predictions with model, treat-all, and treat-none
 net benefit. Default probability ranges are 0.01-0.30 for AKI and 0.05-0.60 for
-ICU, in 0.01 steps; plots alone do not establish clinical utility.
+ICU, in 0.01 steps. Exploratory mortality uses 0.001-0.050 in 0.001 steps
+(0.1-5% risk). The threshold grids are fixed analysis settings, not selected by
+examining held-out outcomes. Plots alone do not establish clinical utility.
+At probability threshold `p_t`, net benefit is
+`TP/N - (FP/N) * p_t/(1-p_t)`, where `N` counts evaluated operations. Treat-none
+net benefit is zero; treat-all uses the same cohort prevalence and threshold
+odds. Paired resamples use the resampled operation denominator.
 Decision curves export absolute net-benefit intervals and paired net-benefit
 differences from the same patient resamples. Companion difference plots show
 pointwise 95% bands; absolute main plots retain only the core inputs, with
@@ -572,25 +631,46 @@ conversion models must not be fitted on evaluation outcomes. A decision/action
 and plausible threshold preferences are required before interpreting these
 exploratory curves as clinical utility.
 
-## Experimental scope
+## Descriptive reporting and model interpretation
 
-Aeon time-series models are exploratory and are intentionally separated from
-the default Catch22 paper path. Their commands and caveats live in
-`experimental/aeon/README.md`.
+Descriptives, cohort flow, and missingness summaries use the same fixed
+scope/branch rosters as model evaluation. Counts of operations and unique
+patients are reported separately. Categorical summaries retain source categories
+and display missing/unknown values separately.
 
-## Scheduling and execution provenance
+Model interpretation uses saved outer-fold bundles without refitting or
+selecting new features. XGBoost TreeSHAP values are computed for held-out
+operations on the raw, uncalibrated log-odds scale. EBM exports native global
+term importance and response curves from each fitted training model, together
+with local contributions for held-out operations and separate missing/unknown
+bin scores. Logistic-regression coefficients describe penalized log-odds per
+training standard deviation for numeric features; categorical and missingness
+coefficients retain their encoded scale. Encodings and coefficients remain
+fold-specific. Individual one-hot coefficients are not reference-category odds
+ratios; category contrasts require coefficient differences within the same
+fold. All explanations describe associations, remain separate from logistic
+recalibration, and are not causal effects.
 
-Configuration scheduling changes execution order and resource admission only.
-Each fold retains serial seeded HPO, training-only learned preprocessing,
-calibration and threshold selection, and the established patient partitions.
-Resource settings, full trial histories, source/environment identity and exact
-cohort/fold hashes are recorded. Protected older configurations retain their
-original provenance; compatibility is attested narrowly for the reviewed frozen
-baseline rather than rewriting its fingerprints. Cold split preparation
-parallelizes independent cache keys while retaining serial candidate selection
-and tie-breaking within each key.
+Display labels and units are centralized in
+`metadata/display_dictionary.json` so manuscript-facing outputs remain
+consistent across tables and figures.
+Publication descriptives use median (IQR), missingness, operation/patient counts,
+and display-only NSR/abnormal ECG grouping. Main ROC/PR figures and legend scores
+use pooled outer predictions, matching the tables; fold variability is an
+explicit optional view. Main calibration axes span [0,1].
 
-Exploratory mortality decision curves use thresholds 0.001–0.050 in increments
-of 0.001, with treat-all/treat-none comparators and patient-cluster uncertainty.
-These exploratory thresholds do not establish a clinical intervention or claim
-clinical utility. Existing AKI and ICU threshold grids remain unchanged.
+## Software and analysis provenance
+
+The frozen main analysis used Python 3.12, scikit-learn 1.6.1, XGBoost CPU 2.1.4,
+interpret-core 0.7.8, pycatch22 0.4.5, and Optuna 4.6.0. Exact package versions,
+code revisions, source hashes, settings, and selected-case/fold identities are
+retained with the analysis artifacts. Older completed configurations retain
+their original provenance. Computational reuse requires verified compatibility;
+original fingerprints are not rewritten. Cold split preparation parallelizes
+independent cache keys while preserving candidate order and tie-breaking
+within each key. This optimization does not change the statistical design.
+
+The manuscript should supply its verified dataset citation, collection period,
+and applicable ethics/data-use statement from source and study records; those
+administrative details are not inferred from the modeling code. Aeon models
+remain outside this manuscript pathway.
