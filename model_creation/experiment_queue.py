@@ -90,18 +90,24 @@ def _completed_reference(args, config: dict, context: dict, saved: dict | None =
     if not planned_hash:
         raise ValueError("Completed run is missing its frozen fold-assignment plan")
     branch = config["branch"]
+    roster = saved.get("branch_rosters", {}).get(branch, {})
+    if not roster.get("dataset_sha256") or not roster.get("selected_case_hash"):
+        raise ValueError("Completed run is missing its frozen modeling input/operation roster")
     dataset_path = layout.processed_dir / ("aki_features_master_wide_windowed.csv" if branch == "windowed" else "aki_features_master_wide.csv")
     record = verify_completed_configuration(directory, dataset_path=dataset_path)
     fp = record["validation_fingerprint"]
+    if (fp["dataset_hash"] != roster["dataset_sha256"]
+            or fp["selected_case_hash"] != roster["selected_case_hash"]):
+        raise ValueError("Completed run modeling input/operation roster differs from frozen study manifest")
     resources = config["resources"]
     expected = build_validation_fingerprint(
-        dataset_hash=fp["dataset_hash"], validation_scheme=args.validation_scheme,
+        dataset_hash=roster["dataset_sha256"], validation_scheme=args.validation_scheme,
         model_type=config["model_type"], outcome=config["outcome"], branch=branch,
         feature_set=config["feature_set"], outer_folds=args.outer_folds,
         inner_folds=args.inner_folds, calibration_folds=args.calibration_folds, repeats=args.repeats,
         n_trials=config["n_trials"], threads_per_model=resources["threads_per_model"],
         preserve_nan=True, base_random_state=42, cohort_scope=config["cohort_scope"],
-        selected_case_hash=fp["selected_case_hash"], fold_assignment_hash=planned_hash,
+        selected_case_hash=roster["selected_case_hash"], fold_assignment_hash=planned_hash,
         diagnostic=context["manifest"]["diagnostic"],
     )
     expected["thread_environment"] = {

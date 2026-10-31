@@ -106,6 +106,19 @@ def test_corrupt_or_unfinished_bundle_cannot_be_imported(complete_run):
         verify_completed_configuration(directory)
 
 
+def test_resumed_manifest_requires_the_same_verified_fold_bundles(complete_run):
+    directory, source_path, _, _ = complete_run
+    path = directory / "artifacts/folds_manifest.json"
+    manifest = json.loads(path.read_text())
+    for entry in manifest["folds"]:
+        entry["status"] = "resumed"
+    _write_json(path, manifest)
+    assert verify_completed_configuration(directory, dataset_path=source_path)["fold_count"] == 2
+    next(directory.glob("artifacts/folds/**/model.json")).unlink()
+    with pytest.raises(ValueError, match="corrupt fold bundle"):
+        verify_completed_configuration(directory, dataset_path=source_path)
+
+
 def test_source_truth_and_dataset_hash_are_checked(complete_run):
     directory, path, source, _ = complete_run
     modified = source.copy()
@@ -226,7 +239,9 @@ def test_current_skip_requires_exact_expected_protocol_and_frozen_plan(complete_
                            calibration_folds=2, repeats=1)
     context = {"layout": SimpleNamespace(results_dir=results, processed_dir=source_path.parent),
                "path": results / "manifest.json", "manifest": {"diagnostic": True}}
-    saved = {"split_plan": {"fold_assignment_hashes": {"main_shared/icu_admission/non_windowed": fp["fold_assignment_hash"]}}}
+    saved = {"split_plan": {"fold_assignment_hashes": {"main_shared/icu_admission/non_windowed": fp["fold_assignment_hash"]}},
+             "branch_rosters": {"non_windowed": {"dataset_sha256": fp["dataset_hash"],
+                                                  "selected_case_hash": fp["selected_case_hash"]}}}
     # Check all fields from the newly constructed expected fingerprint, not a
     # hand-selected subset of settings; the fixture only needs to store its
     # original minimal fingerprint for this dispatch regression.
@@ -243,3 +258,34 @@ def test_current_skip_requires_exact_expected_protocol_and_frozen_plan(complete_
     (destination / "artifacts/validation.json").unlink()
     with pytest.raises(ValueError, match="lost required artifacts"):
         _completed_reference(args, config, context, {"configurations": [config]})
+
+
+def test_current_skip_rejects_valid_completed_run_on_input_replaced_after_freeze(complete_run):
+    import shutil
+    from types import SimpleNamespace
+    from model_creation.experiment_queue import _completed_reference
+    directory, source_path, source, fp = complete_run
+    results = directory.parent / "results"
+    destination = results / "models/xgboost/icu_admission/non_windowed/preop_only"
+    shutil.copytree(directory, destination)
+    saved = {"split_plan": {"fold_assignment_hashes": {"main_shared/icu_admission/non_windowed": fp["fold_assignment_hash"]}},
+             "branch_rosters": {"non_windowed": {"dataset_sha256": fp["dataset_hash"],
+                                                  "selected_case_hash": fp["selected_case_hash"]}}}
+    # A feature-only replacement leaves case, patient, truth and fold identities
+    # intact. A self-consistent completed bundle for this different input must
+    # still be rejected by the original study freeze.
+    source.assign(age=range(len(source))).to_csv(source_path, index=False)
+    changed_hash = file_sha256(source_path)
+    for path in [destination / "artifacts/validation.json", destination / "artifacts/metadata.json",
+                 *destination.glob("artifacts/folds/**/metadata.json")]:
+        metadata = json.loads(path.read_text())
+        metadata["validation_fingerprint"]["dataset_hash"] = changed_hash
+        _write_json(path, metadata)
+    assert verify_completed_configuration(destination, dataset_path=source_path)["status"] == "verified_completed"
+    config = {key: fp[key] for key in ("model_type", "outcome", "branch", "feature_set", "cohort_scope")}
+    args = SimpleNamespace(validation_scheme="nested_cv", outer_folds=2, inner_folds=2,
+                           calibration_folds=2, repeats=1)
+    context = {"layout": SimpleNamespace(results_dir=results, processed_dir=source_path.parent),
+               "path": results / "manifest.json", "manifest": {"diagnostic": True}}
+    with pytest.raises(ValueError, match="differs from frozen study manifest"):
+        _completed_reference(args, config, context, saved)

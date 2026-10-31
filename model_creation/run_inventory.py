@@ -121,7 +121,7 @@ def verify_completed_configuration(
     manifest_pairs = [(row["repeat_id"], row["outer_fold_id"]) for row in entries]
     if len(manifest_pairs) != len(expected_pairs) or set(manifest_pairs) != expected_pairs:
         raise ValueError("Incomplete or duplicate fold manifest")
-    if any(row.get("status") != "completed" for row in entries):
+    if any(row.get("status") not in {"completed", "resumed"} for row in entries):
         raise ValueError("Fold manifest contains unfinished work")
     tests, trains, fold_rows, checksums = [], [], {}, {}
     checksums[str(validation_path)] = file_sha256(validation_path)

@@ -232,7 +232,7 @@ configuration is admitted at a time. Numerical fitting policies remain fixed.
 - [x] Add queue, lightweight resource sampling, protected inventory validation,
   strict completed-run skipping and saved trial histories.
 - [x] Add exploratory mortality DCA, 0.001–0.050/step 0.001.
-- [x] Offline environment/native checks passed; final complete suite: 535 tests
+- [x] Offline environment/native checks passed; final complete suite: 537 tests
   passed. Source changes during preflight now fail explicitly.
 - [ ] Complete sealed-checkout real-data interruption/resume verification.
 - [ ] Validate one new broader ICU XGBoost combined/non-windowed configuration
@@ -259,5 +259,12 @@ inventory rather than proliferating support documents.
 The first disposable mixed diagnostic was interrupted after checkpoints appeared
 because final integration edits overlapped its fold-preparation phase. Its
 outputs under `diagnostics/mixed-integration` are excluded from acceptance;
-repeat from the sealed checkout under `diagnostics/sealed-integration`. Scheduler
+repeat from the sealed checkout under `diagnostics/sealed-integration-v2`. Scheduler
 process groups were reaped after SIGTERM. No protected main artifacts changed.
+
+The first sealed interruption check exposed a consumer-side verifier error:
+valid loaded folds carry a `resumed` manifest status. The verifier now accepts
+that status only with intact bundles, exact hashes and full prediction coverage.
+A regression also rejects a self-consistent bundle whose input differs from the
+original frozen roster. Neither correction changes estimator fitting. The
+initial sealed diagnostic remains diagnostic evidence, not production results.
