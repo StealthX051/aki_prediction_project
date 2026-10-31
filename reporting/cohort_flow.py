@@ -38,15 +38,17 @@ import logging
 import os
 import shutil
 import subprocess
-from dataclasses import dataclass
+import tempfile
+from dataclasses import asdict, dataclass
 from pathlib import Path
 import textwrap
 from typing import Any, Iterable, List, Mapping, MutableSequence, Optional, Sequence, Tuple, Union
 
+import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.patches import FancyBboxPatch
 
-from artifact_paths import enforce_storage_policy, get_paper_dir, get_results_dir
+from artifact_paths import enforce_storage_policy, get_scoped_results_dir, get_scoped_paper_dir
 from reporting.display_dictionary import DisplayDictionary, load_display_dictionary
 from reporting.figure_rendering import mirror_figure_variants, report_figure_style_context, save_report_figure_bundle
 from reporting.manuscript_assets import PNG_DPI, refresh_paper_bundle
@@ -54,8 +56,8 @@ from reporting.manuscript_assets import PNG_DPI, refresh_paper_bundle
 logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-EXPERIMENTS_DIR = get_results_dir(PROJECT_ROOT)
-PAPER_DIR = get_paper_dir(PROJECT_ROOT)
+EXPERIMENTS_DIR = get_scoped_results_dir(PROJECT_ROOT, os.getenv("COHORT_SCOPE", "main_shared"), os.getenv("VALIDATION_SCHEME", "nested_cv"))
+PAPER_DIR = get_scoped_paper_dir(PROJECT_ROOT, os.getenv("COHORT_SCOPE", "main_shared"), os.getenv("VALIDATION_SCHEME", "nested_cv"))
 FIGURES_DIR = PAPER_DIR / "figures"
 METADATA_DIR = PAPER_DIR / "metadata"
 DEFAULT_COUNTS_PATH = METADATA_DIR / "cohort_flow_counts.json"
@@ -70,6 +72,7 @@ class CohortStage:
     detail: Optional[str] = None
     removed: Optional[int] = None
     removal_reason: Optional[str] = None
+    n_patients: Optional[int] = None
 
 
 @dataclass(frozen=True)
@@ -138,33 +141,46 @@ def normalize_counts(
 ) -> CohortFlowData:
     """Convert raw count metadata into ordered :class:`CohortStage` entries."""
 
+    if raw_counts.get("cohort_flow_schema_version") == 1:
+        stages = [CohortStage(**entry) for entry in raw_counts["stages"]]
+        split = raw_counts.get("outcome_split")
+        return CohortFlowData(stages=stages, outcome_split=OutcomeSplit(**split) if split else None)
+
     column_label_map = {
         "preop_cr": "Preoperative creatinine",
-        "opend": "Documented anesthesia end time",
+        "opend": "Documented operation end time",
     }
 
     filter_label_map = {
         "filter_preop_cr": "Baseline Creatinine Eligibility",
-        "ensure_sample_independence": "Subject Selection",
+        "ensure_sample_independence": "Operation-level analysis",
         "filter_postop_cr": "Outcome Data Availability",
         "add_aki_label": "AKI label derived",
     }
 
     removal_reason_map = {
+        "filter_valid_baseline_cr": "Invalid, nonpositive, or > 4.0 mg/dL baseline creatinine",
+        "filter_postop_cr_72h": "No valid postoperative creatinine within 72 hours",
         "mandatory_columns": "Missing mandatory data fields",
         "waveforms": "Incomplete waveform data",
         "Exclude ASA V/VI": "ASA class V/VI excluded",
+        "general_anesthesia": "Non-general anesthesia",
+        "filter_general_anesthesia": "Non-general anesthesia",
         "filter_preop_cr": "Baseline creatinine > 4.0 mg/dL",
-        "ensure_sample_independence": "Exclusion of repeat encounters",
+        "ensure_sample_independence": "Historical cohort selection",
         "filter_postop_cr": "Missing postoperative creatinine",
     }
 
     title_overrides = {
+        "filter_valid_baseline_cr": "Valid Baseline Creatinine (0 < Cr <= 4 mg/dL)",
+        "filter_postop_cr_72h": "Valid Postoperative Creatinine Within 72 Hours",
         "mandatory_columns": "EHR Record Screening",
         "waveforms": "High-fidelity Waveform Availability",
         "Exclude ASA V/VI": "ASA Class Exclusion",
+        "general_anesthesia": "General Anesthesia",
+        "filter_general_anesthesia": "General Anesthesia",
         "filter_preop_cr": "Baseline Creatinine Eligibility",
-        "ensure_sample_independence": "Subject Selection",
+        "ensure_sample_independence": "Operation-level analysis",
         "filter_postop_cr": "Outcome Data Availability",
     }
 
@@ -180,8 +196,8 @@ def normalize_counts(
         if not split_raw or not isinstance(split_raw, Mapping):
             return None
 
-        true_count = _extract_count(split_raw.get("true") or split_raw.get("positive"))
-        false_count = _extract_count(split_raw.get("false") or split_raw.get("negative"))
+        true_count = _extract_count(split_raw.get("true", split_raw.get("positive")))
+        false_count = _extract_count(split_raw.get("false", split_raw.get("negative")))
         if true_count is None or false_count is None:
             return None
 
@@ -217,6 +233,7 @@ def normalize_counts(
 
             normalized_entries.append(
                 {
+                    "n_patients": entry.get("n_patients"),
                     "raw_name": raw_name,
                     "title": title,
                     "count": count,
@@ -267,7 +284,7 @@ def normalize_counts(
     total_cases = _extract_count(raw_counts.get("total_cases") or raw_counts.get("total"))
     if total_cases is None:
         raise ValueError("Counts must include a 'total_cases' entry.")
-    stages.append(CohortStage(title="Total cases", count=total_cases))
+    stages.append(CohortStage(title="Total operations", count=total_cases, n_patients=raw_counts.get("total_patients")))
 
     departments = raw_counts.get("departments")
     dept_count = _extract_count(departments)
@@ -278,7 +295,7 @@ def normalize_counts(
         title = "Department filter"
         if dept_values:
             title = _format_detail(title, dept_values)
-        stages.append(CohortStage(title=title, count=dept_count))
+        stages.append(CohortStage(title=title, count=dept_count, n_patients=departments.get("n_patients") if isinstance(departments, Mapping) else None))
 
     mandatory = raw_counts.get("mandatory_columns")
     mandatory_count = _extract_count(mandatory)
@@ -296,6 +313,7 @@ def normalize_counts(
                 title=title,
                 detail=detail,
                 count=mandatory_count,
+                n_patients=mandatory.get("n_patients") if isinstance(mandatory, Mapping) else None,
                 removal_reason=removal_reason_map.get("mandatory_columns"),
             )
         )
@@ -307,6 +325,7 @@ def normalize_counts(
         ]
 
     waveform_entries: List[Tuple[str, int]] = []
+    final_waveform_patients = None
     for entry in waveforms:
         if isinstance(entry, Mapping):
             channel = str(entry.get("channel") or entry.get("waveform") or entry.get("track") or "Waveform")
@@ -320,6 +339,7 @@ def normalize_counts(
 
         label = _waveform_label(channel, display_dictionary)
         waveform_entries.append((label, count))
+        final_waveform_patients = entry.get("n_patients") if isinstance(entry, Mapping) else None
 
     if waveform_entries:
         final_waveform_count = waveform_entries[-1][1]
@@ -353,6 +373,7 @@ def normalize_counts(
             CohortStage(
                 title=entry["title"],
                 count=entry["count"],
+                n_patients=entry.get("n_patients"),
                 removal_reason=entry["removal_reason"],
             )
         )
@@ -362,6 +383,7 @@ def normalize_counts(
             CohortStage(
                 title=title_overrides.get("waveforms", "Waveform availability"),
                 count=final_waveform_count,
+                n_patients=final_waveform_patients,
                 detail=detail,
                 removal_reason=removal_reason_map.get("waveforms"),
             )
@@ -373,6 +395,7 @@ def normalize_counts(
             CohortStage(
                 title=entry["title"],
                 count=entry["count"],
+                n_patients=entry.get("n_patients"),
                 removal_reason=entry["removal_reason"],
             )
         )
@@ -383,7 +406,7 @@ def normalize_counts(
         final_count = stages[-1].count
 
     if final_count is not None:
-        stages.append(CohortStage(title="Final cohort", count=final_count))
+        stages.append(CohortStage(title="Final cohort", count=final_count, n_patients=final_cohort.get("n_patients") if isinstance(final_cohort, Mapping) else None))
 
     outcome_split = _parse_outcome_split(raw_counts)
 
@@ -409,6 +432,7 @@ def normalize_counts(
             CohortStage(
                 title=stage.title,
                 count=stage.count,
+                n_patients=stage.n_patients,
                 detail=stage.detail,
                 removal_reason=stage.removal_reason,
                 removed=delta if delta > 0 else None,
@@ -456,7 +480,9 @@ def _stage_node_lines(stage: CohortStage) -> List[str]:
     lines = _wrap_lines([stage.title], width=28)
     if stage.detail:
         lines.extend(_wrap_lines([stage.detail], width=34))
-    lines.append(f"n = {_format_n(stage.count)}")
+    lines.append(f"n = {_format_n(stage.count)} operations")
+    if stage.n_patients is not None:
+        lines.append(f"{_format_n(stage.n_patients)} unique patients")
     return lines
 
 
@@ -566,10 +592,6 @@ def _cohort_flow_dot(stages: Sequence[CohortStage], outcome_split: Optional[Outc
     return "\n".join(lines) + "\n"
 
 
-def _box_height(lines: Sequence[str], *, line_height: float, minimum: float) -> float:
-    return max(minimum, 0.045 + len(lines) * line_height)
-
-
 def _draw_box(
     ax: plt.Axes,
     *,
@@ -588,7 +610,7 @@ def _draw_box(
         (x, y),
         width,
         height,
-        boxstyle="round,pad=0.018,rounding_size=0.02",
+        boxstyle="round,pad=0.04,rounding_size=0.08",
         linewidth=1.35,
         linestyle=(0, (4, 2)) if dashed else "solid",
         edgecolor=edgecolor,
@@ -596,7 +618,7 @@ def _draw_box(
     )
     ax.add_patch(patch)
     ax.text(
-        x + width / 2 if centered else x + 0.025,
+        x + width / 2 if centered else x + 0.15,
         y + height / 2,
         "\n".join(lines),
         ha="center" if centered else "left",
@@ -632,37 +654,38 @@ def _draw_cohort_flow_fallback(
             _split_node_lines(positive_label, outcome_split.true_count),
         )
 
-    fig, ax = plt.subplots(figsize=(11.0, max(8.2, 2.2 + len(stages) * 1.55)))
-    ax.set_xlim(0, 1)
-    ax.set_ylim(0, 1)
+    # One data unit is one physical inch. Reserve each row from the taller of
+    # its main/exclusion text, so long final details cannot collide with rows.
+    def text_height(lines, fontsize):
+        return max(0.65, len(lines) * fontsize * 1.35 / 72 + 0.36)
+
+    main_heights = [text_height(lines, 10.2) for lines in stage_lines]
+    side_heights = [text_height(lines, 8.7) if lines else 0 for lines in exclusion_lines]
+    row_heights = [max(main, side) for main, side in zip(main_heights, side_heights)]
+    branch_height = max(text_height(lines, 9.8) for lines in split_lines) if split_lines else 0
+    row_gap = 0.38
+    bottom_margin = 0.35
+    split_space = branch_height + 0.65 if split_lines else 0
+    title_space = 0.7 if title else 0.25
+    figure_height = sum(row_heights) + max(0, len(stages)-1) * row_gap + bottom_margin + split_space + title_space
+    fig = plt.figure(figsize=(10.6, figure_height))
+    ax = fig.add_axes((0, 0, 1, 1))
+    ax.set_xlim(0, 10.6)
+    ax.set_ylim(0, figure_height)
     ax.axis("off")
-
-    main_x = 0.08
-    main_w = 0.42
-    side_x = 0.61
-    side_w = 0.29
-    top_y = 0.86
-    bottom_y = 0.22 if outcome_split else 0.08
-    stage_centers = (
-        [0.50]
-        if len(stages) == 1
-        else list(reversed([bottom_y + (top_y - bottom_y) * idx / (len(stages) - 1) for idx in range(len(stages))]))
-    )
-
+    main_x, main_w, side_x, side_w = 0.4, 5.0, 6.1, 4.1
     stage_boxes: List[tuple[float, float, float, float]] = []
     exclusion_boxes: List[Optional[tuple[float, float, float, float]]] = []
-    for idx, lines in enumerate(stage_lines):
-        height = _box_height(lines, line_height=0.035, minimum=0.12)
-        center_y = stage_centers[idx]
-        y = max(0.05, center_y - height / 2)
-        stage_boxes.append((main_x, y, main_w, height))
-
+    row_top = figure_height - title_space
+    for idx, height in enumerate(main_heights):
+        center_y = row_top - row_heights[idx] / 2
+        stage_boxes.append((main_x, center_y - height / 2, main_w, height))
         if exclusion_lines[idx]:
-            exclusion_height = _box_height(exclusion_lines[idx], line_height=0.028, minimum=0.14)
-            exclusion_y = max(0.05, center_y - exclusion_height / 2)
-            exclusion_boxes.append((side_x, exclusion_y, side_w, exclusion_height))
+            exclusion_height = side_heights[idx]
+            exclusion_boxes.append((side_x, center_y - exclusion_height / 2, side_w, exclusion_height))
         else:
             exclusion_boxes.append(None)
+        row_top -= row_heights[idx] + row_gap
 
     with report_figure_style_context():
         for idx, stage in enumerate(stages):
@@ -715,12 +738,8 @@ def _draw_cohort_flow_fallback(
             )
 
         if outcome_split and split_lines is not None:
-            branch_height = max(
-                _box_height(split_lines[0], line_height=0.035, minimum=0.11),
-                _box_height(split_lines[1], line_height=0.035, minimum=0.11),
-            )
-            left_box = (0.07, 0.04, 0.34, branch_height)
-            right_box = (0.45, 0.04, 0.34, branch_height)
+            left_box = (0.4, bottom_margin, 4.3, branch_height)
+            right_box = (5.4, bottom_margin, 4.3, branch_height)
             _draw_box(
                 ax,
                 x=left_box[0],
@@ -745,7 +764,7 @@ def _draw_cohort_flow_fallback(
             )
 
             parent_x, parent_y, parent_w, _parent_h = stage_boxes[-1]
-            split_y = left_box[1] + left_box[3] + 0.05
+            split_y = left_box[1] + left_box[3] + 0.3
             parent_center = parent_x + parent_w / 2
             left_center = left_box[0] + left_box[2] / 2
             right_center = right_box[0] + right_box[2] / 2
@@ -756,8 +775,8 @@ def _draw_cohort_flow_fallback(
 
         if title:
             ax.text(
-                0.5,
-                0.985,
+                5.3,
+                figure_height - 0.18,
                 title,
                 ha="center",
                 va="top",
@@ -838,6 +857,9 @@ def render_cohort_flow(
 
 def _build_argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--dataset", type=Path, default=None, help="Prepared shared cohort CSV for scope-specific flow.")
+    parser.add_argument("--cohort-scope", choices=("main_shared", "icu_waveform_sensitivity"), default=os.getenv("COHORT_SCOPE", "main_shared"))
+    parser.add_argument("--branch-roster", type=Path, default=None)
     parser.add_argument(
         "--counts-file",
         type=Path,
@@ -877,6 +899,106 @@ def _build_argument_parser() -> argparse.ArgumentParser:
     return parser
 
 
+
+def flow_from_cohort(df: pd.DataFrame, scope: str, branch_roster: Optional[Path] = None,
+                     artifact_metadata: Optional[Mapping[str, Any]] = None) -> CohortFlowData:
+    """Describe saved prepared operations and the exact scoped branch population."""
+    from data_preparation.cohort_scopes import select_cohort
+    from reporting.preop_descriptives import _restrict_to_roster
+
+    selected = select_cohort(df, scope)
+    branch = _restrict_to_roster(selected, branch_roster)
+    def stage(title, frame, removed=None):
+        return CohortStage(title=title, count=len(frame), n_patients=int(frame["subjectid"].nunique()),
+                           removed=removed, removal_reason=f"Outside {title.lower()}" if removed else None)
+    stages = []
+    if artifact_metadata is not None:
+        entries = artifact_metadata.get("outer_flow_counts", {}).get("stages")
+        if not isinstance(entries, list) or not entries:
+            raise ValueError("Prepared cohort metadata lacks original source flow counts")
+        previous = None
+        for entry in entries:
+            count, patients = entry.get("count"), entry.get("n_patients")
+            if not isinstance(count, int) or not isinstance(patients, int) or not 0 <= patients <= count:
+                raise ValueError("Source flow requires valid operation and patient counts")
+            if previous is not None and (count > previous[0] or patients > previous[1]):
+                raise ValueError("Source flow counts must decrease through filtering")
+            if previous is None or (count, patients) != previous:
+                reason = {"asa": "ASA V/VI", "general_anesthesia": "Non-general anesthesia",
+                          "waveforms": "Required waveform unavailable"}.get(entry.get("key"), f"Did not meet: {entry['title']}")
+                stages.append(CohortStage(title=entry["title"], count=count, n_patients=patients,
+                    removed=None if previous is None else previous[0] - count,
+                    removal_reason=None if previous is None else reason))
+            previous = (count, patients)
+        observed = (len(df), int(df["subjectid"].nunique()))
+        if observed != previous:
+            trim = artifact_metadata.get("diagnostic_trim")
+            if not isinstance(trim, Mapping) or trim.get("after_operations") != observed[0] or trim.get("after_patients") != observed[1]:
+                raise ValueError("Prepared cohort differs from source flow without matching diagnostic trim metadata")
+            if trim.get("cohort_scope") not in (None, scope):
+                raise ValueError("Diagnostic subset was selected for a different cohort scope")
+            if observed[0] > previous[0] or observed[1] > previous[1]:
+                raise ValueError("Diagnostic subset cannot exceed the source flow population")
+            source_scope = artifact_metadata.get("source_cohort_scopes", artifact_metadata.get("cohort_scopes", {})).get(scope)
+            if source_scope is not None:
+                scoped = (source_scope.get("operations"), source_scope.get("patients"))
+                if (not all(isinstance(value, int) for value in scoped)
+                        or not observed[0] <= scoped[0] <= previous[0]
+                        or not observed[1] <= scoped[1] <= previous[1]):
+                    raise ValueError("Source scope counts disagree with the diagnostic population")
+                if scoped != previous:
+                    title = "Shared AKI/ICU eligibility" if scope == "main_shared" else "ICU sensitivity eligibility"
+                    stages.append(CohortStage(title=title, count=scoped[0], n_patients=scoped[1],
+                        removed=previous[0] - scoped[0], removal_reason=f"Outside {title.lower()}"))
+                    previous = scoped
+            stages.append(stage("Diagnostic subset (enriched; not a clinical exclusion)", df,
+                                previous[0] - observed[0]))
+    else:
+        stages = [stage("General-anesthesia waveform-qualified operations", df)]
+    if len(selected) != len(df):
+        stages.append(stage("Shared AKI/ICU eligibility" if scope == "main_shared" else "ICU sensitivity eligibility", selected, len(df)-len(selected)))
+    if len(branch) != len(selected):
+        stages.append(stage("Frozen branch roster", branch, len(selected)-len(branch)))
+    final = stages[-1]
+    stages[-1] = CohortStage(title="Final cohort", count=final.count,
+        n_patients=final.n_patients, removed=final.removed, removal_reason=final.removal_reason,
+        detail=f"{final.title}; {scope}; general anesthesia; retained repeat operations" +
+               ("; diagnostic subset" if artifact_metadata and artifact_metadata.get("diagnostic_trim") else ""))
+    return CohortFlowData(stages=stages)
+
+
+def _persist_flow_metadata(flow: CohortFlowData, *, metadata_dir: Path, dataset: Path,
+                           scope: str, branch_roster: Optional[Path],
+                           source_metadata: Mapping[str, Any], output_name: str = "cohort_flow") -> Path:
+    """Atomically save exactly the normalized stages used by the diagram."""
+    from data_preparation.artifact_metadata import file_sha256
+    payload = {"cohort_flow_schema_version": 1, "cohort_scope": scope,
+        "dataset": str(dataset.resolve()), "dataset_sha256": file_sha256(dataset),
+        "branch_roster": str(branch_roster.resolve()) if branch_roster else None,
+        "branch_roster_sha256": file_sha256(branch_roster) if branch_roster else None,
+        "stages": [asdict(stage) for stage in flow.stages],
+        "outcome_split": asdict(flow.outcome_split) if flow.outcome_split else None,
+        "outer_flow_counts": source_metadata.get("outer_flow_counts"),
+        "source_hashes": source_metadata.get("source_hashes"),
+        "diagnostic_trim": source_metadata.get("diagnostic_trim"),
+        "source_cohort_scopes": source_metadata.get("source_cohort_scopes", source_metadata.get("cohort_scopes"))}
+    enforce_storage_policy({"cohort_flow_metadata_dir": metadata_dir})
+    metadata_dir.mkdir(parents=True, exist_ok=True)
+    destination = metadata_dir / f"{output_name}_counts.json"
+    enforce_storage_policy({"cohort_flow_metadata_path": destination})
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", dir=metadata_dir, suffix=".tmp", delete=False) as handle:
+            temporary = Path(handle.name)
+            json.dump(payload, handle, indent=2, sort_keys=True)
+            handle.write("\n")
+        temporary.replace(destination)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+    return destination
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     parser = _build_argument_parser()
@@ -888,8 +1010,17 @@ def main() -> None:
         logger.warning("Display dictionary not found; waveform labels will use raw keys.")
         display_dict = None
 
-    counts = _load_counts(args.counts_file)
-    flow_data = normalize_counts(counts, display_dict)
+    if args.dataset is not None:
+        from data_preparation.artifact_metadata import load_artifact_metadata
+        source_metadata = load_artifact_metadata(args.dataset)
+        flow_data = flow_from_cohort(pd.read_csv(args.dataset), args.cohort_scope, args.branch_roster,
+                                    source_metadata)
+        _persist_flow_metadata(flow_data, metadata_dir=METADATA_DIR, dataset=args.dataset,
+                               scope=args.cohort_scope, branch_roster=args.branch_roster,
+                               source_metadata=source_metadata, output_name=args.output_name)
+    else:
+        counts = _load_counts(args.counts_file)
+        flow_data = normalize_counts(counts, display_dict)
     render_cohort_flow(
         flow_data,
         output_dir=args.output_dir,

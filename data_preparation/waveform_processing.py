@@ -1,6 +1,7 @@
 import numpy as np
 import scipy.signal
 import logging
+from fractions import Fraction
 from typing import Tuple, Optional, Dict, List, Any
 import vitaldb
 
@@ -50,33 +51,55 @@ WAVEFORM_SPECS = {
         'filter_type': 'lowpass',
         'filter_band': 12,
         'filter_order': 4,
-        'unit': 'cmH2O'
+        'unit': 'hPa'
     }
 }
 
 # Create mapping from VitalDB ID to Spec Key for easy lookup
 ID_TO_SPEC_KEY = {spec['id']: key for key, spec in WAVEFORM_SPECS.items()}
 
+RESAMPLING_POLICY = {
+    "method": "scipy.signal.resample_poly",
+    "window": ["kaiser", 5.0],
+    "padtype": "line",
+    "rate_ratio": "exact_rational_from_decimal_rates",
+    "output_grid": "k/target_sr",
+    "output_length": "ceil(n*target_sr/current_sr)",
+    "singleton_policy": "constant",
+}
+
 def harmonize_sr(arr: np.ndarray, current_sr: float, target_sr: float) -> np.ndarray:
+    """Resample a finite 1D signal with a centered anti-alias FIR filter.
+
+    The output grid starts at the first input sample, with no filter delay.
+    Linear endpoint extension avoids artificial zero-padding jumps. Output
+    length covers the half-open input duration; it does not stretch endpoints.
     """
-    Resamples array from current_sr to target_sr using linear interpolation.
-    """
-    if current_sr == target_sr:
-        return arr
-    
-    mp = len(arr)
-    duration = mp / current_sr
-    new_len = int(duration * target_sr)
-    
-    x_old = np.linspace(0, duration, mp)
-    x_new = np.linspace(0, duration, new_len)
-    
-    return np.interp(x_new, x_old, arr)
+    if not (np.isfinite(current_sr) and np.isfinite(target_sr)
+            and current_sr > 0 and target_sr > 0):
+        raise ValueError("Sampling rates must be finite and positive.")
+    values = np.asarray(arr, dtype=np.float64)
+    if values.ndim != 1 or not np.isfinite(values).all():
+        raise ValueError("Resampling requires a finite one-dimensional signal.")
+    if values.size == 0 or current_sr == target_sr:
+        return values
+
+    ratio = Fraction(str(target_sr)) / Fraction(str(current_sr))
+    up, down = ratio.numerator, ratio.denominator
+    if values.size == 1:
+        # A line cannot be defined from one point; extend its constant value.
+        return np.full((up + down - 1) // down, values[0], dtype=np.float64)
+    return scipy.signal.resample_poly(
+        values, up, down, window=tuple(RESAMPLING_POLICY["window"]),
+        padtype=RESAMPLING_POLICY["padtype"],
+    )
 
 def process_signal(seg: np.ndarray, spec: Dict, caseid: int, waveform_key: str) -> Tuple[np.ndarray, Optional[str]]:
     """
     Applies filtering and resampling to a raw signal segment.
     """
+    if seg.size == 0 or not np.isfinite(seg).all():
+        return np.array([]), "invalid_signal_empty_or_nonfinite"
     # 1. Filtering
     try:
         if spec['filter_type'] == 'bandpass':
@@ -87,14 +110,17 @@ def process_signal(seg: np.ndarray, spec: Dict, caseid: int, waveform_key: str) 
             seg = scipy.signal.sosfiltfilt(sos, seg)
     except Exception as e:
         return np.array([]), f"filtering_error: {e}"
+    if seg.size == 0 or not np.isfinite(seg).all():
+        return np.array([]), "invalid_filtered_signal_empty_or_nonfinite"
 
     # 2. Resampling (if needed)
     if spec['target_sr'] != spec['native_sr']:
         try:
-            # We use harmonize_sr (linear interp) for consistency
             seg = harmonize_sr(seg, spec['native_sr'], spec['target_sr'])
         except Exception as e:
             return np.array([]), f"resampling_error: {e}"
+    if seg.size == 0 or not np.isfinite(seg).all():
+        return np.array([]), "invalid_resampled_signal_empty_or_nonfinite"
             
     return seg, None
 

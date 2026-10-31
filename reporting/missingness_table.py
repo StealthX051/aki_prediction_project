@@ -17,8 +17,12 @@ from pathlib import Path
 from typing import Sequence
 
 import pandas as pd
+import numpy as np
 
-from artifact_paths import enforce_storage_policy, get_paper_dir, get_processed_dir, get_results_dir
+from artifact_paths import enforce_storage_policy, get_processed_dir, get_scoped_results_dir, get_scoped_paper_dir
+from data_preparation.cohort_scopes import COHORT_SCOPES, select_cohort
+from reporting.preop_descriptives import _restrict_to_roster
+from model_creation.preprocessing import RAW_CATEGORICAL_PREOP_COLUMNS, is_numeric_predictor
 from data_preparation.outcome_registry import (
     ALL_ELIGIBILITY_COLUMNS,
     ALL_OUTCOME_COLUMNS,
@@ -32,8 +36,8 @@ logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-EXPERIMENTS_DIR = get_results_dir(PROJECT_ROOT)
-PAPER_DIR = get_paper_dir(PROJECT_ROOT)
+EXPERIMENTS_DIR = get_scoped_results_dir(PROJECT_ROOT, os.getenv("COHORT_SCOPE", "main_shared"), os.getenv("VALIDATION_SCHEME", "nested_cv"))
+PAPER_DIR = get_scoped_paper_dir(PROJECT_ROOT, os.getenv("COHORT_SCOPE", "main_shared"), os.getenv("VALIDATION_SCHEME", "nested_cv"))
 TABLES_DIR = PAPER_DIR / "tables"
 
 DEFAULT_DATASET_PATH = Path(os.getenv("MERGED_DATASET_PATH", get_processed_dir(PROJECT_ROOT) / "aki_features_master_wide.csv"))
@@ -73,7 +77,7 @@ def compute_missingness_table(
     exclude_columns: Sequence[str] = (),
     use_short_labels: bool = True,
 ) -> pd.DataFrame:
-    """Return a per-feature missingness summary.
+    """Return missing/unusable values before fold-local imputation or clipping.
 
     Args:
         df: Dataset containing features and metadata.
@@ -93,7 +97,15 @@ def compute_missingness_table(
         if column in excluded:
             continue
 
-        missing_count = int(df[column].isna().sum())
+        source = df[column]
+        if is_numeric_predictor(column) or (
+            column not in RAW_CATEGORICAL_PREOP_COLUMNS and pd.api.types.is_numeric_dtype(source)
+        ):
+            numeric = pd.to_numeric(source, errors="coerce")
+            missing_count = int((numeric.isna() | numeric.isin([np.inf, -np.inf])).sum())
+        else:
+            missing_count = int((source.isna() | source.isin([np.inf, -np.inf])
+                                 | source.astype("string").str.strip().eq("").fillna(False)).sum())
         missing_percent = (missing_count / total_rows) * 100
         display_name = display_dictionary.feature_label(column, use_short=use_short_labels, include_unit=True)
 
@@ -101,6 +113,8 @@ def compute_missingness_table(
             {
                 "feature_name": column,
                 "display_name": display_name,
+                "n_operations": total_rows,
+                "n_patients": df["subjectid"].nunique() if "subjectid" in df else None,
                 "missing_count": missing_count,
                 "missing_percent": round(missing_percent, 2),
             }
@@ -138,6 +152,8 @@ def _save_table(table: pd.DataFrame, output_prefix: str) -> tuple[Path, Path]:
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Generate per-feature missingness summary table.")
+    parser.add_argument("--cohort-scope", choices=COHORT_SCOPES, default=os.getenv("COHORT_SCOPE", "main_shared"))
+    parser.add_argument("--branch-roster", type=Path, default=None)
     parser.add_argument(
         "--dataset",
         type=Path,
@@ -165,7 +181,7 @@ def main() -> None:
     args = _parse_args()
 
     display_dictionary = load_display_dictionary(path=args.display_dictionary)
-    dataset = _load_dataset(args.dataset)
+    dataset = _restrict_to_roster(select_cohort(_load_dataset(args.dataset), args.cohort_scope), args.branch_roster)
 
     table = compute_missingness_table(
         dataset,

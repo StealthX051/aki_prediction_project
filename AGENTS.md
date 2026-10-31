@@ -6,7 +6,7 @@ This repository generates reproducible results for postoperative acute kidney
 injury prediction from VitalDB intraoperative waveforms plus preoperative
 clinical data.
 
-- Primary path: Catch24/Catch22 feature extraction, XGBoost/EBM training, and
+- Primary path: Catch24/Catch22 feature extraction, LR/XGBoost/EBM training, and
   paper-facing reporting
 - Experimental path: Aeon models under `model_creation_aeon/`
 
@@ -99,6 +99,7 @@ Open the smallest relevant document first.
 
 ## Task-specific docs
 
+- `.agent/workflows/manuscript-reorientation.md`
 - `.agent/workflows/run-catch22-pipeline.md`
 - `.agent/workflows/check-catch22-leakage.md`
 - `.agent/workflows/summarize-catch22-change.md`

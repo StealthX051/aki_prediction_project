@@ -1,4 +1,5 @@
 import pandas as pd
+import json
 import sys
 from pathlib import Path
 
@@ -11,7 +12,10 @@ from data_preparation.inputs import (
     CATCH_22_WINDOWED_FILE,
     INTRAOP_WIDE_FILE,
     INTRAOP_WIDE_WINDOWED_FILE,
+    MANDATORY_WAVEFORMS,
 )
+from data_preparation.artifact_metadata import ArtifactCompatibilityError, file_sha256, metadata_path_for
+from data_preparation.step_02_catch_22 import EXTRACTION_PROTOCOL_VERSION
 
 def process_waveform_file(input_path, output_path, mode_name):
     print(f"\n--- Processing {mode_name} Waveform Data ---")
@@ -41,10 +45,29 @@ def process_waveform_file(input_path, output_path, mode_name):
         print("ERROR: No feature columns found to pivot.")
         return
 
-    waveform_wide_df = long_df.pivot_table(
+    if long_df[["caseid", "waveform"]].isna().any().any():
+        raise ValueError("Waveform extraction contains missing case/channel identities.")
+    if long_df.duplicated(["caseid", "waveform"]).any():
+        raise ValueError("Duplicate case/channel pairs cannot be averaged during waveform assembly.")
+    unknown_channels = set(long_df["waveform"]) - set(MANDATORY_WAVEFORMS)
+    if unknown_channels:
+        raise ValueError(f"Unexpected waveform channels: {sorted(unknown_channels)}")
+    source_meta_path = metadata_path_for(input_path)
+    if not source_meta_path.exists():
+        raise ArtifactCompatibilityError(f"Waveform source {input_path} lacks extraction provenance.")
+    source_metadata = json.loads(source_meta_path.read_text())
+    if source_metadata.get("extraction_protocol_version") != EXTRACTION_PROTOCOL_VERSION or not source_metadata.get("extraction_fingerprint"):
+        raise ArtifactCompatibilityError(f"Waveform source {input_path} lacks a supported extraction fingerprint.")
+
+    waveform_wide_df = long_df.pivot(
         index=id_cols,
         columns=pivot_col,
         values=feature_cols
+    )
+    # Retain whole missing channels as NaN instead of silently changing feature
+    # set definitions when every extraction of a channel failed.
+    waveform_wide_df = waveform_wide_df.reindex(
+        columns=pd.MultiIndex.from_product([feature_cols, MANDATORY_WAVEFORMS])
     )
     print(f"Pivot complete. Shape before flattening: {waveform_wide_df.shape}")
 
@@ -63,6 +86,37 @@ def process_waveform_file(input_path, output_path, mode_name):
     # 4. Save
     print(f"Saving to {output_path}...")
     waveform_wide_df.to_csv(output_path, index=False)
+    channels_by_case = long_df.groupby("caseid")["waveform"].agg(set)
+    missing_channels = {
+        str(caseid): sorted(set(MANDATORY_WAVEFORMS) - channels)
+        for caseid, channels in channels_by_case.items()
+        if len(channels) < len(MANDATORY_WAVEFORMS)
+    }
+    error_pairs = set()
+    error_path = Path(source_metadata.get("error_file", "__no_error_file__"))
+    if error_path.is_file():
+        errors = pd.read_csv(error_path, usecols=["caseid", "waveform"])
+        error_pairs = set(zip(errors["caseid"], errors["waveform"]))
+    successful_pairs = set(zip(long_df["caseid"], long_df["waveform"]))
+    requested_caseids = set(source_metadata.get("requested_caseids") or long_df["caseid"].tolist())
+    unavailable_caseids = requested_caseids - set(long_df["caseid"])
+    metadata = {
+        "artifact_role": "step_04_waveforms",
+        "assembly_protocol_version": 1,
+        "source_long_file_sha256": file_sha256(input_path),
+        "data_sha256": file_sha256(output_path),
+        "extraction_fingerprint": source_metadata["extraction_fingerprint"],
+        "extraction_diagnostics": {
+            "successful_pairs": len(successful_pairs),
+            "failed_pairs": len(error_pairs - successful_pairs),
+            "operations": len(waveform_wide_df),
+            "requested_operations": len(requested_caseids),
+            "operations_without_successful_channels": sorted(unavailable_caseids),
+            "operations_with_partial_channels": len(missing_channels),
+            "missing_channels_by_caseid": missing_channels,
+        },
+    }
+    metadata_path_for(output_path).write_text(json.dumps(metadata, indent=2, sort_keys=True))
     print(f"Done with {mode_name}.")
 
 def main():

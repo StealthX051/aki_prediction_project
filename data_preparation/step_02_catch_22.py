@@ -1,6 +1,10 @@
 import os
 import logging
-from multiprocessing import Pool, cpu_count
+import hashlib
+import json
+from importlib.metadata import version
+from multiprocessing import Pool
+from pathlib import Path
 from typing import Dict, Any, Tuple
 import numpy as np
 import pandas as pd
@@ -12,6 +16,7 @@ from data_preparation.artifact_metadata import (
     STEP_01_COHORT_ARTIFACT,
     ArtifactCompatibilityError,
     read_versioned_csv,
+    metadata_path_for,
 )
 from data_preparation.inputs import (
     COHORT_FILE, 
@@ -23,11 +28,116 @@ from data_preparation.inputs import (
     SLIDE_SEC,
     GENERATE_FULL_FEATURES,
     GENERATE_WINDOWED_FEATURES,
-    FULL_FEATURE_TARGET_SR
+    FULL_FEATURE_TARGET_SR,
+    CATCH_22_WINDOWED_FILE,
 )
-from data_preparation.waveform_processing import WAVEFORM_SPECS, process_signal, harmonize_sr, load_and_validate_case
+from data_preparation.waveform_processing import (
+    WAVEFORM_SPECS, RESAMPLING_POLICY, process_signal, harmonize_sr, load_and_validate_case,
+)
+from runtime_resources import available_cpu_count
 
 COHORT_REQUIRED_COLUMNS = ["caseid", "opstart", "opend"]
+EXTRACTION_PROTOCOL_VERSION = 3
+
+
+def extraction_worker_count(task_count: int) -> int:
+    """Bound extraction processes by affinity, cgroup quota, and pending work."""
+    available = available_cpu_count()
+    requested = int(os.getenv("AKI_EXTRACTION_WORKERS", str(available)))
+    if requested < 1 or task_count < 1:
+        raise ValueError("AKI_EXTRACTION_WORKERS and task_count must be positive.")
+    return min(available, requested, task_count)
+
+
+def build_extraction_fingerprint(cohort_df: pd.DataFrame, mode: str) -> dict:
+    """Identify signal inputs/settings before permitting checkpoint reuse."""
+    roster = cohort_df[COHORT_REQUIRED_COLUMNS].sort_values("caseid").to_csv(index=False)
+    code_files = [Path(__file__), Path(__file__).with_name("waveform_processing.py")]
+    return {
+        "extraction_protocol_version": EXTRACTION_PROTOCOL_VERSION,
+        "mode": mode,
+        "cohort_roster_sha256": hashlib.sha256(roster.encode()).hexdigest(),
+        "code_sha256": {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in code_files},
+        "pycatch22_version": version("pycatch22"),
+        "vitaldb_version": version("vitaldb"),
+        "scipy_version": version("scipy"),
+        "resampling_policy": dict(RESAMPLING_POLICY),
+        "waveforms": list(MANDATORY_WAVEFORMS),
+        "substitutions": WAVEFORM_SUBSTITUTIONS,
+        "signal_specs": WAVEFORM_SPECS,
+        "full_target_sr": FULL_FEATURE_TARGET_SR,
+        "window_seconds": WIN_SEC if mode == "windowed" else None,
+        "slide_seconds": SLIDE_SEC if mode == "windowed" else None,
+        "max_missing_fraction": 0.05,
+        "invalid_sample_policy": "nonfinite_as_missing_interpolate_up_to_5_pct",
+        "signal_validity_policy": "reject_empty_or_nonfinite_after_filtering_and_resampling",
+        "missing_feature_policy": "preserve_nan",
+        "invalid_descriptor_policy": "nonfinite_to_nan_float64_nan_propagating_aggregates_ddof_1",
+    }
+
+
+def load_processed_pairs(output_path: Path, error_path: Path, fingerprint: dict) -> set:
+    """Fail closed on unidentified historical extraction outputs or duplicates."""
+    output_path, error_path = Path(output_path), Path(error_path)
+    if not output_path.exists() and not error_path.exists():
+        return set()
+    meta_path = metadata_path_for(output_path)
+    if not meta_path.exists():
+        raise ArtifactCompatibilityError(
+            f"Waveform output {output_path} has no extraction fingerprint; use a fresh output root."
+        )
+    payload = json.loads(meta_path.read_text())
+    if payload.get("extraction_fingerprint") != fingerprint:
+        raise ArtifactCompatibilityError(
+            f"Waveform extraction fingerprint mismatch for {output_path}; use a fresh output root."
+        )
+    if not output_path.exists():
+        return set()
+    existing = pd.read_csv(output_path)
+    if existing[["caseid", "waveform"]].isna().any().any():
+        raise ArtifactCompatibilityError(f"Missing case/channel identity in {output_path}.")
+    if existing.duplicated(["caseid", "waveform"]).any():
+        raise ArtifactCompatibilityError(f"Duplicate case/channel pairs in {output_path}.")
+    return set(zip(existing["caseid"], existing["waveform"]))
+
+
+def _save_mode_checkpoint(conf: dict, fingerprint: dict) -> None:
+    """Atomically replace complete checkpoints, leaving feature NaNs intact.
+
+    Snapshot replacement costs more I/O than append, but a killed writer can
+    never leave a truncated feature record that looks like a valid NaN row.
+    """
+    output_path, error_path = Path(conf["file"]), Path(conf["error_file"])
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    for key, path in (("features", output_path), ("errors", error_path)):
+        records = conf[key]
+        if records:
+            frame = pd.DataFrame(records)
+            columns = ["caseid", "waveform"] + [c for c in frame if c not in ("caseid", "waveform")]
+            frame = frame[columns]
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if path.exists():
+                existing = pd.read_csv(path, float_precision="round_trip")
+                frame = pd.concat([existing, frame], ignore_index=True)
+            if key == "features" and frame.duplicated(["caseid", "waveform"]).any():
+                raise ArtifactCompatibilityError(f"Duplicate case/channel pairs in checkpoint {path}.")
+            if key == "features":
+                feature_columns = [column for column in frame if column not in ("caseid", "waveform")]
+                # Serialize feature values consistently across checkpoint batches.
+                frame[feature_columns] = frame[feature_columns].astype(np.float64)
+            temporary = path.with_suffix(path.suffix + ".tmp")
+            frame.to_csv(temporary, index=False, float_format="%.17g")
+            temporary.replace(path)
+            conf[key] = []
+    payload = {"extraction_protocol_version": EXTRACTION_PROTOCOL_VERSION,
+               "extraction_fingerprint": fingerprint,
+               "error_file": str(error_path),
+               "requested_caseids": conf.get("requested_caseids", []),
+               "successful_pairs": len(conf["processed_pairs"])}
+    meta_path = metadata_path_for(output_path)
+    temporary = meta_path.with_suffix(meta_path.suffix + ".tmp")
+    temporary.write_text(json.dumps(payload, indent=2, sort_keys=True))
+    temporary.replace(meta_path)
 
 # Validation
 if GENERATE_WINDOWED_FEATURES:
@@ -64,16 +174,19 @@ def _process_case(case: Tuple[int, float, float, str]) -> Tuple[Dict[str, Any], 
         seg = wave[int(opstart * native_sr):int(opend * native_sr)]
         seg = seg.squeeze()
         
-        # 6. NaN checks
-        nan_mask = np.isnan(seg)
-        nan_pct = np.mean(nan_mask)
-        if nan_pct > 0.05:
-            err = {'caseid': caseid, 'waveform': waveform_key, 'error': 'invalid_signal_gt_5_pct_nan'}
+        # 6. Treat all nonfinite samples as missing under the same 5% rule.
+        if seg.size == 0:
+            err = {'caseid': caseid, 'waveform': waveform_key, 'error': 'invalid_signal_empty'}
             return {'error': err}, timings
-        
-        if nan_pct > 0:
+        invalid_mask = ~np.isfinite(seg)
+        invalid_pct = np.mean(invalid_mask)
+        if invalid_pct > 0.05:
+            err = {'caseid': caseid, 'waveform': waveform_key, 'error': 'invalid_signal_gt_5_pct_nonfinite'}
+            return {'error': err}, timings
+
+        if invalid_pct > 0:
             x = np.arange(seg.size)
-            seg = np.interp(x=x, xp=x[~nan_mask], fp=seg[~nan_mask])
+            seg = np.interp(x=x, xp=x[~invalid_mask], fp=seg[~invalid_mask])
         
         # 7. & 8. Filtering and Resampling
         seg, error_msg = process_signal(seg, spec, caseid, waveform_key)
@@ -90,14 +203,18 @@ def _process_case(case: Tuple[int, float, float, str]) -> Tuple[Dict[str, Any], 
                 # Log error but don't fail the whole case if windowed might work (unlikely but possible)
                 results['full'] = {'caseid': caseid, 'waveform': waveform_key, 'error': 'invalid_signal_flatline_or_all_nan'}
             else:
-                # Downsample to 10 Hz for efficient full-series extraction
-                # This matches the "Old Code" effective resolution for this step
+                # Keep the 10 Hz full-series limit with anti-alias resampling.
                 seg_full = harmonize_sr(seg, target_sr, FULL_FEATURE_TARGET_SR)
-                all_feature_results = pycatch22.catch22_all(seg_full, catch24=True)
-                out = {n: v for n, v in zip(all_feature_results['names'], all_feature_results['values'])}
-                out['caseid'] = caseid
-                out['waveform'] = waveform_key 
-                results['full'] = out
+                if seg_full.size == 0 or not np.isfinite(seg_full).all():
+                    results['full'] = {'caseid': caseid, 'waveform': waveform_key,
+                                       'error': 'invalid_full_resampled_signal_empty_or_nonfinite'}
+                else:
+                    all_feature_results = pycatch22.catch22_all(seg_full, catch24=True)
+                    out = {n: v if np.isfinite(v) else np.nan
+                           for n, v in zip(all_feature_results['names'], all_feature_results['values'])}
+                    out['caseid'] = caseid
+                    out['waveform'] = waveform_key
+                    results['full'] = out
                 
             timings['process_full'] = time.perf_counter() - start_full
 
@@ -128,13 +245,18 @@ def _process_case(case: Tuple[int, float, float, str]) -> Tuple[Dict[str, Any], 
                 else:
                     feature_names = feats_list[0]['names']
                     feature_values = [res['values'] for res in feats_list]
-                    m = np.asarray(feature_values, dtype=np.float32)
-                    out = {
-                        **{f'{n}_mean': v for n, v in zip(feature_names, m.mean(0))},
-                        **{f'{n}_std':  v for n, v in zip(feature_names, m.std(0, ddof=1))},
-                        **{f'{n}_min':  v for n, v in zip(feature_names, m.min(0))},
-                        **{f'{n}_max':  v for n, v in zip(feature_names, m.max(0))}
-                    }
+                    m = np.asarray(feature_values, dtype=np.float64)
+                    m[~np.isfinite(m)] = np.nan
+                    # Keep undefined-window propagation and sample SD unchanged.
+                    # Float64 avoids overflow from finite float32-sized descriptors.
+                    with np.errstate(over='ignore', invalid='ignore'):
+                        out = {
+                            **{f'{n}_mean': v for n, v in zip(feature_names, m.mean(0))},
+                            **{f'{n}_std':  v for n, v in zip(feature_names, m.std(0, ddof=1))},
+                            **{f'{n}_min':  v for n, v in zip(feature_names, m.min(0))},
+                            **{f'{n}_max':  v for n, v in zip(feature_names, m.max(0))}
+                        }
+                    out = {n: v if np.isfinite(v) else np.nan for n, v in out.items()}
                     out['caseid'] = caseid
                     out['waveform'] = waveform_key
                     results['windowed'] = out
@@ -167,7 +289,7 @@ def main():
             return f"{name}{suffix}{ext}"
         
         outputs_config['windowed'] = {
-            'file': _add_suffix(CATCH_22_FILE, '_windowed'),
+            'file': CATCH_22_WINDOWED_FILE,
             'error_file': _add_suffix(CATCH_22_ERROR_FILE, '_windowed'),
             'features': [],
             'errors': []
@@ -183,24 +305,18 @@ def main():
             artifact_role=STEP_01_COHORT_ARTIFACT,
             required_columns=COHORT_REQUIRED_COLUMNS,
         )
-    except FileNotFoundError:
-        logging.error(f"Cohort file not found at {COHORT_FILE}. Exiting.")
-        return
-    except ArtifactCompatibilityError as exc:
-        logging.error("%s", exc)
-        return
+    except (FileNotFoundError, ArtifactCompatibilityError) as exc:
+        raise SystemExit(str(exc)) from exc
     logging.info(f"Loaded {len(cohort_df)} cases from {COHORT_FILE}")
 
     # Checkpoint logic: We need to process a pair if it is missing from ANY enabled output
     processed_pairs_by_mode = {}
     for mode, conf in outputs_config.items():
-        processed_pairs = set()
-        if os.path.exists(conf['file']):
-            try:
-                df = pd.read_csv(conf['file'], usecols=['caseid', 'waveform'])
-                processed_pairs = set(zip(df['caseid'], df['waveform']))
-            except Exception:
-                pass
+        conf["fingerprint"] = build_extraction_fingerprint(cohort_df, mode)
+        conf["requested_caseids"] = sorted(cohort_df["caseid"].tolist())
+        processed_pairs = load_processed_pairs(conf["file"], conf["error_file"], conf["fingerprint"])
+        conf["processed_pairs"] = processed_pairs
+        _save_mode_checkpoint(conf, conf["fingerprint"])
         processed_pairs_by_mode[mode] = processed_pairs
         logging.info(f"Mode '{mode}': Found {len(processed_pairs)} previously processed pairs.")
 
@@ -212,14 +328,8 @@ def main():
     del cohort_df
 
     # Determine worklist
-    # A pair needs processing if it's missing in ANY enabled mode
-    # However, to avoid complexity, we can just process everything that isn't in ALL enabled modes?
-    # Or simpler: process if missing in ANY. The writer will append.
-    # But if we process a case that is present in 'full' but missing in 'windowed', we re-compute 'full'.
-    # That's acceptable overhead to keep logic simple.
-    
-    # Actually, let's find the intersection of processed pairs across all enabled modes
-    # If a pair is processed in ALL enabled modes, skip it.
+    # Skip a pair only when every enabled mode has a saved successful result.
+    # Recomputed modes are discarded by the per-mode writer below.
     if not processed_pairs_by_mode:
         universal_processed = set()
     else:
@@ -248,59 +358,41 @@ def main():
     
     logging.info(f"{len(cohort_to_process)} pairs to process.")
 
-    # Determine number of processes
-    try:
-        # On Linux, this respects cgroups/quotas (important for VMs/Containers)
-        num_processes = max(1, len(os.sched_getaffinity(0)) - 2)
-    except AttributeError:
-        # Fallback for Windows/MacOS
-        num_processes = max(1, cpu_count() - 2)
+    num_processes = extraction_worker_count(len(cases_to_process))
+    checkpoint_pairs = int(os.getenv("AKI_EXTRACTION_CHECKPOINT_PAIRS", "32"))
+    if checkpoint_pairs < 1:
+        raise ValueError("AKI_EXTRACTION_CHECKPOINT_PAIRS must be positive.")
     
     logging.info(f"Using {num_processes} worker processes.")
     
-    timings = []
-    
     with Pool(processes=num_processes) as pool:
         with tqdm(total=len(cases_to_process), desc="Extracting Features") as pbar:
-            for result_dict, timing in pool.imap_unordered(_process_case, cases_to_process):
-                timings.append(timing)
-                
+            for completed, (result_dict, _timing) in enumerate(pool.imap_unordered(_process_case, cases_to_process), 1):
                 # Handle global error (loading failure)
                 if 'error' in result_dict:
                     # This error applies to ALL modes
                     for mode in outputs_config:
-                        outputs_config[mode]['errors'].append(result_dict['error'])
+                        error = result_dict['error']
+                        if (error['caseid'], error['waveform']) not in outputs_config[mode]['processed_pairs']:
+                            outputs_config[mode]['errors'].append(error)
                 else:
                     # Distribute results to respective modes
                     for mode, res in result_dict.items():
+                        pair = (res['caseid'], res['waveform'])
+                        if pair in outputs_config[mode]['processed_pairs']:
+                            continue
                         if 'error' in res:
                             outputs_config[mode]['errors'].append(res)
                         else:
                             outputs_config[mode]['features'].append(res)
+                            outputs_config[mode]['processed_pairs'].add(pair)
+                if completed % checkpoint_pairs == 0:
+                    for conf in outputs_config.values():
+                        _save_mode_checkpoint(conf, conf["fingerprint"])
                 pbar.update()
 
-    # Save results for each mode
-    for mode, conf in outputs_config.items():
-        features_df = pd.DataFrame(conf['features'])
-        error_df = pd.DataFrame(conf['errors'])
-        
-        # Save Errors
-        if not error_df.empty:
-            exists = os.path.exists(conf['error_file'])
-            error_df.to_csv(conf['error_file'], index=False, mode='a' if exists else 'w', header=not exists)
-            logging.info(f"[{mode}] Saved {len(error_df)} errors.")
-
-        # Save Features
-        if not features_df.empty:
-            features_df.fillna(0, inplace=True)
-            cols = ['caseid', 'waveform'] + [c for c in features_df.columns if c not in ['caseid', 'waveform']]
-            features_df = features_df[cols]
-            
-            exists = os.path.exists(conf['file'])
-            features_df.to_csv(conf['file'], index=False, mode='a' if exists else 'w', header=not exists)
-            logging.info(f"[{mode}] Saved {len(features_df)} features.")
-        else:
-            logging.info(f"[{mode}] No new features to save.")
+    for conf in outputs_config.values():
+        _save_mode_checkpoint(conf, conf["fingerprint"])
 
     logging.info("Processing complete.")
 

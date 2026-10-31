@@ -1,204 +1,150 @@
 # Results artifacts
 
-This file is more artifact-focused than `README.md` and more operational than
-`METHODS.md`. It documents where the repository writes paper-facing outputs,
-what those outputs mean, and how to regenerate them from saved artifacts.
+This document describes saved artifacts and paper-output regeneration.
+Scientific definitions and inference limits are in [METHODS.md](METHODS.md);
+execution and root selection are in [README.md](README.md).
 
-## Artifact roots
+**Pre-run status:** definitive results have not been generated. Historical and
+reduced-validation outputs remain separate, explicitly labeled evidence.
 
-Generated Catch22 artifacts default to:
+## Layout and integrity
 
-```text
-/media/volume/catch22/data/aki_prediction_project
-```
-
-Relevant environment controls:
-
-- `AKI_ARTIFACT_ROOT`: canonical generated-artifact root
-- `AKI_STORAGE_POLICY`: heavy-output policy (`enforce`, `warn`, `off`)
-- `RESULTS_DIR`: explicit experiments root
-- `PAPER_DIR`: explicit paper-output root
-- `SMOKE_ROOT`: isolated smoke-test root
-
-The default policy is to fail fast if heavy generated outputs are routed off the
-attached media volume unless the policy is relaxed explicitly.
-
-## Catch22 results layout
-
-The validated default artifact tree is:
-
-- `results/catch22/experiments/`: raw model outputs and intermediate artifacts
-- `results/catch22/paper/`: paper-facing bundle
-- `results/catch22/xai/`: convenience entry points to interpretability outputs
-- `results/catch22/archive/legacy/`: retained historical outputs
-
-Within a single modeling configuration, artifacts live under:
+Under `$AKI_ARTIFACT_ROOT`, the main roots are:
 
 ```text
-results/catch22/experiments/models/<model_type>/<outcome>/<branch>/<feature_set>/
+data/processed/
+results/catch22/experiments/<cohort_scope>/<validation_scheme>/
+results/catch22/paper/<cohort_scope>/<validation_scheme>/
+logs/
 ```
 
-Typical contents:
+Scopes are `main_shared` and `icu_waveform_sensitivity`; validation schemes are
+`nested_cv` and diagnostic `holdout`. Explicit results/paper overrides are base
+roots unless already scoped. Historical roots and model basenames are retained.
 
-- `predictions/train_oof.csv`
-- `predictions/test.csv`
-- `artifacts/calibration.json`
-- `artifacts/threshold.json`
-- `artifacts/metadata.json`
-- `artifacts/validation.json`
-- model bundle and any family-specific artifacts
+Each experiments root contains `run_manifest.json`: requested configurations,
+study/code/environment identity, diagnostic status, frozen branch rosters,
+source hashes, resource budgets, and execution history. Required configurations
+must exist before strict reporting succeeds. Family stages extend the manifest;
+partial coverage cannot be presented as a complete three-family comparison.
 
-For nested CV runs, `predictions/test.csv` contains the pooled outer-fold
-evaluation predictions. For holdout runs, it contains the held-out test cohort.
+A model configuration lives at:
 
-## Primary regeneration commands
+```text
+models/<family>/<outcome>/<branch>/<feature_set>/
+  predictions/train_oof.csv
+  predictions/test.csv
+  artifacts/calibration.json
+  artifacts/threshold.json
+  artifacts/metadata.json
+  artifacts/validation.json
+  artifacts/folds/repeat_00/outer_00/
+```
 
-### Fastest isolated validation
+Nested `test.csv` pools outer-test predictions. Training OOF predictions are
+model-development diagnostics, not publication estimates. Each outer-fold
+bundle stores its fitted model, preprocessor, calibrator, threshold, parameters,
+train/test predictions, and integrity metadata. XGBoost uses `model.json`;
+LR/EBM use `model.pkl`; preprocessing uses `preprocessor.pkl`. Resume requires
+matching fingerprints and every promised artifact, not just a prediction file.
+
+Clinical/preoperative schemas are version 4, merged features version 5, and
+waveform extraction protocol version 3. Old waveform/merged artifacts require
+fresh extraction; changing a statistics-only protocol requires regenerating
+statistics, not fitting models again. Historical artifacts are never relabeled
+or upgraded in place.
+
+## Regenerate from saved artifacts
+
+Activate the Conda environment and select the existing study root as documented
+in the README. These commands consume saved data and models without fitting:
 
 ```bash
-python -m run_catch22 smoke
+python -m run_catch22 experiments --report-only \
+  --bootstrap 5000 --bootstrap-seed 0 --no-bootstrap-stratified
+python -m run_catch22 descriptive --branch non_windowed
+python -m run_catch22 descriptive --branch windowed
+python -m reporting.fold_explanations
 ```
 
-This writes a small end-to-end run under `SMOKE_ROOT` without touching the
-canonical experiment tree.
+Add `--cohort-scope icu_waveform_sensitivity` to launcher commands, and set
+`COHORT_SCOPE=icu_waveform_sensitivity` for standalone explanation exports.
+The report-only launcher records changed bootstrap settings before regeneration;
+direct metrics commands must agree with the manifest policy.
 
-### Full Catch22 experiment grid
+Strict reports align unique cases and verify patient, truth, and fold identity.
+They require the same family's clinical reference and reject missing requested
+runs, altered predictions, stale intervals, mixed study identities, or a pooled
+prediction file inconsistent with its verified fold union. Explicit `--legacy`
+reading supports historical artifacts but does not certify them as definitive.
 
-```bash
-python -m run_catch22 experiments
-```
+## Publication bundle
 
-Useful variants:
+The scoped paper tree contains tables, figures, reports, metadata, and a
+`manifest.json` linking exported files. The principal outputs are:
 
-```bash
-python -m run_catch22 experiments --prep force
-python -m run_catch22 experiments --prep skip
-python -m run_catch22 experiments --only-xgboost
-python -m run_catch22 experiments --only-ebm --prep skip
-```
+| Artifact | Purpose |
+| --- | --- |
+| `tables/manuscript_<outcome>_main.{docx,pdf,html,md}` | Whole-case core comparison across all three families |
+| Companion CSVs and `tables/metrics_summary.*` | Full metrics, denominators, and inspectable values |
+| `tables/results_*_{main,delta}.*` | Detailed and supplementary results |
+| `figures/incremental_ap_<outcome>_main.{svg,png,csv}` | Paired combined-versus-clinical AP differences |
+| ROC/PR/calibration figures | Pooled outer-test curves and scores; calibration axes cover 0–1 |
+| `reports/report.{md,docx,pdf}` | Consolidated working/supplementary report |
 
-`--prep auto` and `--prep skip` validate the Step 01/03/05 processed-artifact
-sidecars before reuse.
+Main model tables prioritize AP, AUROC, Brier score, and paired AP differences.
+Supplementary tables retain branch identity and all requested classification
+metrics. Shading and selective bolding are descriptive, not significance marks.
+Fold mean/SD curves are optional supplemental output, explicitly not confidence
+intervals. Diagnostic status remains visible throughout exports.
 
-### Descriptive reporting bundle
+## Comparisons and decision curves
 
-```bash
-python -m run_catch22 descriptive
-```
+Scoped results and paper tables include:
 
-This regenerates:
+| File | Contents |
+| --- | --- |
+| `paired_comparisons.csv` | Directed core/ablation differences with paired intervals |
+| `decision_curve_summary.csv` | Model, treat-all, and treat-none net benefit with pointwise intervals |
+| `decision_curve_comparisons.csv` | Paired net-benefit differences and intervals |
+| `delong_comparisons.csv` | Design eligibility, numerical status, raw/Holm-adjusted p-values |
+| `comparison_inventory.json` | Coverage, hashes, actual bootstrap-draw identities, and calculation policy |
 
-- preoperative descriptives
-- cohort flow figures
-- missingness tables
+`comparison_primary` bundles emphasize the six primary whole-case AP contrasts;
+`comparison_families` covers secondary matched-input family comparisons. There
+are 18 unique core contrasts per cohort/outcome/branch. Requested ablations
+retain their same-family `preop_only` dependency. Intervals use shared patient
+resamples and operation-weighted denominators, including all repeat operations.
+Valid replicate counts and uncertainty protocol 3 accompany the requested draw
+count. Intervals condition on saved models; they do not repeat model development.
 
-from saved artifacts rather than rerunning model training.
+Ordinary DeLong is unavailable for pooled CV or repeat-patient designs; these
+rows retain `unsupported_design` and missing p-values. Verified independent
+holdouts use guarded calculations and Holm correction. Degenerate results are
+explicit. DCA thresholds are exploratory; `dca_delta_*` figures have pointwise
+bands, while `dca_families_*` compares families. Neither interval overlap nor
+these broad threshold grids establish simultaneous or clinical superiority.
 
-## Metrics and report regeneration
+## Descriptives and explanations
 
-If predictions already exist and you only need consolidated paper outputs:
+Table 1 uses source-value median/IQR, explicit missingness, clinical sections,
+and operation/patient denominators. Cohort flow, missingness, and descriptives
+share the frozen scope/branch selectors. Whole-case outputs use the base names
+`preop_descriptives`, `missingness_table`, and `cohort_flow`; windowed outputs
+append `_windowed` to avoid overwriting another population. Flow counts live in
+`metadata/cohort_flow_counts*.json`.
 
-```bash
-python -m results_recreation.metrics_summary \
-  --results-dir results/catch22/experiments \
-  --delta-mode reference \
-  --reference-feature-set preop_only
+Fold explanations are under `figures/fold_explanations/`, mirroring model/fold
+identity. They verify saved bundles and modeling-data hashes before export:
 
-python -m reporting.make_report
-```
+- LR: coefficients, intercept, training-SD units, and fold-specific encodings.
+  Individual one-hot coefficients are not reference-category odds ratios.
+- XGBoost: held-out SHAP contributions, importance, beeswarms, and base values
+  on the raw uncalibrated log-odds scale.
+- EBM: native term importance, held-out contributions, response plots, and
+  separate missing/unknown-bin scores.
 
-The reporting path is artifact-based:
-
-- `metrics_summary` validates stored predictions and paired validation metadata
-- tables and figures are rebuilt from saved predictions, calibrations, and
-  labels
-- no model, calibrator, or threshold is refit at report time
-
-## Paper-facing bundle
-
-The publication-facing surface lives under `results/catch22/paper/`.
-
-Primary files:
-
-- `tables/metrics_summary.{csv,md,docx,pdf}`
-- `tables/results_*_{main,delta}.csv` and companion formatted exports
-- `figures/` for ROC, PR, calibration, cohort flow, SHAP, and manuscript
-  figures
-- `reports/report.{md,docx,pdf}`
-- `metadata/cohort_flow_counts.json`
-- `manifest.json`
-
-The paper tree is designed for downstream manuscript writing and supplemental
-assembly without requiring model retraining.
-
-## Metrics summary contract
-
-`results_recreation.metrics_summary` consolidates saved predictions across
-configurations and computes:
-
-- discrimination metrics
-- thresholded operating-point metrics
-- confidence intervals
-- paired delta summaries against a reference feature set
-
-Bootstrap uncertainty is computed from saved predictions using patient-grouped
-resampling when `subjectid` is available.
-
-## Descriptive artifact bundle
-
-The descriptive branch produces the non-model outputs most likely to be reused
-in the manuscript and supplement:
-
-### Cohort flow
-
-- `figures/cohort_flow.svg`
-- `figures/cohort_flow.png`
-- counts source: `metadata/cohort_flow_counts.json`
-
-### Preoperative descriptives
-
-- `tables/preop_descriptives.csv`
-- `tables/preop_descriptives.md`
-- `tables/preop_descriptives.docx`
-- `tables/preop_descriptives.pdf`
-- plus HTML/LaTeX companion exports
-
-### Missingness
-
-- `tables/missingness_table.csv`
-- `tables/missingness_table.md`
-- `tables/missingness_table.docx`
-- `tables/missingness_table.pdf`
-- plus HTML companion export
-
-## Interpretability outputs
-
-The primary tree also supports model-family-specific interpretability artifacts.
-
-- XGBoost: SHAP figures rebuilt from saved model bundles and predictions
-- EBM: optional native explanation exports, with convenience entry points under
-  `results/catch22/xai/`
-
-These artifacts are additive to the predictive evaluation outputs and should be
-treated as supplementary or exploratory unless explicitly incorporated into the
-paper workflow.
-
-## Smoke outputs
-
-Smoke runs write a miniature but structurally valid artifact tree under
-`SMOKE_ROOT`. They are intended for pipeline verification rather than final
-evidence generation.
-
-Smoke runs still exercise:
-
-- Steps 01-05
-- Step 07 holdout validation
-- metrics aggregation
-- report generation
-
-## Experimental and legacy outputs
-
-- Aeon outputs are experimental and documented in
-  `experimental/aeon/README.md` and `results/aeon/README.md`.
-- Archive outputs are retained for reference only and are not part of the
-  validated default paper path.
+Explanations describe fitted associations rather than causal mechanisms;
+logistic recalibration remains separate. Legacy single-model SHAP/EBM HTML
+exports are opt-in. Smoke outputs live only under their disposable `SMOKE_ROOT`.
+Aeon and archived outputs are outside the manuscript pathway.

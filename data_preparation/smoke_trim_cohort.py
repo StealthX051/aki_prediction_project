@@ -1,15 +1,19 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
 import pandas as pd
 
 from data_preparation.outcome_registry import get_trainable_outcome_spec
+from data_preparation.cohort_scopes import COHORT_SCOPES, select_cohort
+from data_preparation.artifact_metadata import metadata_path_for
 
 DEFAULT_SMOKE_OUTCOMES = ("any_aki", "icu_admission")
 MIN_PER_CLASS_BY_OUTCOME = {
-    "any_aki": 4,
+    "any_aki": 8,
+    "icu_admission": 8,
 }
 
 
@@ -27,8 +31,13 @@ def trim_cohort_for_smoke(
     limit: int,
     outcome_names: list[str],
     random_state: int = 42,
+    cohort_scope: str | None = None,
 ) -> pd.DataFrame:
     df = pd.read_csv(cohort_path)
+    before_operations = len(df)
+    before_patients = int(df["subjectid"].nunique()) if "subjectid" in df else None
+    if cohort_scope is not None:
+        df = select_cohort(df, cohort_scope)
     if limit <= 0:
         raise ValueError("Smoke cohort limit must be positive.")
 
@@ -55,6 +64,9 @@ def trim_cohort_for_smoke(
 
         pos = _unique_subject_sample(labeled[labeled[spec.target_col] == 1], per_class)
         neg = _unique_subject_sample(labeled[labeled[spec.target_col] == 0], per_class)
+        minimum = MIN_PER_CLASS_BY_OUTCOME.get(outcome_name, 2)
+        if min(len(pos), len(neg)) < minimum:
+            raise ValueError(f"Smoke requires at least {minimum} patient groups in each class for {outcome_name}.")
         selected_frames.extend([pos, neg])
 
     if selected_frames:
@@ -66,8 +78,22 @@ def trim_cohort_for_smoke(
         additional = df.loc[~df["caseid"].isin(df_smoke["caseid"])].head(effective_limit - len(df_smoke))
         df_smoke = pd.concat([df_smoke, additional], ignore_index=True)
 
-    df_smoke = df_smoke.head(effective_limit).sample(frac=1, random_state=random_state).reset_index(drop=True)
+    # The union can exceed the requested limit; truncating it can remove a later
+    # outcome's class support. This is an intentionally enriched diagnostic set.
+    df_smoke = df_smoke.sample(frac=1, random_state=random_state).reset_index(drop=True)
     df_smoke.to_csv(cohort_path, index=False)
+    sidecar = metadata_path_for(cohort_path)
+    if sidecar.exists():
+        metadata = json.loads(sidecar.read_text())
+        metadata["diagnostic_trim"] = {
+            "diagnostic": True, "cohort_scope": cohort_scope,
+            "before_operations": before_operations, "after_operations": len(df_smoke),
+            "before_patients": before_patients,
+            "after_patients": int(df_smoke["subjectid"].nunique()) if "subjectid" in df_smoke else None,
+        }
+        temporary = sidecar.with_suffix(sidecar.suffix + ".tmp")
+        temporary.write_text(json.dumps(metadata, indent=2, sort_keys=True))
+        temporary.replace(sidecar)
     return df_smoke
 
 
@@ -81,6 +107,7 @@ def _parse_args() -> argparse.Namespace:
         help="Comma-separated trainable outcomes that the smoke cohort must preserve class support for.",
     )
     parser.add_argument("--random-state", type=int, default=42, help="Shuffle seed for the trimmed cohort.")
+    parser.add_argument("--cohort-scope", choices=COHORT_SCOPES)
     return parser.parse_args()
 
 
@@ -92,6 +119,7 @@ def main() -> None:
         limit=args.limit,
         outcome_names=outcome_names or list(DEFAULT_SMOKE_OUTCOMES),
         random_state=args.random_state,
+        cohort_scope=args.cohort_scope,
     )
 
     for outcome_name in outcome_names:

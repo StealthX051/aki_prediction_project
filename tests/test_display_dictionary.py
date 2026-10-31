@@ -8,6 +8,9 @@ def test_direct_feature_lookup_includes_unit():
 
     assert "Estimated GFR" in label
     assert "mL/min/1.73 m²" in label
+    assert "%" in names.feature_label("preop_pt", include_unit=True)
+    assert "mg/dL" in names.feature_label("preop_crp", include_unit=True)
+    assert "performed" not in names.feature_label("preop_ecg").lower()
 
 
 def test_catch22_feature_label_parses_waveform_and_aggregate():
@@ -31,3 +34,14 @@ def test_branch_label_supports_short_form():
     names = load_display_dictionary()
 
     assert names.branch_label("windowed", use_short=True) == "Windowed"
+
+
+def test_derived_waveform_statistics_do_not_inherit_source_signal_units():
+    names = load_display_dictionary()
+    for feature in ("Primus_AWP_CO_f1ecac", "SNUADC_ECG_II_SB_BinaryStats_mean_longstretch1"):
+        entry = names.feature_entry(feature)
+        assert entry.label != feature
+        assert entry.unit is None
+        assert "hPa" not in names.feature_label(feature, include_unit=True)
+        assert "mV" not in names.feature_label(feature, include_unit=True)
+    assert names.waveforms["Primus/AWP"]["unit"] == "hPa"

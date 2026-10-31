@@ -16,9 +16,11 @@ Inspect the touched files plus the usual leakage hotspots:
 
 Verify all of the following:
 
-- The grouped split is created once in Step 03 and propagated via the
+- The grouped holdout split is created once in Step 03 and propagated via the
   outcome-specific split columns (`split_group_any_aki`,
   `split_group_icu_admission`, and related fields).
+- Nested patient-grouped folds are frozen and reused through the split cache;
+  feature sets within a scope/branch retain the same operation roster.
 - Learned preprocessing statistics are fit on training data only.
 - Hyperparameter optimization uses training/CV data only.
 - Calibration and threshold selection are fit on training or out-of-fold

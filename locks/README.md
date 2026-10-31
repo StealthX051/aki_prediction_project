@@ -59,12 +59,12 @@ Native checks use real libraries in a separate process before pytest: Catch24
 names/order and values against one synthetic Windows Python 3.9 reference
 (`rtol=atol=1e-10`), CPU XGBoost fit/predict/SHAP/save-load, EBM through the
 repository factory (`missing='gain'`, `max_bins=1024`), Plotly HTML and synthetic
-CSV/Markdown/DOCX/PDF creation. Exported files are checked for existence and
-size. This does not include visual review or optional browser image exports.
+CSV/Markdown/DOCX/PDF creation. Checks verify SHAP additivity, EBM explanation
+values, CSV roundtrip, Markdown/DOCX content, and PDF structure. This does not
+include visual review or optional browser image exports.
 
-`tests/test_vitaldb.py` is explicitly excluded because it is a live-service
-diagnostic with an incorrect waveform key and no meaningful failure assertions.
-Repair that diagnostic before relying on it. Real-data smoke for both models,
+The automated suite is offline; obsolete live-service diagnostics have been
+removed. Real-data smoke for the three model families,
 input provenance, cohort/split/schema checks and comparisons with original
 results remain separate prerequisites for scientific reproduction. Do not
 modify the original GPU VM or research volume to perform environment replay.

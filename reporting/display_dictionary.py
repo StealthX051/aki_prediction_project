@@ -193,7 +193,9 @@ class DisplayDictionary:
                 aggregate_label = self.catch22_aggregates.get(aggregate, aggregate)
                 label = f"{label} ({aggregate_label})"
 
-            unit = waveform_entry.unit if waveform_entry else None
+            # Do not assume every statistic shares the raw signal's unit.
+            # Only an explicitly registered statistic unit is publishable.
+            unit = stat_entry.unit if stat_entry else None
             description = stat_entry.description if stat_entry else None
             return DisplayEntry(label=label, unit=unit, description=description)
 

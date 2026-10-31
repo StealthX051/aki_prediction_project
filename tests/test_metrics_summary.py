@@ -1,11 +1,8 @@
-import sys
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import pytest
-
-sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 import results_recreation.metrics_summary as metrics_summary
 from results_recreation.metrics_summary import (
@@ -167,4 +164,9 @@ def test_summarize_tolerates_empty_bootstrap_frames(monkeypatch):
     summary_df, bootstrap_df = summarize([pred_set], n_bootstrap=10, n_jobs=1)
 
     assert len(summary_df) == 1
+    assert summary_df.loc[0, "auroc"] == 1
+    assert summary_df.loc[0, "auprc"] == 1
+    assert summary_df.loc[0, "brier"] == pytest.approx(.16)
+    assert summary_df.loc[0, "auroc_bootstrap_valid"] == 0
+    assert pd.isna(summary_df.loc[0, "auroc_lower"])
     assert bootstrap_df is None

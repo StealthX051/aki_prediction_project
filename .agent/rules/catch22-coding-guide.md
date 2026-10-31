@@ -35,6 +35,10 @@ trigger: always_on
 ## 5. Verification
 
 - Prefer the smallest check that proves the surviving path works.
+- Keep pytest offline and isolated; `tests/conftest.py` sets paths before imports.
+- Test scientific invariants, independent numerical examples, and observable
+  failures. Reuse expensive fitted fixtures; avoid duplicate cases and assertions
+  that merely repeat implementation constants or check file existence.
 - For pipeline changes, prefer `python -m run_catch22 smoke`.
 - For reporting changes, prefer targeted pytest plus
   `results_recreation.metrics_summary` or `reporting.make_report` as needed.

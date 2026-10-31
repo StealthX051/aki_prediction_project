@@ -1,21 +1,68 @@
 import json
+import os
 from pathlib import Path
 import pickle
+import subprocess
 import sys
 
-import matplotlib.axes
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import pytest
-
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
+from docx import Document
 
 from model_creation.preprocessing import FoldPreprocessor
 import results_recreation.metrics_summary as metrics_summary
 import results_recreation.results_analysis as results_analysis
 import reporting.make_shap_figures as shap_figures
+
+
+def test_reporting_help_imports_without_creating_output_directories(tmp_path):
+    environment = os.environ.copy()
+    destinations = {
+        "RESULTS_DIR": tmp_path / "experiments",
+        "PAPER_DIR": tmp_path / "paper",
+        "FIGURES_DIR": tmp_path / "paper/figures",
+        "TABLES_DIR": tmp_path / "paper/tables",
+        "REPORTS_DIR": tmp_path / "paper/reports",
+    }
+    environment.update({name: str(path) for name, path in destinations.items()})
+    environment["AKI_STORAGE_POLICY"] = "enforce"
+    environment["LOG_FILE"] = str(tmp_path / "imports.log")
+    result = subprocess.run(
+        [sys.executable, "-m", "reporting.make_report", "--help"],
+        cwd=Path(__file__).resolve().parents[1], env=environment,
+        capture_output=True, text=True, check=True,
+    )
+    assert "--strict" in result.stdout and "--run-manifest" in result.stdout
+    assert all(not path.exists() for path in destinations.values())
+
+
+def test_report_writers_enforce_storage_policy_before_creating_outputs(tmp_path, monkeypatch):
+    from artifact_paths import StoragePolicyError
+    monkeypatch.setenv("AKI_STORAGE_POLICY", "enforce")
+    for name in ("TABLES_DIR", "REPORTS_DIR", "FIGURES_DIR"):
+        monkeypatch.setattr(results_analysis, name, tmp_path / name.lower())
+    metrics = results_analysis.prepare_metrics_for_display(_summary_df())
+    for write in (results_analysis.generate_html_tables, results_analysis.generate_markdown_report,
+                  results_analysis.generate_docx_report, results_analysis.generate_pdf_report):
+        with pytest.raises(StoragePolicyError):
+            write(metrics)
+    predictions = pd.DataFrame({"outcome": "any_aki", "branch": "windowed", "model_name": "XGBoost",
+        "feature_set": "preop_only", "y_true": [0, 1], "y_prob_calibrated": [.1, .8]})
+    with pytest.raises(StoragePolicyError):
+        results_analysis.plot_curves(predictions, results_analysis.PlotConfig(n_jobs=1))
+    assert not list(tmp_path.iterdir())
+
+
+@pytest.fixture
+def fresh_shap_caches():
+    caches = (shap_figures._branch_dataset, shap_figures._display_dictionary)
+    for cached in caches:
+        cached.cache_clear()
+    yield
+    for cached in caches:
+        cached.cache_clear()
 
 
 def _summary_df() -> pd.DataFrame:
@@ -77,13 +124,16 @@ def test_metrics_summary_write_outputs_exports_manuscript_bundle(tmp_path: Path,
     monkeypatch.setattr(metrics_summary, "PAPER_DIR", paper_dir)
     monkeypatch.setattr(metrics_summary, "PAPER_TABLES_DIR", paper_tables_dir)
 
-    metrics_summary.write_outputs(_summary_df(), bootstrap_df=None, save_bootstrap=None)
+    expected = _summary_df()
+    metrics_summary.write_outputs(expected, bootstrap_df=None, save_bootstrap=None)
 
-    assert (tables_dir / "metrics_summary.csv").exists()
-    assert (paper_tables_dir / "metrics_summary.csv").exists()
-    assert (paper_tables_dir / "metrics_summary.md").exists()
-    assert (paper_tables_dir / "metrics_summary.docx").exists()
-    assert (paper_tables_dir / "metrics_summary.pdf").exists()
+    for directory in (tables_dir, paper_tables_dir):
+        pd.testing.assert_frame_equal(pd.read_csv(directory / "metrics_summary.csv"), expected)
+    assert "0.810" in (paper_tables_dir / "metrics_summary.md").read_text()
+    document = Document(paper_tables_dir / "metrics_summary.docx")
+    cells = " ".join(cell.text for table in document.tables for row in table.rows for cell in row.cells)
+    assert "0.810" in cells and "0.620" in cells
+    assert (paper_tables_dir / "metrics_summary.pdf").read_bytes().startswith(b"%PDF-")
 
 
 def test_results_analysis_exports_table_bundles_and_reports(tmp_path: Path, monkeypatch):
@@ -108,16 +158,20 @@ def test_results_analysis_exports_table_bundles_and_reports(tmp_path: Path, monk
     results_analysis.generate_pdf_report(metrics_df)
 
     base = tables_dir / "results_any_aki_windowed_XGBoost"
-    assert base.with_suffix(".html").exists()
-    assert base.with_suffix(".md").exists()
-    assert base.with_suffix(".docx").exists()
-    assert base.with_suffix(".pdf").exists()
-    assert (tables_dir / "results_any_aki_windowed_XGBoost_main.csv").exists()
-    assert (tables_dir / "results_any_aki_windowed_XGBoost_delta.csv").exists()
+    for suffix in (".html", ".md"):
+        assert "0.810" in base.with_suffix(suffix).read_text()
+    document = Document(base.with_suffix(".docx"))
+    assert any("0.810" in cell.text for row in document.tables[0].rows for cell in row.cells)
+    assert base.with_suffix(".pdf").read_bytes().startswith(b"%PDF-")
+    main = pd.read_csv(tables_dir / "results_any_aki_windowed_XGBoost_main.csv")
+    delta = pd.read_csv(tables_dir / "results_any_aki_windowed_XGBoost_delta.csv")
+    assert main.loc[0, "AUROC"] == "0.810 (0.750-0.870)"
+    assert delta.loc[0, "Δ Brier Score"] == "-0.020 (-0.030--0.010)"
 
-    assert (reports_dir / "report.md").exists()
-    assert (reports_dir / "report.docx").exists()
-    assert (reports_dir / "report.pdf").exists()
+    assert "0.810" in (reports_dir / "report.md").read_text()
+    report = Document(reports_dir / "report.docx")
+    assert any("0.810" in cell.text for table in report.tables for row in table.rows for cell in row.cells)
+    assert (reports_dir / "report.pdf").read_bytes().startswith(b"%PDF-")
 
     manifest_path = paper_dir / "manifest.json"
     readme_path = paper_dir / "README.md"
@@ -160,7 +214,7 @@ def test_plot_curves_exports_svg_and_png(tmp_path: Path, monkeypatch):
         assert (figures_dir / "primary_figures" / f"{stem}.svg").exists()
 
 
-def test_plot_curves_uses_foldwise_uncertainty_bands_when_fold_metadata_present(tmp_path: Path, monkeypatch):
+def test_supplemental_fold_variability_is_numerically_correct_and_not_labeled_as_ci(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("AKI_STORAGE_POLICY", "off")
     paper_dir = tmp_path / "paper"
     figures_dir = paper_dir / "figures"
@@ -176,28 +230,30 @@ def test_plot_curves_uses_foldwise_uncertainty_bands_when_fold_metadata_present(
             "model_name": ["XGBoost"] * 8,
             "feature_set": ["preop_only"] * 8,
             "y_true": [0, 1, 0, 1, 0, 1, 0, 1],
-            "y_prob_calibrated": [0.15, 0.82, 0.20, 0.77, 0.10, 0.88, 0.24, 0.81],
+            "y_prob_calibrated": [0.1, 0.8, 0.2, 0.9, 0.7, 0.6, 0.2, 0.8],
             "repeat_id": [0] * 8,
             "outer_fold_id": [0, 0, 0, 0, 1, 1, 1, 1],
         }
     )
 
-    fill_between_calls = {"count": 0}
-    original_fill_between = matplotlib.axes.Axes.fill_between
+    figures = {}
+    def inspect_figure(fig, path, **kwargs):
+        ax = fig.axes[0]
+        figures[path.stem] = (ax.get_title(), [line.get_label() for line in ax.lines], len(ax.collections))
+        plt.close(fig)
+        return []
+    monkeypatch.setattr(results_analysis, "save_report_figure_bundle", inspect_figure)
+    results_analysis.plot_curves(prediction_df, config=results_analysis.PlotConfig(n_jobs=1, curve_mode="fold_variability"))
 
-    def _count_fill_between(self, *args, **kwargs):
-        fill_between_calls["count"] += 1
-        return original_fill_between(self, *args, **kwargs)
-
-    monkeypatch.setattr(matplotlib.axes.Axes, "fill_between", _count_fill_between)
-    results_analysis.plot_curves(prediction_df, config=results_analysis.PlotConfig(n_jobs=1))
-
-    assert fill_between_calls["count"] >= 2
+    # Fold AUROCs are 1 and .75: mean .875, population SD .125.
+    title, labels, bands = figures["roc_any_aki_windowed_XGBoost"]
+    assert "AUC = 0.875 +/- 0.125" in labels[0]
+    assert "fold mean ± SD; not a confidence interval" in title
+    assert bands == 1
+    assert figures["pr_any_aki_windowed_XGBoost"][2] == 1
 
 
-def test_make_shap_figures_generates_beeswarm_and_scatter_outputs(tmp_path: Path, monkeypatch):
-    pytest.importorskip("xgboost")
-    pytest.importorskip("shap")
+def test_saved_xgboost_shap_figures_preserve_heldout_features_without_refitting(tmp_path: Path, monkeypatch, fresh_shap_caches):
     import xgboost as xgb
 
     monkeypatch.setenv("AKI_STORAGE_POLICY", "off")
@@ -228,7 +284,9 @@ def test_make_shap_figures_generates_beeswarm_and_scatter_outputs(tmp_path: Path
     feature_df = dataset_df[["age", "preop_cr", "preop_hb", "sex"]].copy()
     y = dataset_df["any_aki"].astype(int)
     preprocessor = FoldPreprocessor(impute_missing=False)
-    transformed = preprocessor.fit_transform(feature_df)
+    train_rows = [0, 1, 6, 7]
+    preprocessor.fit(feature_df.iloc[train_rows])
+    transformed = preprocessor.transform(feature_df)
 
     model = xgb.XGBClassifier(
         objective="binary:logistic",
@@ -236,11 +294,12 @@ def test_make_shap_figures_generates_beeswarm_and_scatter_outputs(tmp_path: Path
         tree_method="hist",
         n_estimators=12,
         max_depth=2,
+        min_child_weight=0,  # Allow a nonconstant tree on this four-row fixture.
         learning_rate=0.3,
         random_state=0,
         n_jobs=1,
     )
-    model.fit(transformed, y)
+    model.fit(transformed.iloc[train_rows], y.iloc[train_rows])
     model.save_model(model_dir / "model.json")
     with (model_dir / "preprocessor.pkl").open("wb") as fp:
         pickle.dump(preprocessor, fp)
@@ -277,13 +336,29 @@ def test_make_shap_figures_generates_beeswarm_and_scatter_outputs(tmp_path: Path
     monkeypatch.setattr(shap_figures, "FIGURES_DIR", figures_dir)
     monkeypatch.setattr(shap_figures, "SHAP_SCATTER_DIR", scatter_dir)
     monkeypatch.setattr(shap_figures, "FEATURED_SCATTER_DIR", featured_dir)
-    shap_figures._branch_dataset.cache_clear()
-    shap_figures._display_dictionary.cache_clear()
     monkeypatch.setattr(shap_figures.model_utils, "load_data", lambda branch: pd.read_csv(dataset_path))
+    monkeypatch.setattr(xgb.XGBClassifier, "fit", lambda *a, **kw: pytest.fail("SHAP export must not refit"))
+    monkeypatch.setattr(FoldPreprocessor, "fit", lambda *a, **kw: pytest.fail("SHAP export must not fit preprocessing"))
+
+    bundles = []
+    original_bundle = shap_figures._bundle_for_job
+    def capture_bundle(*args, **kwargs):
+        bundle = original_bundle(*args, **kwargs)
+        bundles.append(bundle)
+        return bundle
+    monkeypatch.setattr(shap_figures, "_bundle_for_job", capture_bundle)
 
     outputs = shap_figures.generate_shap_outputs(n_jobs=1)
 
     assert outputs
+    assert bundles[0].predictions.caseid.tolist() == test_rows.caseid.tolist()
+    assert set(bundles[0].raw_test_frame.caseid).isdisjoint(dataset_df.iloc[train_rows].caseid)
+    importance = pd.read_csv(figures_dir / "shap_importance_any_aki_non_windowed_preop_only.csv")
+    assert set(importance.feature) == set(transformed_test.columns)
+    assert np.isfinite(importance.mean_abs_shap).all()
+    assert importance.mean_abs_shap.max() > 0
+    expected = np.abs(bundles[0].shap_values).mean(axis=0)
+    np.testing.assert_allclose(importance.set_index("feature").loc[transformed_test.columns, "mean_abs_shap"], expected)
     assert (figures_dir / "shap_beeswarm_any_aki_non_windowed_preop_only.png").exists()
     assert (figures_dir / "shap_beeswarm_any_aki_non_windowed_preop_only.svg").exists()
     assert (figures_dir / "primary_figures" / "shap_beeswarm_any_aki_non_windowed_preop_only.png").exists()

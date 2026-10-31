@@ -1,19 +1,11 @@
 import json
 import logging
-import shutil
-import sys
-import types
 import builtins
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import pytest
-
-# Ensure project root on path
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.append(str(PROJECT_ROOT))
-
 
 import model_creation.utils as utils
 import model_creation.step_06_run_hpo as hpo_module
@@ -27,7 +19,7 @@ class DummyModel:
     def __init__(self, **kwargs):
         self.kwargs = kwargs
 
-    def fit(self, X, y, sample_weight=None):
+    def fit(self, X, y, sample_weight=None, bags=None, verbose=False):
         return self
 
     def predict_proba(self, X):
@@ -72,15 +64,6 @@ class DummyExplanation:
         return self._payload
 
 
-def _install_dummy_interpret(monkeypatch: pytest.MonkeyPatch) -> None:
-    dummy_explain = types.SimpleNamespace(EBMExplanation=DummyExplanation)
-    glassbox = types.SimpleNamespace(ExplainableBoostingClassifier=DummyEbm, _ebm=types.SimpleNamespace(_explain=dummy_explain))
-    monkeypatch.setitem(sys.modules, "interpret", types.SimpleNamespace(glassbox=glassbox))
-    monkeypatch.setitem(sys.modules, "interpret.glassbox", glassbox)
-    monkeypatch.setitem(sys.modules, "interpret.glassbox._ebm", glassbox._ebm)
-    monkeypatch.setitem(sys.modules, "interpret.glassbox._ebm._explain", dummy_explain)
-
-
 def _mock_dataframe() -> pd.DataFrame:
     return pd.DataFrame(
         {
@@ -90,6 +73,8 @@ def _mock_dataframe() -> pd.DataFrame:
             "feature2": [1.0, 1.1, np.nan, 1.3, 1.4, 1.5],
             "aki_label": [0, 1, 0, 1, 0, 1],
             "eligible_any_aki": [1, 1, 1, 1, 1, 1],
+            "eligible_icu_admission": [1] * 6,
+            "y_icu_admit": [0, 1, 0, 1, 0, 1],
             "split_group_any_aki": ["train", "train", "train", "train", "test", "test"],
         }
     )
@@ -103,12 +88,6 @@ def _prepare_data_stub(df: pd.DataFrame, preserve_nan: bool = True):
     y_test = df["aki_label"].iloc[4:]
     scale_pos_weight = 1.0
     return X_train, X_test, y_train, y_test, scale_pos_weight
-
-
-def _fake_generate_oof_predictions(X, y):
-    preds = np.linspace(0.2, 0.8, len(y))
-    folds = np.zeros(len(y), dtype=int)
-    return preds, folds
 
 
 def _fake_outer_result(df: pd.DataFrame, model_type: str, validation_scheme: str = "holdout") -> OuterFoldRunResult:
@@ -189,6 +168,7 @@ def _fake_outer_result(df: pd.DataFrame, model_type: str, validation_scheme: str
 def test_train_evaluate_creates_artifacts(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, model_type: str, model_filename: str):
     results_dir = tmp_path / "results"
     monkeypatch.setattr(train_module.utils, "RESULTS_DIR", results_dir)
+    monkeypatch.setenv("RESULTS_DIR", str(results_dir))
     monkeypatch.setattr(utils, "RESULTS_DIR", results_dir)
     monkeypatch.setattr(train_module, "compute_file_hash", lambda path: "dummy-hash")
 
@@ -199,9 +179,6 @@ def test_train_evaluate_creates_artifacts(monkeypatch: pytest.MonkeyPatch, tmp_p
         "run_outer_split",
         lambda **kwargs: _fake_outer_result(df, model_type=model_type, validation_scheme="holdout"),
     )
-
-    if model_type == "ebm":
-        _install_dummy_interpret(monkeypatch)
 
     train_module.train_evaluate(
         outcome="any_aki",
@@ -215,7 +192,7 @@ def test_train_evaluate_creates_artifacts(monkeypatch: pytest.MonkeyPatch, tmp_p
         n_trials=1,
     )
 
-    output_dir = results_dir / "models" / model_type / "any_aki" / "non_windowed" / "preop_only"
+    output_dir = results_dir / "main_shared" / "holdout" / "models" / model_type / "any_aki" / "non_windowed" / "preop_only"
     predictions_dir = output_dir / "predictions"
     artifacts_dir = output_dir / "artifacts"
 
@@ -226,14 +203,19 @@ def test_train_evaluate_creates_artifacts(monkeypatch: pytest.MonkeyPatch, tmp_p
     assert (output_dir / model_filename).is_file()
 
     written_test = pd.read_csv(predictions_dir / "test.csv")
-    assert "subjectid" in written_test.columns
+    expected_test = _fake_outer_result(df, model_type).test_predictions
+    pd.testing.assert_frame_equal(
+        written_test[expected_test.columns], expected_test, check_dtype=False,
+    )
+    threshold = json.loads((artifacts_dir / "threshold.json").read_text())["threshold"]
+    np.testing.assert_array_equal(written_test.y_pred_label, written_test.y_prob_calibrated >= threshold)
 
-    shutil.rmtree(results_dir, ignore_errors=True)
 
 
 def test_export_ebm_local_attributions(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     results_dir = tmp_path / "results"
     monkeypatch.setattr(train_module.utils, "RESULTS_DIR", results_dir)
+    monkeypatch.setenv("RESULTS_DIR", str(results_dir))
     monkeypatch.setattr(utils, "RESULTS_DIR", results_dir)
     monkeypatch.setattr(train_module, "compute_file_hash", lambda path: "dummy-hash")
 
@@ -244,7 +226,6 @@ def test_export_ebm_local_attributions(monkeypatch: pytest.MonkeyPatch, tmp_path
         "run_outer_split",
         lambda **kwargs: _fake_outer_result(df, model_type="ebm", validation_scheme="holdout"),
     )
-    _install_dummy_interpret(monkeypatch)
 
     train_module.train_evaluate(
         outcome="any_aki",
@@ -261,7 +242,7 @@ def test_export_ebm_local_attributions(monkeypatch: pytest.MonkeyPatch, tmp_path
 
     xai_dir = (
         results_dir
-        / "models"
+        / "main_shared" / "holdout" / "models"
         / "ebm"
         / "any_aki"
         / "non_windowed"
@@ -277,10 +258,12 @@ def test_export_ebm_local_attributions(monkeypatch: pytest.MonkeyPatch, tmp_path
     recon_df = pd.read_csv(attribution_path)
     for required in ["caseid", "raw_logit", "calibrated_probability", "predicted_label"]:
         assert required in recon_df.columns
-    assert not recon_df.empty
+    predictions = pd.read_csv(xai_dir.parent.parent / "predictions/test.csv")
+    assert recon_df.caseid.tolist() == predictions.caseid.tolist()
+    np.testing.assert_array_equal(recon_df.calibrated_probability, predictions.y_prob_calibrated)
+    np.testing.assert_array_equal(recon_df.predicted_label, predictions.y_pred_label)
     assert readme_path.is_file()
 
-    shutil.rmtree(results_dir, ignore_errors=True)
 
 
 def test_plotly_export_warns_without_kaleido(
@@ -305,10 +288,9 @@ def test_plotly_export_warns_without_kaleido(
         def write_image(self, path):
             raise ValueError("Image export requires kaleido")
 
-    go_module = types.SimpleNamespace(Bar=lambda **kwargs: {"bar": kwargs}, Figure=DummyFigure)
-    plotly_module = types.SimpleNamespace(graph_objects=go_module)
-    monkeypatch.setitem(sys.modules, "plotly", plotly_module)
-    monkeypatch.setitem(sys.modules, "plotly.graph_objects", go_module)
+    import plotly.graph_objects as go
+
+    monkeypatch.setattr(go, "Figure", DummyFigure)
 
     destination = tmp_path / "plotly_importances"
 
@@ -343,20 +325,12 @@ def test_plotly_export_skips_when_missing(
     assert "Plotly is not installed" in caplog.text
 
 
-class FakeStudy:
-    def __init__(self):
-        self.best_params = {"learning_rate": 0.1}
-        self.best_value = 0.5
-
-    def optimize(self, func, n_trials, show_progress_bar, n_jobs=None):
-        return None
-
-
 @pytest.mark.parametrize("model_type", ["xgboost", "ebm"])
 def test_run_hpo_smoke_saves_params(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, model_type: str):
     results_dir = tmp_path / "results"
     monkeypatch.setattr(utils, "RESULTS_DIR", results_dir)
     monkeypatch.setattr(train_module.utils, "RESULTS_DIR", results_dir)
+    monkeypatch.setenv("RESULTS_DIR", str(results_dir))
     monkeypatch.setattr(hpo_module.utils, "RESULTS_DIR", results_dir)
 
     df = _mock_dataframe()
@@ -375,15 +349,19 @@ def test_run_hpo_smoke_saves_params(monkeypatch: pytest.MonkeyPatch, tmp_path: P
         model_type=model_type,
     )
 
-    params_path = results_dir / "params" / model_type / "any_aki" / "non_windowed" / "preop_only.json"
+    params_path = results_dir / "main_shared" / "holdout" / "params" / model_type / "any_aki" / "non_windowed" / "preop_only.json"
     assert params_path.is_file()
 
     with params_path.open() as fp:
         saved_params = json.load(fp)
     assert "learning_rate" in saved_params
-    assert "scale_pos_weight" in saved_params
+    assert ("scale_pos_weight" in saved_params) == (model_type == "xgboost")
+    assert saved_params["diagnostic"] is True
+    assert saved_params["n_trials"] == 2
+    assert saved_params["compute_profile"] == (
+        "diagnostic_ebm_200_rounds_2_outer_bags_no_inner_bags" if model_type == "ebm" else "manuscript"
+    )
 
-    shutil.rmtree(results_dir, ignore_errors=True)
 
 
 def test_run_hpo_invalid_feature_set_exits_nonzero(monkeypatch: pytest.MonkeyPatch):
@@ -406,6 +384,7 @@ def test_train_evaluate_holdout_save_final_refit_writes_bundle(
 ):
     results_dir = tmp_path / "results"
     monkeypatch.setattr(train_module.utils, "RESULTS_DIR", results_dir)
+    monkeypatch.setenv("RESULTS_DIR", str(results_dir))
     monkeypatch.setattr(utils, "RESULTS_DIR", results_dir)
     monkeypatch.setattr(train_module, "compute_file_hash", lambda path: "dummy-hash")
 
@@ -446,7 +425,7 @@ def test_train_evaluate_holdout_save_final_refit_writes_bundle(
         save_final_refit=True,
     )
 
-    output_dir = results_dir / "models" / "xgboost" / "any_aki" / "non_windowed" / "preop_only"
+    output_dir = results_dir / "main_shared" / "holdout" / "models" / "xgboost" / "any_aki" / "non_windowed" / "preop_only"
     final_refit_dir = output_dir / "artifacts" / "final_refit"
 
     assert (output_dir / "predictions" / "test.csv").is_file()
@@ -458,5 +437,3 @@ def test_train_evaluate_holdout_save_final_refit_writes_bundle(
 
     validation_manifest = json.loads((output_dir / "artifacts" / "validation.json").read_text())
     assert validation_manifest["final_refit_saved"] is True
-
-    shutil.rmtree(results_dir, ignore_errors=True)

@@ -10,6 +10,8 @@ resampling is clustered at the patient level.
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import concurrent.futures
 import logging
 import sys
@@ -17,7 +19,7 @@ from collections import defaultdict
 from functools import lru_cache
 import os
 import shutil
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
@@ -39,7 +41,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from artifact_paths import enforce_storage_policy, get_paper_dir, get_results_dir
+from artifact_paths import enforce_storage_policy, get_scoped_results_dir, get_scoped_paper_dir
 from data_preparation.inputs import COHORT_FILE, INPUT_FILE
 from model_creation.prediction_io import REQUIRED_PREDICTION_COLUMNS, validate_prediction_dataframe
 from reporting.manuscript_assets import export_dataframe_bundle, refresh_paper_bundle
@@ -47,13 +49,13 @@ from reporting.manuscript_assets import export_dataframe_bundle, refresh_paper_b
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-RESULTS_DIR = get_results_dir(PROJECT_ROOT)
-PAPER_DIR = get_paper_dir(PROJECT_ROOT)
+RESULTS_DIR = get_scoped_results_dir(PROJECT_ROOT, os.getenv("COHORT_SCOPE", "main_shared"), os.getenv("VALIDATION_SCHEME", "nested_cv"))
+PAPER_DIR = get_scoped_paper_dir(PROJECT_ROOT, os.getenv("COHORT_SCOPE", "main_shared"), os.getenv("VALIDATION_SCHEME", "nested_cv"))
 TABLES_DIR = RESULTS_DIR / "tables"
 PAPER_TABLES_DIR = PAPER_DIR / "tables"
 
 ARTIFACT_FILES = ("calibration.json", "threshold.json")
+UNCERTAINTY_PROTOCOL_VERSION = 3
 PATIENT_ID_COLUMNS = ("subjectid", "subject_id")
 
 
@@ -69,6 +71,9 @@ class PredictionSet:
     feature_set: str
     model_name: str
     pipeline: Optional[str]
+    cohort_scope: str = "legacy"
+    validation_scheme: str = "legacy"
+    analysis_status: str = "legacy"
 
 
 class ValidationError(Exception):
@@ -178,11 +183,16 @@ def _attach_patient_ids(df: pd.DataFrame, pred_path: Path) -> pd.DataFrame:
     return enriched_df
 
 
-def _load_predictions(pred_path: Path) -> PredictionSet:
+def _load_predictions(pred_path: Path, *, strict: bool = False) -> PredictionSet:
     df = pd.read_csv(pred_path)
     threshold = _validate_dataframe(df, pred_path)
     _validate_artifacts(pred_path)
-    df = _attach_patient_ids(df, pred_path)
+    if strict:
+        for column in ("subjectid", "cohort_scope", "validation_scheme"):
+            if column not in df or df[column].isna().any():
+                raise ValidationError(f"{pred_path} requires nonmissing {column} for definitive reporting")
+    else:
+        df = _attach_patient_ids(df, pred_path)
 
     outcome = _assert_single_value(df, "outcome", pred_path)
     branch = _assert_single_value(df, "branch", pred_path)
@@ -203,10 +213,12 @@ def _load_predictions(pred_path: Path) -> PredictionSet:
         feature_set=feature_set,
         model_name=model_name,
         pipeline=pipeline,
+        cohort_scope=_assert_single_value(df, "cohort_scope", pred_path) if "cohort_scope" in df else "legacy",
+        validation_scheme=_assert_single_value(df, "validation_scheme", pred_path) if "validation_scheme" in df else "legacy",
     )
 
 
-def crawl_predictions(results_dir: Path) -> List[PredictionSet]:
+def crawl_predictions(results_dir: Path, *, strict: bool = False, run_manifest: Optional[Path] = None, require_reference: bool = False, reference_feature_set: str = "preop_only", reference_model_name: Optional[str] = None) -> List[PredictionSet]:
     """Discover and load all test prediction files under the results directory."""
 
     patterns = [
@@ -233,8 +245,10 @@ def crawl_predictions(results_dir: Path) -> List[PredictionSet]:
     for pred_file in pred_files:
         logger.info("Loading predictions from %s", pred_file)
         try:
-            prediction_sets.append(_load_predictions(pred_file))
+            prediction_sets.append(_load_predictions(pred_file, strict=strict))
         except ValidationError as exc:
+            if strict:
+                raise
             logger.warning("Skipping invalid prediction file %s: %s", pred_file, exc)
 
     if not prediction_sets:
@@ -243,7 +257,163 @@ def crawl_predictions(results_dir: Path) -> List[PredictionSet]:
             "or 'results/aeon/models/**/predictions/test.csv'."
         )
 
+    if strict:
+        prediction_sets = _validate_run_manifest(prediction_sets, run_manifest or results_dir / "run_manifest.json", require_reference=require_reference, reference_feature_set=reference_feature_set, reference_model_name=reference_model_name)
     return prediction_sets
+
+
+def _model_id(name: str) -> str:
+    return {"XGBoost": "xgboost", "EBM": "ebm", "Logistic regression": "logistic_regression"}.get(name, name)
+
+
+def _validate_run_manifest(prediction_sets: List[PredictionSet], path: Path, *, require_reference: bool = False, reference_feature_set: str = "preop_only", reference_model_name: Optional[str] = None) -> List[PredictionSet]:
+    if not path.exists():
+        raise ValidationError(f"Definitive reporting requires run manifest: {path}")
+    manifest = json.loads(path.read_text())
+    expected = {(c["model_type"], c["outcome"], c["branch"], c["feature_set"]) for c in manifest["configurations"]}
+    if not expected:
+        raise ValidationError("Run manifest contains no requested configurations")
+    scope, scheme = manifest["cohort_scope"], manifest["validation_scheme"]
+    found = {}
+    for ps in prediction_sets:
+        if (ps.cohort_scope, ps.validation_scheme) != (scope, scheme):
+            raise ValidationError(f"Mixed cohort or validation scheme in {ps.path}")
+        key = (_model_id(ps.model_name), ps.outcome, ps.branch, ps.feature_set)
+        if key in found:
+            raise ValidationError(f"Duplicate prediction configuration: {key}")
+        found[key] = ps
+    missing = expected - found.keys()
+    if missing:
+        raise ValidationError(f"Missing required prediction configurations: {sorted(missing)}")
+    requested = set(expected)
+    for family, outcome, branch, feature in requested:
+        if require_reference and reference_model_name and _model_id(reference_model_name) != family:
+            raise ValidationError("Strict reporting requires a same-family reference; cross-family overrides require --legacy")
+        reference = (_model_id(reference_model_name) if reference_model_name else family, outcome, branch, reference_feature_set)
+        if reference in found:
+            expected.add(reference)
+        elif require_reference:
+            raise ValidationError(f"Missing same-family reference dependency: {reference}")
+    from data_preparation.cohort_scopes import selected_case_hash
+    protocol_keys = ("validation_protocol_version", "code_revision", "code_hash", "environment", "preprocessing_protocol")
+    expected_protocol = manifest.get("study_identity")
+    diagnostic = bool(manifest.get("diagnostic", False))
+    if not diagnostic and not expected_protocol:
+        raise ValidationError("Definitive reporting requires study_identity in the run manifest")
+    for key in expected:
+        ps = found[key]
+        roster = manifest.get("branch_rosters", {}).get(ps.branch)
+        if not roster:
+            raise ValidationError(f"Missing frozen branch roster for {ps.branch}")
+        roster_frame = ps.df
+        if scheme == "holdout":
+            train_path = ps.path.parent / "train_oof.csv"
+            if not train_path.exists():
+                raise ValidationError(f"Holdout roster verification requires {train_path}")
+            training = pd.read_csv(train_path)
+            if (set(training["caseid"]) & set(ps.df["caseid"])
+                    or set(training["subjectid"]) & set(ps.df["subjectid"])):
+                raise ValidationError(f"Holdout training/evaluation operation or patient overlap: {ps.path}")
+            roster_frame = pd.concat([training[["caseid", "subjectid"]], ps.df[["caseid", "subjectid"]]], ignore_index=True)
+        actual_hash = selected_case_hash(roster_frame)
+        if actual_hash != roster["selected_case_hash"]:
+            raise ValidationError(f"Prediction cases/patients do not match frozen branch roster: {ps.path}")
+        if "selected_case_hash" in ps.df:
+            if ps.df["selected_case_hash"].isna().any():
+                raise ValidationError(f"Missing prediction selected_case_hash: {ps.path}")
+            declared = _assert_single_value(ps.df, "selected_case_hash", ps.path)
+            if declared != actual_hash:
+                raise ValidationError(f"Prediction selected_case_hash does not match saved rows: {ps.path}")
+        artifact_dir = ps.path.parent.parent / "artifacts"
+        metadata_path = artifact_dir / "metadata.json"
+        if not metadata_path.exists():
+            raise ValidationError(f"Missing saved validation metadata: {metadata_path}")
+        metadata = json.loads(metadata_path.read_text())
+        fingerprint = metadata.get("validation_fingerprint", {})
+        dataset_hash = roster.get("dataset_sha256")
+        if (not diagnostic and not dataset_hash) or (dataset_hash and fingerprint.get("dataset_hash") != dataset_hash):
+            raise ValidationError(f"Saved modeling dataset differs from the frozen branch dataset hash: {metadata_path}")
+        protocol = {name: fingerprint.get(name) for name in protocol_keys}
+        if any(value is None for value in protocol.values()):
+            raise ValidationError(f"Incomplete saved protocol identity: {metadata_path}")
+        if expected_protocol is None:
+            expected_protocol = protocol
+        if protocol != expected_protocol:
+            raise ValidationError(f"Mixed or stale model code/environment protocol: {metadata_path}")
+        declared_diagnostic = ps.df.get("diagnostic", pd.Series(dtype=object)).astype(str).str.lower().map(
+            {"true": True, "false": False, "1": True, "0": False})
+        if (len(declared_diagnostic) != len(ps.df) or declared_diagnostic.isna().any()
+                or not declared_diagnostic.eq(diagnostic).all()
+                or metadata.get("diagnostic") != diagnostic
+                or fingerprint.get("diagnostic") != diagnostic):
+            raise ValidationError(f"Diagnostic status conflicts with saved validation: {metadata_path}")
+        if fingerprint.get("cohort_scope") != scope or fingerprint.get("validation_scheme") != scheme:
+            raise ValidationError(f"Saved protocol cohort/validation scope mismatch: {metadata_path}")
+        compute_profile = fingerprint.get("compute_profile")
+        if compute_profile not in {"manuscript", "diagnostic_ebm_200_rounds_2_outer_bags_no_inner_bags"}:
+            raise ValidationError(f"Missing or unknown model compute profile: {metadata_path}")
+        if metadata.get("compute_profile") != compute_profile:
+            raise ValidationError(f"Model compute profile conflicts with saved fingerprint: {metadata_path}")
+        if not diagnostic and compute_profile != "manuscript":
+            raise ValidationError(f"Diagnostic compute profile cannot be promoted to definitive results: {metadata_path}")
+        if not diagnostic:
+            if (scheme != "nested_cv" or metadata.get("outer_folds") != 5 or metadata.get("inner_folds") != 3
+                    or metadata.get("calibration_folds") != 5
+                    or metadata.get("repeats") != 1 or fingerprint.get("outer_folds") != 5
+                    or fingerprint.get("inner_folds") != 3 or fingerprint.get("calibration_folds") != 5
+                    or fingerprint.get("repeats") != 1
+                    or "outer_fold_id" not in ps.df or ps.df.outer_fold_id.nunique() != 5
+                    or "repeat_id" not in ps.df or ps.df.repeat_id.nunique() != 1):
+                raise ValidationError(f"Definitive report requires 5 outer / 3 HPO / 5 calibration folds and one repeat: {metadata_path}")
+            fold_paths = list(artifact_dir.glob("folds/repeat_*/outer_*/metadata.json"))
+            if len(fold_paths) != 5:
+                raise ValidationError(f"Definitive report requires five completed fold bundles: {artifact_dir}")
+            for fold_path in fold_paths:
+                fold = json.loads(fold_path.read_text())
+                from model_creation.validation import is_outer_fold_checkpoint_complete
+                if (fold.get("status") != "completed" or fold.get("actual_inner_folds") != 3
+                        or fold.get("requested_inner_folds") != 3
+                        or fold.get("requested_calibration_folds") != 5
+                        or fold.get("actual_calibration_folds") != 5
+                        or fold.get("validation_fingerprint") != fingerprint
+                        or not is_outer_fold_checkpoint_complete(fold_path.parent)):
+                    raise ValidationError(f"Incomplete or reduced definitive validation fold: {fold_path}")
+        if scheme == "nested_cv" and (not diagnostic or fingerprint.get("checkpoint_bundle_protocol_version") == 2):
+            _validate_nested_prediction_union(ps, artifact_dir, fingerprint)
+    status = "diagnostic" if diagnostic else "definitive"
+    return [replace(found[key], analysis_status=status) for key in sorted(expected)]
+
+
+def _validate_nested_prediction_union(ps: PredictionSet, artifact_dir: Path, fingerprint: dict) -> None:
+    """Require pooled predictions to be the saved, verified outer-test union."""
+    from model_creation.validation import is_outer_fold_checkpoint_complete
+    fold_paths = sorted(artifact_dir.glob("folds/repeat_*/outer_*/metadata.json"))
+    if not fold_paths:
+        raise ValidationError(f"Missing saved outer-fold prediction bundles: {artifact_dir}")
+    frames = []
+    for path in fold_paths:
+        metadata = json.loads(path.read_text())
+        if metadata.get("validation_fingerprint") != fingerprint or not is_outer_fold_checkpoint_complete(path.parent):
+            raise ValidationError(f"Invalid saved outer-fold bundle: {path.parent}")
+        frame = pd.read_csv(path.parent / "test_predictions.csv")
+        for column in ("repeat_id", "outer_fold_id"):
+            if column not in frame or frame[column].isna().any() or not frame[column].eq(metadata.get(column)).all():
+                raise ValidationError(f"Saved fold prediction identity mismatch: {path}")
+        frames.append(frame)
+    saved = pd.concat(frames, ignore_index=True)
+    keys = ["caseid", "repeat_id", "outer_fold_id"]
+    values = ["subjectid", "y_true", "y_prob_raw", "y_prob_calibrated", "threshold", "y_pred_label"]
+    columns = keys + values
+    for frame in (ps.df, saved):
+        if any(column not in frame for column in columns) or frame[columns].isna().any().any() or frame.duplicated(keys).any():
+            raise ValidationError(f"Incomplete or duplicate root/fold prediction identity: {ps.path}")
+    root = ps.df.sort_values(keys).reset_index(drop=True)
+    saved = saved.sort_values(keys).reset_index(drop=True)
+    exact = keys + ["subjectid", "y_true", "y_pred_label"]
+    if (len(root) != len(saved) or not root[exact].equals(saved[exact])
+            or not np.allclose(root[["y_prob_raw", "y_prob_calibrated", "threshold"]],
+                               saved[["y_prob_raw", "y_prob_calibrated", "threshold"]], rtol=0, atol=1e-12)):
+        raise ValidationError(f"Root predictions differ from verified outer-fold prediction union: {ps.path}")
 
 
 def _safe_metric(func, *args, **kwargs) -> float:
@@ -272,27 +442,30 @@ def _compute_metrics_arrays(
 ) -> Dict[str, float]:
     """Fast path to compute metrics without constructing a PredictionSet."""
 
+    has_positive = bool(np.any(y_true == 1))
+    has_negative = bool(np.any(y_true == 0))
     metrics = {
         "n": len(y_true),
         "prevalence": float(np.mean(y_true)),
         "threshold": threshold,
-        "auroc": _safe_metric(roc_auc_score, y_true, y_prob),
-        "auprc": _safe_metric(average_precision_score, y_true, y_prob),
+        "auroc": _safe_metric(roc_auc_score, y_true, y_prob) if has_positive and has_negative else float("nan"),
+        "auprc": _safe_metric(average_precision_score, y_true, y_prob) if has_positive else float("nan"),
         "brier": _safe_metric(brier_score_loss, y_true, y_prob),
         "accuracy": _safe_metric(accuracy_score, y_true, y_pred),
         "precision": _safe_metric(precision_score, y_true, y_pred, zero_division=0),
-        "sensitivity": _safe_metric(recall_score, y_true, y_pred),
+        "sensitivity": _safe_metric(recall_score, y_true, y_pred) if has_positive else float("nan"),
     }
 
     tn, fp, fn, tp = (0, 0, 0, 0)
     try:
-        tn, fp, fn, tp = confusion_matrix(y_true, y_pred).ravel()
+        tn, fp, fn, tp = confusion_matrix(y_true, y_pred, labels=[0, 1]).ravel()
     except ValueError:
-        # Confusion matrix not defined (e.g., single class). Leave defaults.
+        # Invalid labels or shapes. Leave defaults; single-class binary draws
+        # have a valid 2x2 matrix because labels are explicit above.
         pass
 
     metrics["specificity"] = float(tn / (tn + fp)) if (tn + fp) > 0 else float("nan")
-    metrics["f1"] = _safe_metric(f1_score, y_true, y_pred)
+    metrics["f1"] = _safe_metric(f1_score, y_true, y_pred, zero_division=0)
 
     return metrics
 
@@ -388,7 +561,7 @@ def _bootstrap_metrics(
     pred_set: PredictionSet,
     n_bootstrap: int,
     seed: int = 0,
-    stratified: bool = True,
+    stratified: bool = False,
     indices_list: Optional[Sequence[np.ndarray]] = None,
 ) -> pd.DataFrame:
     df = pred_set.df
@@ -404,10 +577,6 @@ def _bootstrap_metrics(
         y_true_sample = y_true[sample_idx]
         y_prob_sample = y_prob[sample_idx]
         y_pred_sample = y_pred[sample_idx]
-
-        # Skip replicate if only one class is present after sampling.
-        if len(np.unique(y_true_sample)) < 2:
-            continue
 
         threshold_sample = _summarize_threshold(df.iloc[sample_idx]["threshold"].values)
         metrics = _compute_metrics_arrays(y_true_sample, y_prob_sample, y_pred_sample, threshold_sample)
@@ -502,294 +671,203 @@ def _run_bootstrap_jobs(
     raise RuntimeError("Bootstrapping failed after retries and fallbacks.") from last_error
 
 
-def summarize(
-    prediction_sets: Iterable[PredictionSet],
-    n_bootstrap: int = 1000,
-    stratified_bootstrap: bool = True,
-    bootstrap_seed: int = 0,
-    n_jobs: int = -1,
-    parallel_backend: str = "processes",
-    delta_mode: str = "none",
-    reference_feature_set: str = "preop_only",
-    reference_model_name: Optional[str] = None,
-    bootstrap_timeout: Optional[float] = 1800.0,
-    bootstrap_max_retries: int = 2,
-) -> Tuple[pd.DataFrame, Optional[pd.DataFrame]]:
-    summary_rows: List[Dict[str, object]] = []
-    bootstrap_frames: List[pd.DataFrame] = []
+def _evaluation_hash(df: pd.DataFrame) -> str:
+    columns = ["caseid", "y_true", _get_cluster_column(df)]
+    columns.extend(c for c in ("repeat_id", "outer_fold_id") if c in df)
+    return hashlib.sha256(pd.util.hash_pandas_object(df[columns], index=False).values.tobytes()).hexdigest()
 
-    prediction_sets = list(prediction_sets)
-    logger.info(
-        "Summarizing %d prediction files (bootstrap=%d, stratified=%s, n_jobs=%s)",
-        len(prediction_sets),
-        n_bootstrap,
-        stratified_bootstrap,
-        n_jobs,
-    )
 
-    pairing_groups: Dict[Tuple[str, str, Optional[str]], List[PredictionSet]] = defaultdict(list)
-    for pred_set in prediction_sets:
-        grouping_key = (pred_set.outcome, pred_set.branch, pred_set.pipeline)
-        pairing_groups[grouping_key].append(pred_set)
+def _prediction_content_hash(ps: PredictionSet) -> str:
+    """Bind summary uncertainty to the exact saved predictions and model protocol."""
+    frame = ps.df.sort_values("caseid", kind="stable").sort_index(axis=1).reset_index(drop=True)
+    metadata_path = ps.path.parent.parent / "artifacts" / "metadata.json"
+    fingerprint = json.loads(metadata_path.read_text()).get("validation_fingerprint", {}) if metadata_path.exists() else {}
+    digest = hashlib.sha256(json.dumps({"columns": frame.columns.tolist(), "validation_fingerprint": fingerprint},
+                                      sort_keys=True, separators=(",", ":")).encode())
+    digest.update(pd.util.hash_pandas_object(frame, index=False).values.tobytes())
+    return digest.hexdigest()
 
-    shared_indices: Dict[Tuple[str, str, Optional[str]], Optional[List[np.ndarray]]] = {}
-    paired_groups: set = set()
-    if n_bootstrap > 0:
-        for key, group_sets in pairing_groups.items():
-            first = group_sets[0]
-            base_len = len(first.df)
-            if any(len(ps.df) != base_len for ps in group_sets):
-                logger.warning(
-                    "Grouping %s has mismatched prediction lengths; skipping paired bootstrap for this group.",
-                    key,
-                )
-                shared_indices[key] = None
-                continue
 
-            if any(not _prediction_frames_are_aligned(first.df, ps.df) for ps in group_sets[1:]):
-                logger.warning(
-                    "Grouping %s has mismatched case order, outcomes, or patient IDs; skipping paired bootstrap for this group.",
-                    key,
-                )
-                shared_indices[key] = None
-                continue
+def _identity(ps: PredictionSet) -> dict:
+    cluster_column = _get_cluster_column(ps.df)
+    return {"n_patients": int(ps.df[cluster_column].nunique()) if cluster_column != "caseid" else float("nan"),
+            "uncertainty_protocol_version": UNCERTAINTY_PROTOCOL_VERSION,
+            "analysis_status": ps.analysis_status, "cohort_scope": ps.cohort_scope, "validation_scheme": ps.validation_scheme,
+            "outcome": ps.outcome, "branch": ps.branch, "feature_set": ps.feature_set,
+            "model_name": ps.model_name, "pipeline": ps.pipeline or "",
+            "evaluation_case_hash": _evaluation_hash(ps.df),
+            "prediction_content_hash": _prediction_content_hash(ps)}
 
-            shared_indices[key] = _generate_bootstrap_indices(
-                first.df,
-                n_bootstrap,
-                stratified=stratified_bootstrap,
-                seed=bootstrap_seed,
-            )
-            paired_groups.add(key)
-            logger.info(
-                "Prepared bootstrap indices for group %s (models=%d, cases=%d, reps=%d)",
-                key,
-                len(group_sets),
-                base_len,
-                n_bootstrap,
-            )
 
-    for pred_set in prediction_sets:
-        metrics = compute_point_metrics(pred_set)
-        row: Dict[str, object] = {
-            "outcome": pred_set.outcome,
-            "branch": pred_set.branch,
-            "feature_set": pred_set.feature_set,
-            "model_name": pred_set.model_name,
-            "pipeline": pred_set.pipeline,
-        }
-        for key, value in metrics.items():
-            row[key] = value
-        summary_rows.append(row)
-
-    if n_bootstrap > 0:
-        tasks = []
-        for pred_set in prediction_sets:
-            grouping_key = (pred_set.outcome, pred_set.branch, pred_set.pipeline)
-            indices_list = shared_indices.get(grouping_key)
-            tasks.append(
-                delayed(_bootstrap_metrics)(
-                    pred_set,
-                    n_bootstrap,
-                    seed=bootstrap_seed,
-                    stratified=stratified_bootstrap,
-                    indices_list=indices_list,
-                )
-            )
-
-        logger.info("Prepared %d bootstrap tasks (backend preference=%s)", len(tasks), parallel_backend)
-        bootstrap_frames = _run_bootstrap_jobs(
-            tasks,
-            n_jobs=n_jobs,
-            parallel_backend=parallel_backend,
-            timeout=bootstrap_timeout,
-            max_retries=max(1, bootstrap_max_retries),
-        )
-
-    summary_df = pd.DataFrame(summary_rows)
-
-    bootstrap_df = pd.concat(bootstrap_frames, ignore_index=True) if bootstrap_frames else None
-    if bootstrap_df is not None and bootstrap_df.empty:
+def _bootstrap_interval(values, requested: int, *, label: str, warn_missing: bool = True):
+    """Percentile interval and effective count, excluding only undefined metrics."""
+    values = np.asarray(values, dtype=float)
+    values = values[np.isfinite(values)]
+    count = len(values)
+    if warn_missing and (count < requested or count < 2):
         logger.warning(
-            "All bootstrap replicates were skipped; continuing without bootstrap confidence intervals."
+            "Bootstrap interval %s has %d/%d finite replicates; undefined draws are "
+            "excluded per metric and at least two are required to estimate an interval.",
+            label, count, requested,
         )
-        bootstrap_df = None
+    if count < 2:
+        return float("nan"), float("nan"), count
+    lower, upper = np.percentile(values, [2.5, 97.5])
+    return float(lower), float(upper), count
 
-    if bootstrap_df is not None:
-        ci_cols = [
-            c
-            for c in bootstrap_df.columns
-            if c
-            not in {
-                "bootstrap_id",
-                "outcome",
-                "branch",
-                "feature_set",
-                "model_name",
-                "pipeline",
-            }
-        ]
-        ci_map: Dict[
-            str, Dict[Tuple[str, str, str, str, Optional[str]], Tuple[float, float]]
-        ] = {}
-        grouped = bootstrap_df.groupby(
-            ["outcome", "branch", "feature_set", "model_name", "pipeline"], dropna=False
-        )
-        for key, group in grouped:
-            for col in ci_cols:
-                vals = group[col].dropna()
-                if vals.empty:
-                    continue
-                lower, upper = np.percentile(vals, [2.5, 97.5])
-                ci_map.setdefault(col, {})[key] = (float(lower), float(upper))
 
-        # attach CIs to summary
-        for idx, row in summary_df.iterrows():
-            key = (
-                row["outcome"],
-                row["branch"],
-                row["feature_set"],
-                row["model_name"],
-                row.get("pipeline"),
+def bootstrap_draw_hash(indices_list) -> str:
+    """Identify the actual row draws shared by metrics and decision curves."""
+    digest = hashlib.sha256()
+    for indices in indices_list:
+        values = np.asarray(indices, dtype="<i8")
+        digest.update(len(values).to_bytes(8, "little"))
+        digest.update(values.tobytes())
+    return digest.hexdigest()
+
+
+def summarize(
+    prediction_sets: Iterable[PredictionSet], n_bootstrap: int = 5000,
+    stratified_bootstrap: bool = False, bootstrap_seed: int = 0, n_jobs: int = -1,
+    parallel_backend: str = "processes", delta_mode: str = "none",
+    reference_feature_set: str = "preop_only", reference_model_name: Optional[str] = None,
+    bootstrap_timeout: Optional[float] = 1800.0, bootstrap_max_retries: int = 2,
+    strict: bool = False,
+) -> Tuple[pd.DataFrame, Optional[pd.DataFrame]]:
+    if n_bootstrap < 0:
+        raise ValidationError("Bootstrap replicate count must be nonnegative")
+    # Canonical case order is required before sharing patient-cluster draws.
+    sets = [replace(ps, df=ps.df.sort_values("caseid", kind="stable").reset_index(drop=True))
+            for ps in prediction_sets]
+    if not sets:
+        raise ValidationError("No prediction sets to summarize")
+    for ps in sets:
+        if ps.df["caseid"].duplicated().any():
+            raise ValidationError(f"Duplicate caseids in {ps.path}")
+        if strict and ("subjectid" not in ps.df or ps.df["subjectid"].isna().any()):
+            raise ValidationError(f"Missing patient IDs in {ps.path}")
+        if strict and delta_mode == "reference":
+            if reference_model_name and _model_id(reference_model_name) != _model_id(ps.model_name):
+                raise ValidationError("Strict reporting requires a same-family reference; cross-family overrides require --legacy")
+            reference = [r for r in sets if (r.cohort_scope, r.validation_scheme, r.outcome, r.branch,
+                         r.pipeline, r.model_name, r.feature_set) ==
+                        (ps.cohort_scope, ps.validation_scheme, ps.outcome, ps.branch, ps.pipeline,
+                         reference_model_name or ps.model_name, reference_feature_set)]
+            if len(reference) != 1:
+                raise ValidationError(f"Requires one same-family {reference_feature_set} reference for {ps.path}")
+            if not _prediction_frames_are_aligned(reference[0].df, ps.df):
+                raise ValidationError(f"Case/patient/truth/fold mismatch against reference for {ps.path}")
+    identities = [{**_identity(ps), "bootstrap_replicates": int(n_bootstrap),
+                   "bootstrap_seed": int(bootstrap_seed), "bootstrap_stratified": bool(stratified_bootstrap),
+                   "bootstrap_draw_hash": "none",
+                   "delta_mode": delta_mode,
+                   "reference_feature_set": reference_feature_set if delta_mode == "reference" else "none",
+                   "reference_model_name": (reference_model_name or ps.model_name) if delta_mode == "reference" else "none"}
+                  for ps in sets]
+    pairing_columns = ("cohort_scope", "validation_scheme", "outcome", "branch", "pipeline", "evaluation_case_hash")
+    reference_hashes = {tuple(identity[c] for c in pairing_columns) + (identity["model_name"], identity["feature_set"]):
+                        identity["prediction_content_hash"] for identity in identities}
+    for identity in identities:
+        reference_key = tuple(identity[c] for c in pairing_columns) + (identity["reference_model_name"], identity["reference_feature_set"])
+        identity["reference_prediction_content_hash"] = reference_hashes.get(reference_key, "unavailable") if delta_mode == "reference" else "none"
+    rows = [{**identity, **compute_point_metrics(ps)} for ps, identity in zip(sets, identities)]
+    summary_df = pd.DataFrame(rows)
+    if delta_mode == "reference":
+        context = ["cohort_scope", "validation_scheme", "outcome", "branch", "pipeline", "evaluation_case_hash"]
+        for idx, target in summary_df.iterrows():
+            mask = pd.Series(True, index=summary_df.index)
+            for col in context:
+                mask &= summary_df[col].eq(target[col])
+            reference = summary_df.loc[mask & summary_df.feature_set.eq(reference_feature_set)
+                & summary_df.model_name.eq(reference_model_name or target.model_name)]
+            if len(reference) == 1:
+                for col in ("auprc", "auroc", "brier", "sensitivity", "specificity", "precision", "f1", "accuracy"):
+                    summary_df.loc[idx, f"delta_{col}"] = target[col] - reference.iloc[0][col]
+    if n_bootstrap <= 0:
+        return summary_df, None
+    # Process one population at a time instead of retaining every draw matrix.
+    populations = defaultdict(list)
+    for idx, (ps, identity) in enumerate(zip(sets, identities)):
+        key = tuple(identity[c] for c in ("cohort_scope", "validation_scheme", "outcome", "branch", "pipeline", "evaluation_case_hash"))
+        populations[key].append((idx, ps))
+    frames = [None] * len(sets)
+    for members in populations.values():
+        indices = _generate_bootstrap_indices(members[0][1].df, n_bootstrap, stratified_bootstrap, bootstrap_seed)
+        draw_hash = bootstrap_draw_hash(indices)
+        tasks = []
+        for idx, ps in members:
+            identities[idx]["bootstrap_draw_hash"] = draw_hash
+            summary_df.loc[idx, "bootstrap_draw_hash"] = draw_hash
+            tasks.append(delayed(_bootstrap_metrics)(ps, n_bootstrap, seed=bootstrap_seed,
+                         stratified=stratified_bootstrap, indices_list=indices))
+        group_frames = _run_bootstrap_jobs(tasks, n_jobs=n_jobs, parallel_backend=parallel_backend,
+                                          timeout=bootstrap_timeout, max_retries=max(1, bootstrap_max_retries))
+        for (idx, _), frame in zip(members, group_frames):
+            frames[idx] = frame
+    for frame, identity in zip(frames, identities):
+        if not frame.empty:
+            for col, value in identity.items():
+                frame[col] = value
+    frames = [frame for frame in frames if not frame.empty]
+    if not frames:
+        logger.warning("No bootstrap replicates were produced; confidence intervals cannot be estimated.")
+        for metric in (c for c in rows[0] if c not in identities[0]):
+            summary_df[f"{metric}_bootstrap_valid"] = 0
+            summary_df[f"{metric}_lower"] = float("nan")
+            summary_df[f"{metric}_upper"] = float("nan")
+        return summary_df, None
+    bootstrap_df = pd.concat(frames, ignore_index=True)
+    metric_cols = [c for c in rows[0] if c not in identities[0]]
+    identity_cols = list(identities[0])
+    for idx, row in summary_df.iterrows():
+        mask = pd.Series(True, index=bootstrap_df.index)
+        for col in identity_cols:
+            mask &= bootstrap_df[col].isna() if pd.isna(row[col]) else bootstrap_df[col].eq(row[col])
+        samples = bootstrap_df.loc[mask]
+        for metric in metric_cols:
+            lower, upper, count = _bootstrap_interval(
+                samples[metric], n_bootstrap,
+                label=f"{row.model_name}/{row.feature_set}/{metric}", warn_missing=metric != "threshold",
             )
-            for col, mapping in ci_map.items():
-                if key in mapping:
-                    lower, upper = mapping[key]
-                    summary_df.loc[idx, f"{col}_lower"] = lower
-                    summary_df.loc[idx, f"{col}_upper"] = upper
-
-        if delta_mode == "reference":
-            _attach_delta_cis(
-                summary_df,
-                bootstrap_df,
-                ci_cols,
-                paired_groups=paired_groups,
-                reference_feature_set=reference_feature_set,
-                reference_model_name=reference_model_name,
-            )
-
+            summary_df.loc[idx, f"{metric}_bootstrap_valid"] = count
+            summary_df.loc[idx, f"{metric}_lower"] = lower
+            summary_df.loc[idx, f"{metric}_upper"] = upper
+    if delta_mode == "reference":
+        _attach_delta_cis(summary_df, bootstrap_df, metric_cols,
+                          reference_feature_set=reference_feature_set,
+                          reference_model_name=reference_model_name)
     return summary_df, bootstrap_df
 
 
-def _attach_delta_cis(
-    summary_df: pd.DataFrame,
-    bootstrap_df: pd.DataFrame,
-    metric_cols: Sequence[str],
-    *,
-    paired_groups: set,
-    reference_feature_set: str,
-    reference_model_name: Optional[str],
-) -> None:
-    """Compute delta CIs (target - reference) within each outcome/branch/pipeline group."""
-
-    grouping_cols = ["outcome", "branch", "pipeline"]
-    bootstrap_grouped = bootstrap_df.groupby(grouping_cols, dropna=False)
-
-    for group_key, group_df in bootstrap_grouped:
-        if group_key not in paired_groups:
-            logger.warning("Skipping delta CIs for unpaired group %s.", group_key)
+def _attach_delta_cis(summary_df, bootstrap_df, metric_cols, *,
+                      reference_feature_set, reference_model_name, paired_groups=None):
+    """Paired target-minus-reference differences within one aligned population."""
+    context = ["cohort_scope", "validation_scheme", "outcome", "branch", "pipeline", "evaluation_case_hash"]
+    for idx, target in summary_df.iterrows():
+        mask = pd.Series(True, index=summary_df.index)
+        boot_mask = pd.Series(True, index=bootstrap_df.index)
+        for col in context:
+            mask &= summary_df[col].eq(target[col])
+            boot_mask &= bootstrap_df[col].eq(target[col])
+        reference_name = reference_model_name or target["model_name"]
+        ref_rows = summary_df.loc[mask & summary_df["feature_set"].eq(reference_feature_set)
+                                  & summary_df["model_name"].eq(reference_name)]
+        if len(ref_rows) != 1:
+            logger.warning("No aligned %s/%s reference for %s", reference_name, reference_feature_set, target["feature_set"])
             continue
-
-        outcome, branch, pipeline = group_key
-        # Locate reference rows for this group.
-        ref_candidates = group_df[group_df["feature_set"] == reference_feature_set]
-        if ref_candidates.empty:
-            logger.warning(
-                "No reference rows found for group %s with feature_set=%s%s; skipping delta CIs.",
-                group_key,
-                reference_feature_set,
-                f", model_name={reference_model_name}" if reference_model_name else "",
+        reference = ref_rows.iloc[0]
+        pool = bootstrap_df.loc[boot_mask]
+        target_boot = pool.loc[pool["feature_set"].eq(target["feature_set"]) & pool["model_name"].eq(target["model_name"])].set_index("bootstrap_id")
+        ref_boot = pool.loc[pool["feature_set"].eq(reference_feature_set) & pool["model_name"].eq(reference_name)].set_index("bootstrap_id")
+        for metric in metric_cols:
+            lower, upper, count = _bootstrap_interval(
+                target_boot[metric] - ref_boot[metric], int(target["bootstrap_replicates"]),
+                label=f"{target.model_name}/{target.feature_set}/delta_{metric}", warn_missing=metric != "threshold",
             )
-            continue
-
-        def select_reference(target_model_name: str):
-            """Pick the reference matching the target model when possible."""
-            preferred_models = []
-            unique_models = ref_candidates["model_name"].dropna().unique()
-            if target_model_name in unique_models:
-                preferred_models.append(target_model_name)
-            if reference_model_name and reference_model_name not in preferred_models:
-                preferred_models.append(reference_model_name)
-            # Deterministic fallback order for any remaining candidates.
-            for name in sorted(unique_models):
-                if name not in preferred_models:
-                    preferred_models.append(name)
-
-            for model_name in preferred_models:
-                ref_bootstrap = ref_candidates[ref_candidates["model_name"] == model_name]
-                if ref_bootstrap.empty:
-                    continue
-                ref_summary_row = summary_df[
-                    (summary_df["outcome"] == outcome)
-                    & (summary_df["branch"] == branch)
-                    & (summary_df["pipeline"] == pipeline)
-                    & (summary_df["feature_set"] == reference_feature_set)
-                    & (summary_df["model_name"] == model_name)
-                ]
-                ref_point = ref_summary_row.iloc[0] if not ref_summary_row.empty else None
-                return model_name, ref_bootstrap.set_index("bootstrap_id"), ref_point
-
-            logger.warning(
-                "Reference selection failed for group %s (target model=%s, feature_set=%s).",
-                group_key,
-                target_model_name,
-                reference_feature_set,
-            )
-            return None
-
-        # Iterate target models within the same grouping (including other feature sets).
-        target_rows = summary_df[
-            (summary_df["outcome"] == outcome)
-            & (summary_df["branch"] == branch)
-            & (summary_df["pipeline"] == pipeline)
-        ]
-
-        for idx, target_row in target_rows.iterrows():
-            ref_selection = select_reference(target_row["model_name"])
-            if ref_selection is None:
-                continue
-
-            ref_model_name, ref_lookup, ref_point = ref_selection
-
-            if target_row["feature_set"] == reference_feature_set and target_row["model_name"] == ref_model_name:
-                # Reference row: deltas are zero by definition.
-                for col in metric_cols:
-                    summary_df.loc[idx, f"delta_{col}"] = 0.0
-                    summary_df.loc[idx, f"delta_{col}_lower"] = 0.0
-                    summary_df.loc[idx, f"delta_{col}_upper"] = 0.0
-                continue
-
-            target_bootstrap = group_df[
-                (group_df["feature_set"] == target_row["feature_set"])
-                & (group_df["model_name"] == target_row["model_name"])
-            ].set_index("bootstrap_id")
-
-            # Align on bootstrap_id; require overlapping indices.
-            joined_ids = target_bootstrap.index.intersection(ref_lookup.index)
-            if joined_ids.empty:
-                logger.warning(
-                    "No overlapping bootstrap samples for delta comparison in group %s between %s/%s and reference %s/%s.",
-                    group_key,
-                    target_row["feature_set"],
-                    target_row["model_name"],
-                    reference_feature_set,
-                    ref_model_name,
-                )
-                continue
-
-            for col in metric_cols:
-                if col not in target_bootstrap.columns or col not in ref_lookup.columns:
-                    continue
-                deltas = target_bootstrap.loc[joined_ids, col] - ref_lookup.loc[joined_ids, col]
-                deltas = deltas.dropna()
-                if deltas.empty:
-                    continue
-                lower, upper = np.percentile(deltas, [2.5, 97.5])
-                ref_point_val = ref_point.get(col, float("nan")) if ref_point is not None else float("nan")
-                point_delta = target_row.get(col, float("nan")) - ref_point_val
-                summary_df.loc[idx, f"delta_{col}"] = point_delta
-                summary_df.loc[idx, f"delta_{col}_lower"] = float(lower)
-                summary_df.loc[idx, f"delta_{col}_upper"] = float(upper)
+            summary_df.loc[idx, f"delta_{metric}_bootstrap_valid"] = count
+            summary_df.loc[idx, f"delta_{metric}"] = target[metric] - reference[metric]
+            summary_df.loc[idx, f"delta_{metric}_lower"] = lower
+            summary_df.loc[idx, f"delta_{metric}_upper"] = upper
 
 
 def write_outputs(summary_df: pd.DataFrame, bootstrap_df: Optional[pd.DataFrame], save_bootstrap: Optional[Path]) -> None:
@@ -836,9 +914,14 @@ def write_outputs(summary_df: pd.DataFrame, bootstrap_df: Optional[pd.DataFrame]
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Aggregate metrics from prediction files.")
+    parser.set_defaults(strict=True)
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--strict", dest="strict", action="store_true", help="Require complete scoped patient-grouped run artifacts (default).")
+    mode.add_argument("--legacy", dest="strict", action="store_false", help="Explicitly read historical unscoped prediction artifacts.")
+    parser.add_argument("--run-manifest", type=Path, default=None)
     parser.add_argument("--results-dir", type=Path, default=RESULTS_DIR, help="Root results directory (default: results)")
     parser.add_argument(
-        "--bootstrap", type=int, default=1000, help="Number of bootstrap iterations (default: 1000; 0 to skip)"
+        "--bootstrap", type=int, default=5000, help="Number of bootstrap iterations (default: 5000; 0 to skip)"
     )
     parser.add_argument(
         "--bootstrap-seed", type=int, default=0, help="Random seed for bootstrap resampling (default: 0)"
@@ -859,8 +942,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--bootstrap-stratified",
         action="store_true",
-        default=True,
-        help="Enable outcome-stratified bootstrap sampling (default: on)",
+        default=False,
+        help="Enable outcome-stratified bootstrap sampling (default: off)",
     )
     parser.add_argument(
         "--no-bootstrap-stratified",
@@ -910,8 +993,18 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    global RESULTS_DIR, TABLES_DIR, PAPER_DIR, PAPER_TABLES_DIR
     args = parse_args()
-    prediction_sets = crawl_predictions(args.results_dir)
+    if args.results_dir != RESULTS_DIR:
+        RESULTS_DIR = args.results_dir
+        TABLES_DIR = RESULTS_DIR / "tables"
+        if not os.getenv("PAPER_DIR"):
+            if RESULTS_DIR.name in {"nested_cv", "holdout"}:
+                PAPER_DIR = RESULTS_DIR.parents[2] / "paper" / RESULTS_DIR.parent.name / RESULTS_DIR.name
+            else:
+                PAPER_DIR = RESULTS_DIR.parent / "paper"
+            PAPER_TABLES_DIR = PAPER_DIR / "tables"
+    prediction_sets = crawl_predictions(args.results_dir, strict=args.strict, run_manifest=args.run_manifest, require_reference=args.delta_mode == "reference", reference_feature_set=args.reference_feature_set, reference_model_name=args.reference_model_name)
     summary_df, bootstrap_df = summarize(
         prediction_sets,
         n_bootstrap=args.bootstrap,
@@ -924,8 +1017,21 @@ def main() -> None:
         bootstrap_max_retries=args.bootstrap_max_retries,
         n_jobs=args.n_jobs,
         parallel_backend=args.parallel_backend,
+        strict=args.strict,
     )
+    comparisons = None
+    if args.strict:
+        from results_recreation.comparisons import build_comparison_artifacts
+        manifest_path = args.run_manifest or args.results_dir / "run_manifest.json"
+        comparisons = build_comparison_artifacts(
+            prediction_sets, summary_df, bootstrap_df, n_bootstrap=args.bootstrap,
+            stratified_bootstrap=args.bootstrap_stratified, bootstrap_seed=args.bootstrap_seed,
+            run_manifest=json.loads(manifest_path.read_text()), strict=True,
+        )
     write_outputs(summary_df, bootstrap_df, args.bootstrap_output)
+    if comparisons is not None:
+        from results_recreation.comparisons import write_comparison_artifacts
+        write_comparison_artifacts(comparisons, TABLES_DIR, paper_tables_dir=PAPER_TABLES_DIR)
 
 
 if __name__ == "__main__":

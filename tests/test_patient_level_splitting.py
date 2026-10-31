@@ -1,12 +1,6 @@
-import sys
-from pathlib import Path
-
 import numpy as np
 import pandas as pd
 import pytest
-
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.append(str(PROJECT_ROOT))
 
 from data_preparation.step_03_preop_prep import select_patient_level_holdout_indices
 from model_creation import utils
@@ -26,7 +20,8 @@ def _multi_operation_df() -> pd.DataFrame:
             "aki_label": aki_label,
             "eligible_any_aki": np.ones(len(subject_ids), dtype=int),
             "split_group_any_aki": ["train"] * 16 + ["test"] * 4,
-        }
+        },
+        index=np.arange(200, 220) * 3,
     )
 
 
@@ -40,6 +35,9 @@ def test_select_patient_level_holdout_indices_keeps_patients_disjoint():
 
     assert not (train_subjects & test_subjects)
     assert len(test_idx) == 4
+    assert set(train_idx).isdisjoint(test_idx)
+    assert set(train_idx) | set(test_idx) == set(df.index)
+    assert df.loc[train_idx, "aki_label"].nunique() == df.loc[test_idx, "aki_label"].nunique() == 2
 
 
 def test_prepare_data_uses_persisted_outcome_specific_holdout_split():
@@ -57,6 +55,11 @@ def test_prepare_data_uses_persisted_outcome_specific_holdout_split():
     assert not (train_subjects & test_subjects)
     assert len(X_train) + len(X_test) == len(df)
     assert len(y_train) + len(y_test) == len(df)
+    assert set(X_train.index) == set(df.index[df.split_group_any_aki.eq("train")])
+    assert set(X_test.index) == set(df.index[df.split_group_any_aki.eq("test")])
+    assert set(X_train.columns) == set(X_test.columns) == {"feature1", "feature2"}
+    pd.testing.assert_series_equal(y_train, df.loc[X_train.index, "aki_label"])
+    pd.testing.assert_series_equal(y_test, df.loc[X_test.index, "aki_label"])
 
 
 def test_prepare_data_rejects_stale_legacy_split_group_for_non_aki_outcome():

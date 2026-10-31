@@ -1,11 +1,6 @@
 from pathlib import Path
-import sys
 
 import pytest
-
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
 
 from artifact_paths import (
     DEFAULT_ARTIFACT_ROOT,
@@ -14,7 +9,27 @@ from artifact_paths import (
     enforce_storage_policy,
     refresh_repo_convenience_paths,
     resolve_log_file,
+    get_scoped_results_dir,
+    get_scoped_paper_dir,
+    ensure_repo_symlink,
 )
+
+
+@pytest.mark.parametrize("old_target_kind", ["empty", "nonempty", "missing"])
+def test_refresh_existing_symlink_preserves_old_target(tmp_path, old_target_kind):
+    old_target, new_target, link = tmp_path / "old", tmp_path / "new", tmp_path / "link"
+    if old_target_kind != "missing":
+        old_target.mkdir()
+    if old_target_kind == "nonempty":
+        (old_target / "keep.txt").write_text("keep")
+    link.symlink_to(old_target)
+    returned = ensure_repo_symlink(link, new_target)
+    assert returned == link
+    assert link.is_symlink() and link.resolve(strict=False) == new_target
+    assert not old_target.is_symlink()
+    assert old_target.exists() == (old_target_kind != "missing")
+    if old_target_kind == "nonempty":
+        assert (old_target / "keep.txt").read_text() == "keep"
 
 
 def test_build_catch22_layout_defaults_to_media_root(monkeypatch):
@@ -48,14 +63,14 @@ def test_enforce_storage_policy_modes(tmp_path: Path, monkeypatch):
 
     monkeypatch.setenv("AKI_STORAGE_POLICY", "enforce")
     with pytest.raises(StoragePolicyError):
-        enforce_storage_policy(candidate)
+        enforce_storage_policy(candidate, allowed_root=tmp_path / "allowed-volume")
 
     monkeypatch.setenv("AKI_STORAGE_POLICY", "warn")
     with pytest.warns(RuntimeWarning):
-        enforce_storage_policy(candidate)
+        enforce_storage_policy(candidate, allowed_root=tmp_path / "allowed-volume")
 
     monkeypatch.setenv("AKI_STORAGE_POLICY", "off")
-    enforce_storage_policy(candidate)
+    enforce_storage_policy(candidate, allowed_root=tmp_path / "allowed-volume")
 
 
 def test_resolve_log_file_can_target_custom_default_dir(monkeypatch):
@@ -90,3 +105,18 @@ def test_refresh_repo_convenience_paths_creates_symlinks(tmp_path: Path):
     assert processed_link.resolve(strict=False) == processed_dir.resolve(strict=False)
     assert results_link.resolve(strict=False) == results_dir.resolve(strict=False)
     assert paper_link.resolve(strict=False) == paper_dir.resolve(strict=False)
+
+
+def test_scopes_and_validation_roots_are_isolated_and_idempotent(tmp_path, monkeypatch):
+    project = tmp_path / "repo"
+    monkeypatch.setenv("RESULTS_DIR", str(tmp_path / "results"))
+    monkeypatch.setenv("PAPER_DIR", str(tmp_path / "paper"))
+    main = get_scoped_results_dir(project, "main_shared", "nested_cv")
+    sensitivity = get_scoped_results_dir(project, "icu_waveform_sensitivity", "nested_cv")
+    holdout = get_scoped_results_dir(project, "main_shared", "holdout")
+    assert len({main, sensitivity, holdout}) == 3
+    monkeypatch.setenv("RESULTS_DIR", str(main))
+    assert get_scoped_results_dir(project, "main_shared", "nested_cv") == main
+    with pytest.raises(ValueError, match="another cohort"):
+        get_scoped_results_dir(project, "icu_waveform_sensitivity", "nested_cv")
+    assert get_scoped_paper_dir(project, "main_shared", "nested_cv") == tmp_path / "paper/main_shared/nested_cv"

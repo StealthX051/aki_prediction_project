@@ -1,6 +1,7 @@
 import argparse
 import json
 import logging
+import os
 from pathlib import Path
 import sys
 
@@ -9,6 +10,8 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.append(str(PROJECT_ROOT))
 
 from model_creation import utils
+from artifact_paths import get_scoped_results_dir
+from data_preparation.cohort_scopes import COHORT_SCOPES
 from model_creation.validation import select_modeling_dataset, tune_model
 
 
@@ -20,12 +23,13 @@ def run_hpo(
     outcome,
     branch,
     feature_set,
-    n_trials=100,
+    n_trials=None,
     smoke_test=False,
     model_type="xgboost",
-    inner_folds: int = 5,
+    inner_folds: int = 3,
     threads_per_model: int = 8,
     legacy_imputation: bool = False,
+    cohort_scope: str = "main_shared",
 ):
     logger.info(
         "Starting HPO for Outcome: %s, Branch: %s, Feature Set: %s, Model: %s",
@@ -35,6 +39,7 @@ def run_hpo(
         model_type,
     )
 
+    n_trials = (20 if model_type == "logistic_regression" else 50) if n_trials is None else n_trials
     if smoke_test:
         logger.info("SMOKE TEST MODE: running with reduced trials.")
         n_trials = min(n_trials, 2)
@@ -48,6 +53,7 @@ def run_hpo(
             outcome,
             feature_set,
             require_holdout_split=True,
+            cohort_scope=cohort_scope,
         )
         train_mask = working_df["split_group"] == "train"
         X_train = X.loc[train_mask]
@@ -67,17 +73,26 @@ def run_hpo(
         random_state=42,
         preserve_nan=preserve_nan,
         threads_per_model=threads_per_model,
+        diagnostic=smoke_test,
     )
 
     logger.info("HPO complete. Best AUPRC: %.4f", best_value)
     logger.info("Best Params: %s", best_params)
 
-    best_params["scale_pos_weight"] = float((y_train == 0).sum() / max(1, (y_train == 1).sum()))
+    if model_type == "xgboost":
+        best_params["scale_pos_weight"] = float((y_train == 0).sum() / max(1, (y_train == 1).sum()))
     best_params["actual_inner_folds"] = actual_inner_folds
     best_params["validation_scheme"] = "holdout"
     best_params["threads_per_model"] = threads_per_model
+    best_params["cohort_scope"] = cohort_scope
+    best_params["diagnostic"] = bool(smoke_test)
+    best_params["compute_profile"] = (
+        "diagnostic_ebm_200_rounds_2_outer_bags_no_inner_bags"
+        if model_type == "ebm" and smoke_test else "manuscript"
+    )
+    best_params["n_trials"] = n_trials
 
-    output_dir = utils.RESULTS_DIR / "params" / model_type / outcome / branch
+    output_dir = get_scoped_results_dir(PROJECT_ROOT, cohort_scope, "holdout") / "params" / model_type / outcome / branch
     output_dir.mkdir(parents=True, exist_ok=True)
     output_file = output_dir / f"{feature_set}.json"
 
@@ -98,16 +113,16 @@ if __name__ == "__main__":
         help="Data branch",
     )
     parser.add_argument("--feature_set", type=str, required=True, help="Feature set name")
-    parser.add_argument("--n_trials", type=int, default=100, help="Number of Optuna trials")
+    parser.add_argument("--n_trials", type=int, default=None, help="Trials (default: LR20, other families50)")
     parser.add_argument("--smoke_test", action="store_true", help="Run a quick smoke test")
     parser.add_argument(
         "--model_type",
         type=str,
-        choices=["xgboost", "ebm"],
+        choices=["xgboost", "ebm", "logistic_regression"],
         default="xgboost",
         help="Model type to optimize",
     )
-    parser.add_argument("--inner-folds", type=int, default=5, help="Grouped inner folds for HPO.")
+    parser.add_argument("--inner-folds", type=int, default=3, help="Grouped inner folds for HPO.")
     parser.add_argument(
         "--threads-per-model",
         type=int,
@@ -120,7 +135,10 @@ if __name__ == "__main__":
         help="Apply fold-local imputation instead of preserving NaNs.",
     )
 
+    parser.add_argument("--cohort-scope", choices=COHORT_SCOPES, default="main_shared")
     args = parser.parse_args()
+    os.environ.setdefault("AKI_SPLIT_CACHE_DIR", str(
+        get_scoped_results_dir(PROJECT_ROOT, args.cohort_scope, "holdout") / "metadata" / "split_cache"))
 
     run_hpo(
         args.outcome,
@@ -132,4 +150,5 @@ if __name__ == "__main__":
         args.inner_folds,
         args.threads_per_model,
         args.legacy_imputation,
+        args.cohort_scope,
     )

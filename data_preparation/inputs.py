@@ -59,11 +59,8 @@ AEON_STRICT_CHANNELS = True
 AEON_WINDOW_POLICY = "intersection"
 AEON_FIXED_LENGTH = 57600  # Target length (16 hours @ 1 Hz)
 
-# --- Imputation Controls ---
-# Controls whether preprocessing steps should impute missing values.
-# By default, preprocessing will leave NaNs in place so downstream steps can
-# decide how to handle them. Set to True to restore the previous -99/imputed
-# behavior in step_03/step_04/step_05.
+# Deprecated CLI compatibility default. Steps 03/05 always preserve NaNs;
+# learned imputation is configured and fitted inside model-training folds.
 IMPUTE_MISSING = False
 
 # --- Step 03 Output Paths ---

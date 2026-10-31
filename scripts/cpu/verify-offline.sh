@@ -29,7 +29,8 @@ unset COHORT_FILE CATCH_22_FILE CATCH_22_ERROR_FILE PREOP_PROCESSED_FILE
 unset CATCH_22_WINDOWED_FILE INTRAOP_WIDE_FILE INTRAOP_WIDE_WINDOWED_FILE
 unset WIDE_FEATURES_FILE WIDE_FEATURES_WINDOWED_FILE MERGED_DATASET_PATH
 unset RAW_SOURCE_DIR COHORT_CSV MERGED_DATASET COUNTS_FILE PROCESSED_PREOP
-unset DISPLAY_DICT DISPLAY_DICTIONARY_PATH
+unset DISPLAY_DICT DISPLAY_DICTIONARY_PATH COHORT_SCOPE VALIDATION_SCHEME BRANCH_ROSTER
+export AKI_SPLIT_CACHE_DIR="$evidence/split-cache"
 export LOG_FILE="$evidence/imports.log" VERIFY_OUTPUT="$evidence/native"
 export MPLCONFIGDIR="$evidence/matplotlib" NUMBA_CACHE_DIR="$evidence/numba-cache"
 cd "$repo"
@@ -39,9 +40,8 @@ python "$repo/scripts/cpu/verify_native.py" > "$evidence/native.log" 2>&1 || {
   cat "$evidence/native.log"
   exit 1
 }
-# test_vitaldb.py is a legacy live-service diagnostic without reliable assertions.
-# Exclude it explicitly; a passing offline suite cannot establish VitalDB access.
-python -m pytest -q tests --ignore=tests/test_vitaldb.py \
+# No live-data diagnostics belong in the automated suite.
+python -m pytest -q \
   --basetemp "$evidence/pytest-tmp" -o "cache_dir=$evidence/pytest-cache" \
   --junitxml="$evidence/pytest.xml" 2>&1 | tee "$evidence/pytest.log"
 echo "Native checks and offline suite passed. Evidence: $evidence"

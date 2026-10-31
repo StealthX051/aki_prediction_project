@@ -17,6 +17,7 @@ from data_preparation.artifact_metadata import (
     ArtifactCompatibilityError,
     read_versioned_csv,
     write_artifact_metadata,
+    file_sha256,
 )
 from data_preparation.inputs import (
     COHORT_FILE,
@@ -36,7 +37,6 @@ from data_preparation.outcome_registry import (
 # --- Configuration ---
 RANDOM_STATE = 42
 
-# All preoperative features to be selected from the cohort file
 # All preoperative features to be selected from the cohort file
 PREOP_FEATURES_TO_SELECT = [
     'caseid',
@@ -58,7 +58,7 @@ PREOP_FEATURES_TO_SELECT = [
     'asa',
     'optype',
     'ane_type',
-    'adm',              # used to derive LOS and inpatient_preop
+    'adm',              # used to derive inpatient_preop
 
     # Comorbidities / preop tests
     'preop_htn',
@@ -152,23 +152,6 @@ CATEGORICAL_COLS = [
     'preop_pft',
 ]
 
-# Derived binary flags that should be computed but excluded from the final processed output
-DERIVED_FLAGS_TO_DROP = [
-    'bun_high',
-    'hypoalbuminemia',
-    'preop_anemia',
-    'hyponatremia',
-    'metabolic_acidosis',
-    'hypercapnia',
-    'hypoxemia',
-]
-
-# Sanity check: ensure derived flags earmarked for removal are not part of helper lists
-_helper_lists = [PREOP_FEATURES_TO_SELECT, CONTINUOUS_COLS, CATEGORICAL_COLS]
-for _flag in DERIVED_FLAGS_TO_DROP:
-    if any(_flag in helper for helper in _helper_lists):
-        raise ValueError(f"Derived flag {_flag} should not be present in helper lists")
-
 # Labs we want to derive preop values for.
 # Names are exactly as in VitalDB lab_data. 
 PREOP_LABS_FROM_LABDATA = [
@@ -184,19 +167,11 @@ COHORT_REQUIRED_COLUMNS = [
 ]
 
 def _convert_creatinine_to_mg_dl(scr_series: pd.Series) -> pd.Series:
-    """Return serum creatinine in mg/dL with basic unit validation.
-
-    Creatinine values may be stored in mg/dL or µmol/L. Values greater than
-    20 are assumed to be in µmol/L and converted using the factor
-    1 mg/dL = 88.4 µmol/L. Nonpositive values are treated as missing.
-    """
+    """Validate source mg/dL values without inferring units from magnitude."""
     scr_numeric = pd.to_numeric(scr_series, errors='coerce')
 
     # Treat nonpositive values as invalid before conversion/derivation
-    scr_numeric = scr_numeric.where(scr_numeric > 0)
-
-    needs_conversion = scr_numeric > 20
-    scr_numeric.loc[needs_conversion] = scr_numeric.loc[needs_conversion] / 88.4
+    scr_numeric = scr_numeric.where(np.isfinite(scr_numeric) & scr_numeric.gt(0))
 
     return scr_numeric
 
@@ -213,19 +188,22 @@ def build_preop_labs_from_labdata(lab_df: pd.DataFrame,
 
     We:
       * keep rows with dt < 0 (preop),
-      * restrict to a window of N days before surgery (default 30),
-      * take the row with the maximum dt (closest to 0) per (caseid, name),
+      * restrict to N days before recording start (default 30),
+      * take the finite numeric result with maximum valid dt (closest to 0)
+        per (caseid, name),
       * return wide DF with columns: caseid, preop_<lab_name>.
     """
-    # Preoperative only
-    preop = lab_df[lab_df['dt'] < 0].copy()
+    # Select the last usable result; invalid timestamps/results must not
+    # displace an older valid measurement.
+    preop = lab_df.copy()
+    preop['dt'] = pd.to_numeric(preop['dt'], errors='coerce')
+    preop['result'] = pd.to_numeric(preop['result'], errors='coerce')
+    preop = preop[np.isfinite(preop['dt']) & np.isfinite(preop['result'])]
+    preop = preop[preop['dt'] < 0]
 
-    # Restrict to e.g. last 30 days before surgery
+    # Restrict to the configured lookback before recording start.
     window_secs = preop_window_days * 24 * 3600
     preop = preop[preop['dt'] >= -window_secs]
-
-    # Numeric results
-    preop['result'] = pd.to_numeric(preop['result'], errors='coerce')
 
     agg_frames = []
     for lab_name in lab_names:
@@ -233,7 +211,7 @@ def build_preop_labs_from_labdata(lab_df: pd.DataFrame,
         if tmp.empty:
             continue
 
-        # Sort so last row is closest to surgery (dt nearest to 0)
+        # Sort so the last result is closest to recording start (dt nearest to 0).
         tmp.sort_values(['caseid', 'dt'], inplace=True)
 
         last = (
@@ -257,68 +235,33 @@ def build_preop_labs_from_labdata(lab_df: pd.DataFrame,
     return preop_labs
 
 def add_derived_preop_features(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Add derived preop features using existing columns:
-      - adm: admission time from casestart (sec) from clinical_data.csv
-      - preop_bun, preop_cr, preop_alb, preop_hb, preop_na, preop_hco3, preop_be,
-        preop_pao2, preop_paco2, preop_sao2, etc.
-    """
+    """Derive inpatient status and CKD-EPI eGFR from admission, sex, age, and creatinine."""
 
     # --- Preop inpatient flag ---
     # adm: admission time relative to casestart (sec); preop admissions have adm < 0.
     df['adm'] = pd.to_numeric(df['adm'], errors='coerce')
-    df['inpatient_preop'] = (df['adm'] < 0).astype(int)
+    df['inpatient_preop'] = (df['adm'] < 0).astype(float).where(np.isfinite(df['adm']))
 
-    # Optionally drop raw adm if you don't want it as a feature
-    # (we'll still keep it in PREOP_FEATURES_TO_SELECT so we can derive these)
+    # Only the derived admission indicator is a model predictor.
     df.drop(columns=['adm'], inplace=True)
 
     # --- Creatinine-based eGFR (CKD-EPI 2021, creatinine-only, race-free) ---
-    sex = df['sex'].astype(str)
+    # Normalize only the derivation inputs, preserving source categories.
+    sex = df['sex'].astype('string').str.strip().str.upper()
+    female = sex.eq('F').fillna(False).to_numpy(dtype=bool)
     age = pd.to_numeric(df['age'], errors='coerce')
+    age = age.where(np.isfinite(age))
     scr_mg_dl = _convert_creatinine_to_mg_dl(df['preop_cr'])
+    df['preop_cr'] = scr_mg_dl
 
-    kappa = np.where(sex == 'F', 0.7, 0.9)
-    alpha = np.where(sex == 'F', -0.241, -0.302)
+    kappa = np.where(female, 0.7, 0.9)
+    alpha = np.where(female, -0.241, -0.302)
 
     scr_k = scr_mg_dl / kappa
     egfr = 142 * np.minimum(scr_k, 1.0) ** alpha * np.maximum(scr_k, 1.0) ** (-1.200) * (0.9938 ** age)
-    egfr *= np.where(sex == 'F', 1.012, 1.0)
+    egfr *= np.where(female, 1.012, 1.0)
 
-    df['preop_egfr_ckdepi_2021'] = egfr
-
-    # --- Simple binary clinical flags (0/1) ---
-    # BUN high
-    df['bun_high'] = (pd.to_numeric(df['preop_bun'], errors='coerce') > 27).astype(int)
-
-    # Hypoalbuminemia
-    df['hypoalbuminemia'] = (pd.to_numeric(df['preop_alb'], errors='coerce') < 3.5).astype(int)
-
-    # Sex-specific anemia
-    preop_hb = pd.to_numeric(df['preop_hb'], errors='coerce')
-    male = (df['sex'] == 'M')
-    female = (df['sex'] == 'F')
-    anemia = pd.Series(0, index=df.index, dtype=int)
-    anemia[male & (preop_hb < 13.0)] = 1
-    anemia[female & (preop_hb < 12.0)] = 1
-    df['preop_anemia'] = anemia
-
-    # Hyponatremia
-    df['hyponatremia'] = (pd.to_numeric(df['preop_na'], errors='coerce') < 135).astype(int)
-
-    # Metabolic acidosis
-    preop_hco3 = pd.to_numeric(df['preop_hco3'], errors='coerce')
-    preop_be = pd.to_numeric(df['preop_be'], errors='coerce')
-    df['metabolic_acidosis'] = ((preop_hco3 < 22) | (preop_be < -2)).astype(int)
-
-    # Hypercapnia
-    preop_paco2 = pd.to_numeric(df['preop_paco2'], errors='coerce')
-    df['hypercapnia'] = (preop_paco2 > 45).astype(int)
-
-    # Hypoxemia
-    preop_pao2 = pd.to_numeric(df['preop_pao2'], errors='coerce')
-    preop_sao2 = pd.to_numeric(df['preop_sao2'], errors='coerce')
-    df['hypoxemia'] = ((preop_pao2 < 80) | (preop_sao2 < 95)).astype(int)
+    df['preop_egfr_ckdepi_2021'] = egfr.where(sex.isin(['F', 'M']) & np.isfinite(egfr))
 
     return df
 
@@ -372,6 +315,8 @@ def select_patient_level_holdout_indices(
     best_gap = None
 
     for train_pos, test_pos in splitter.split(df, y, groups):
+        if y.iloc[train_pos].nunique() < 2 or y.iloc[test_pos].nunique() < 2:
+            continue
         gap = abs(len(test_pos) - target_test_rows)
         if best_gap is None or gap < best_gap:
             best_gap = gap
@@ -379,7 +324,7 @@ def select_patient_level_holdout_indices(
             best_test_pos = test_pos
 
     if best_train_pos is None or best_test_pos is None:
-        raise ValueError("Failed to construct a patient-level holdout split.")
+        raise ValueError("Failed to construct a patient-level holdout split with both classes in train and test.")
 
     train_groups = set(groups.iloc[best_train_pos])
     test_groups = set(groups.iloc[best_test_pos])
@@ -482,9 +427,6 @@ def main(impute_missing: Optional[bool] = None):
     if impute_missing is None:
         args = parser.parse_args()
         impute_missing = args.impute_missing
-    else:
-        # Allow programmatic control while still parsing other CLI args if needed later
-        _ = parser.parse_args([])
 
     print("--- Step 03: Preoperative Data Preparation ---")
     print(f"Input: {COHORT_FILE}")
@@ -492,7 +434,7 @@ def main(impute_missing: Optional[bool] = None):
 
     # 1. Load Data
     try:
-        cohort_df, _ = read_versioned_csv(
+        cohort_df, cohort_metadata = read_versioned_csv(
             COHORT_FILE,
             artifact_role=STEP_01_COHORT_ARTIFACT,
             required_columns=COHORT_REQUIRED_COLUMNS,
@@ -520,14 +462,8 @@ def main(impute_missing: Optional[bool] = None):
     try:
         preop_df = cohort_df[PREOP_FEATURES_TO_SELECT].copy()
 
-        # Add derived preop features (eGFR, binary flags)
+        # Add the two derived predictors retained for modeling.
         preop_df = add_derived_preop_features(preop_df)
-
-        # Drop derived features not used for modeling
-        cols_to_drop = ['position'] + DERIVED_FLAGS_TO_DROP
-        existing_drop_cols = [col for col in cols_to_drop if col in preop_df.columns]
-        if existing_drop_cols:
-            preop_df = preop_df.drop(columns=existing_drop_cols)
     except KeyError as e:
         print(f"ERROR: Missing columns in cohort file: {e}")
         sys.exit(1)
@@ -539,10 +475,7 @@ def main(impute_missing: Optional[bool] = None):
     train_mask = preop_df[LEGACY_SPLIT_ALIAS] == 'train'
     test_mask = preop_df[LEGACY_SPLIT_ALIAS] == 'test'
 
-    X_train = preop_df.loc[train_mask].copy()
-    X_test = preop_df.loc[test_mask].copy()
-
-    print(f"Default AKI train set: {len(X_train)}, Test set: {len(X_test)}")
+    print(f"Default AKI train set: {int(train_mask.sum())}, Test set: {int(test_mask.sum())}")
     for split_col in ALL_SPLIT_COLUMNS:
         split_counts = preop_df[split_col].value_counts(dropna=False)
         print(f"{split_col} distribution:\n{split_counts}")
@@ -562,7 +495,12 @@ def main(impute_missing: Optional[bool] = None):
         extra_metadata={
             "split_status": split_status,
             "upstream_artifact": str(COHORT_FILE),
-            "upstream_schema_version": 1,
+            "upstream_schema_version": cohort_metadata["schema_version"],
+            "source_hashes": cohort_metadata.get("source_hashes", {}),
+            "cohort_scopes": cohort_metadata.get("cohort_scopes", {}),
+            "outer_flow_counts": cohort_metadata.get("outer_flow_counts", {}),
+            "diagnostic_trim": cohort_metadata.get("diagnostic_trim"),
+            "data_sha256": file_sha256(PREOP_PROCESSED_FILE),
         },
     )
     print("Done.")

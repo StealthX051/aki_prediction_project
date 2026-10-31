@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import platform
 import sys
+from zipfile import ZipFile
 
 repo = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(repo))
@@ -52,8 +53,11 @@ xgb_model = build_model('xgboost', {'n_estimators':16,'max_depth':2},random_stat
 xgb_model.fit(X.iloc[:120],y[:120])
 prob = xgb_model.predict_proba(X.iloc[120:])[:,1]
 assert prob.shape == (40,) and np.isfinite(prob).all() and np.logical_and(prob>=0,prob<=1).all()
-shap_values = shap.TreeExplainer(xgb_model).shap_values(X.iloc[120:125])
+explainer = shap.TreeExplainer(xgb_model)
+shap_values = explainer.shap_values(X.iloc[120:125])
 assert np.asarray(shap_values).shape == (5,6) and np.isfinite(shap_values).all()
+np.testing.assert_allclose(explainer.expected_value + np.asarray(shap_values).sum(axis=1),
+                           xgb_model.predict(X.iloc[120:125], output_margin=True), rtol=1e-5, atol=1e-6)
 xgb_model.save_model(out/'synthetic-xgboost.json')
 loaded = xgb.XGBClassifier()
 loaded.load_model(out/'synthetic-xgboost.json')
@@ -68,14 +72,21 @@ ebm.fit(X.iloc[:120],y[:120])
 prob = ebm.predict_proba(X.iloc[120:])[:,1]
 assert prob.shape == (40,) and np.isfinite(prob).all() and np.logical_and(prob>=0,prob<=1).all()
 global_explanation = ebm.explain_global()
+explanation_data = global_explanation.data()
+assert len(explanation_data['names']) == len(explanation_data['scores']) == X.shape[1]
+assert np.isfinite(explanation_data['scores']).all()
 global_explanation.visualize().write_html(out/'synthetic-ebm.html')
 report['checks']['ebm_repository_factory_fit_predict_html'] = {'status':'passed','missing':ebm.missing,'max_bins':ebm.max_bins,'note':'bounded bags/rounds; production workload not benchmarked'}
 
-export_dataframe_bundle(out/'synthetic-table',title='Synthetic environment verification',dataframe=pd.DataFrame({'check':['CPU environment'],'value':[1]}))
-for suffix in ['csv','md','docx','pdf']:
-    p = out/f'synthetic-table.{suffix}'
-    assert p.is_file() and p.stat().st_size > 0, p
-report['checks']['synthetic_table_csv_md_docx_pdf'] = 'passed; file creation only, no visual review'
+table = pd.DataFrame({'check':['CPU environment'],'value':[1]})
+export_dataframe_bundle(out/'synthetic-table',title='Synthetic environment verification',dataframe=table)
+pd.testing.assert_frame_equal(pd.read_csv(out/'synthetic-table.csv'), table)
+assert 'CPU environment' in (out/'synthetic-table.md').read_text()
+with ZipFile(out/'synthetic-table.docx') as document:
+    assert b'CPU environment' in document.read('word/document.xml')
+pdf = (out/'synthetic-table.pdf').read_bytes()
+assert pdf.startswith(b'%PDF-') and pdf.rstrip().endswith(b'%%EOF')
+report['checks']['synthetic_table_csv_md_docx_pdf'] = 'passed; CSV roundtrip, Markdown/DOCX content and PDF structure; no visual review'
 report['checks']['kaleido_browser_png'] = 'not installed/verified; optional EBM static export'
 (out/'native-verification.json').write_text(json.dumps(report,indent=2,default=str)+'\n')
 print(json.dumps(report,indent=2,default=str))

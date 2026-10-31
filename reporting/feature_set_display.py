@@ -15,7 +15,7 @@ import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 try:
     import yaml
@@ -80,6 +80,22 @@ DEFAULT_FEATURE_SET_MAP: Dict[str, List[str]] = {
     "all_fused": ["awp", "co2", "ecg", "pleth"],
     "all_waveonly": ["awp", "co2", "ecg", "pleth"],
 }
+
+
+CORE_FEATURE_SET_ORDER = ("preop_only", "all_waveforms", "preop_and_all_waveforms")
+
+
+def feature_set_sort_key(name: str):
+    """Stable clinical ordering, independent of observed performance."""
+    if name in CORE_FEATURE_SET_ORDER:
+        return (0, CORE_FEATURE_SET_ORDER.index(name), name)
+    components = DEFAULT_FEATURE_SET_MAP.get(name, [])
+    flags = [component in components for component in ("awp", "co2", "ecg", "pleth")]
+    return (1, -("preop" in components), -len(components), *[-int(flag) for flag in flags], name)
+
+
+def order_feature_sets(frame, column="Feature Set Key"):
+    return frame.loc[sorted(frame.index, key=lambda idx: feature_set_sort_key(str(frame.loc[idx, column])))].copy()
 
 
 class FeatureSetDisplayMode:
