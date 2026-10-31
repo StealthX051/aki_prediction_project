@@ -107,7 +107,7 @@ available; numerical settings stay fixed throughout each configuration.
 CPU/RSS/I/O and controller summaries live under `<study>/control/`;
 `--no-profile-resources` disables sampling. Summed RSS can include shared pages.
 
-For the authorized extension, use the gated supervisor from a frozen checkout:
+When execution is authorized, use the gated supervisor from a frozen checkout:
 
 ```bash
 python scripts/cpu/run-optimized-core.py

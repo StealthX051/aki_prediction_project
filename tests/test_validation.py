@@ -280,6 +280,58 @@ def test_train_evaluate_nested_cv_resume_uses_completed_checkpoints(
     assert set(test_predictions["validation_scheme"]) == {"nested_cv"}
 
 
+def test_partial_xgboost_resume_preserves_native_prediction_dtypes_and_fold_union(tmp_path):
+    from model_creation.validation import load_outer_fold_checkpoint
+    from results_recreation.metrics_summary import PredictionSet, _validate_nested_prediction_union
+    frame = _mock_df()
+    fingerprint = _validation_fingerprint()
+    native_results = []
+    for number, test_idx in enumerate((np.array([3, 4, 5]), np.array([0, 1, 2]))):
+        result = _make_nested_outer_result(frame, outer_fold_id=number, test_idx=test_idx)
+        # This is the production XGBoost contract: cross-fit buffers are float64,
+        # but direct outer-test raw and recalibrated predictions remain float32.
+        for column in ("y_prob_raw", "y_prob_calibrated"):
+            result.test_predictions[column] = result.test_predictions[column].astype("float32")
+        result.train_predictions["y_prob_raw"] = np.array([.12345678901234567, .5000000000000001, .8765432109876543])
+        result.train_predictions["y_prob_calibrated"] = np.array([.11111111111111113, .5555555555555557, .8999999999999999])
+        result.metadata_payload.update(repeat_id=0, outer_fold_id=number)
+        fold = tmp_path / "artifacts/folds/repeat_00" / f"outer_{number:02d}"
+        save_outer_fold_checkpoint(fold, result, validation_fingerprint=fingerprint)
+        native_results.append(result)
+    resumed = load_outer_fold_checkpoint(tmp_path / "artifacts/folds/repeat_00/outer_00")
+    for column in ("y_prob_raw", "y_prob_calibrated"):
+        assert resumed.test_predictions[column].dtype == np.dtype("float32")
+        assert resumed.train_predictions[column].dtype == np.dtype("float64")
+    for attribute in ("train_predictions", "test_predictions"):
+        expected = pd.concat([getattr(result, attribute) for result in native_results], ignore_index=True)
+        mixed = pd.concat([getattr(resumed, attribute), getattr(native_results[1], attribute)], ignore_index=True)
+        pd.testing.assert_frame_equal(mixed, expected, check_exact=True, check_dtype=True)
+        path = tmp_path / "predictions" / ("test.csv" if attribute == "test_predictions" else "train_oof.csv")
+        path.parent.mkdir(exist_ok=True)
+        mixed.to_csv(path, index=False)
+        loaded_csv = pd.read_csv(path, float_precision="round_trip")
+        fold_name = "test_predictions.csv" if attribute == "test_predictions" else "train_oof.csv"
+        union = pd.concat([pd.read_csv(fold / fold_name, float_precision="round_trip")
+                           for fold in sorted((tmp_path / "artifacts/folds").glob("repeat_*/outer_*"))], ignore_index=True)
+        pd.testing.assert_frame_equal(loaded_csv, union, check_exact=True)
+    path = tmp_path / "predictions/test.csv"
+    saved = pd.read_csv(path)
+    prediction_set = PredictionSet(path, saved, .5, "any_aki", "non_windowed", "preop_only", "XGBoost", None)
+    _validate_nested_prediction_union(prediction_set, tmp_path / "artifacts", fingerprint)
+
+
+def test_checkpoint_without_dtype_metadata_remains_readable(tmp_path):
+    result = _make_nested_outer_result(_mock_df(), outer_fold_id=0, test_idx=np.array([3, 4, 5]))
+    save_outer_fold_checkpoint(tmp_path, result, validation_fingerprint=_validation_fingerprint())
+    path = tmp_path / "metadata.json"
+    metadata = json.loads(path.read_text())
+    metadata.pop("prediction_dtypes")
+    path.write_text(json.dumps(metadata))
+    assert validation_module.is_outer_fold_checkpoint_complete(tmp_path)
+    loaded = validation_module.load_outer_fold_checkpoint(tmp_path)
+    pd.testing.assert_frame_equal(loaded.test_predictions, result.test_predictions, check_exact=True)
+
+
 @pytest.mark.parametrize(
     ("fingerprint_overrides", "expected_message"),
     [

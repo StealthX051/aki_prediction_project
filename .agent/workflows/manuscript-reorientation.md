@@ -232,7 +232,7 @@ configuration is admitted at a time. Numerical fitting policies remain fixed.
 - [x] Add queue, lightweight resource sampling, protected inventory validation,
   strict completed-run skipping and saved trial histories.
 - [x] Add exploratory mortality DCA, 0.001–0.050/step 0.001.
-- [x] Offline environment/native checks passed; final complete suite: 537 tests
+- [x] Offline environment/native checks passed; final complete suite: 539 tests
   passed. Source changes during preflight now fail explicitly.
 - [ ] Complete sealed-checkout real-data interruption/resume verification.
 - [ ] Validate one new broader ICU XGBoost combined/non-windowed configuration
@@ -268,3 +268,18 @@ that status only with intact bundles, exact hashes and full prediction coverage.
 A regression also rejects a self-consistent bundle whose input differs from the
 original frozen roster. Neither correction changes estimator fitting. The
 initial sealed diagnostic remains diagnostic evidence, not production results.
+
+### Readiness stop requested
+
+The user subsequently requested stopping before any full runs. Full-budget
+canary and ICU/mortality production execution are held; no new full runs have
+started. Finish bounded readiness diagnostics only. The supervised launch command
+remains available for later explicit execution.
+
+The interrupted XGBoost check also exposed CSV dtype promotion when mixing
+resumed float64-loaded scores with native float32 test scores. Checkpoint
+metadata now records floating dtypes and loading uses round-trip parsing; this
+preserves exact train/test values and pooled/fold unions without changing fit
+calculations or weakening equivalence tolerances. Earlier disposable failed
+checks remain excluded from acceptance. Final evidence is under
+`diagnostics/sealed-readiness-final` and `control/integration-verification.json`.

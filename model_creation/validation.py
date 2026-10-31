@@ -1048,6 +1048,12 @@ def save_outer_fold_checkpoint(
         for name in (model_path.name, "preprocessor.pkl", "train_oof.csv", "test_predictions.csv",
                      "calibration.json", "threshold.json", "best_params.json")
     }
+    prediction_dtypes = {
+        name: {column: str(dtype) for column, dtype in frame.dtypes.items()
+               if pd.api.types.is_float_dtype(dtype)}
+        for name, frame in (("train_oof.csv", result.train_predictions),
+                            ("test_predictions.csv", result.test_predictions))
+    }
     write_json(
         fold_dir / "metadata.json",
         {
@@ -1062,17 +1068,28 @@ def save_outer_fold_checkpoint(
             "preprocessor_sha256": artifact_hashes["preprocessor.pkl"],
             "checkpoint_bundle_protocol_version": CHECKPOINT_BUNDLE_PROTOCOL_VERSION,
             "artifact_sha256": artifact_hashes,
+            "prediction_dtypes": prediction_dtypes,
             "status": "completed",
         },
     )
 
 
 def load_outer_fold_checkpoint(fold_dir: Path) -> OuterFoldRunResult:
-    train_predictions = pd.read_csv(fold_dir / "train_oof.csv")
-    test_predictions = pd.read_csv(fold_dir / "test_predictions.csv")
+    metadata_payload = json.loads((fold_dir / "metadata.json").read_text())
+    prediction_dtypes = metadata_payload.get("prediction_dtypes", {})
+    # Preserve native float32 XGBoost test scores when mixed with newly fitted
+    # folds. Float64 promotion otherwise changes their later CSV representation
+    # and breaks the exact saved-fold union after a partial resume.
+    train_predictions = pd.read_csv(
+        fold_dir / "train_oof.csv", float_precision="round_trip",
+        dtype=prediction_dtypes.get("train_oof.csv"),
+    )
+    test_predictions = pd.read_csv(
+        fold_dir / "test_predictions.csv", float_precision="round_trip",
+        dtype=prediction_dtypes.get("test_predictions.csv"),
+    )
     calibration_payload = json.loads((fold_dir / "calibration.json").read_text())
     threshold_payload = json.loads((fold_dir / "threshold.json").read_text())
-    metadata_payload = json.loads((fold_dir / "metadata.json").read_text())
     best_params = json.loads((fold_dir / "best_params.json").read_text())
     calibration_model = LogisticRecalibrationModel(**calibration_payload)
     return OuterFoldRunResult(
