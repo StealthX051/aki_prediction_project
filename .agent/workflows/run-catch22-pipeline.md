@@ -13,7 +13,8 @@ study roots, resource budgets, and launch commands. Scientific settings are in
   `experiments --preset core --dry-run`; no data preparation or model fitting.
 - Research execution requires a run request. Start with the authorized scope;
   use the gated core queue, which mixes model families, before supplementary
-  grids. The current full-budget canary and production batches remain on hold.
+  grids. The current gated ICU/mortality core run is explicitly authorized; supplementary
+  grids remain on hold.
 - Real-data smoke uses a fresh disposable root and live VitalDB access.
 - Never overwrite historical artifacts or bypass failed provenance checks.
 - Record verification and run status in

@@ -7,10 +7,11 @@ their bootstrap/report stages completed successfully on October 31, 2026 at
 frozen modeling revision `fcff7c7c9794e0ea8405814c68176760a2eb9afc`. The pre-run
 code was committed and pushed; local, remote, and frozen revisions were verified
 identical before optimization benchmarking. The optimized scheduler and broader
-ICU/mortality support are implemented and checked. Broader ICU, mortality and
-supplementary grids remain unstarted. The current user instruction is to finish
-readiness checks and stop before the full-budget canary or production batches,
-preserving completed research artifacts.
+ICU/mortality support are implemented and checked. The broader ICU/mortality batch is now authorized and its full-budget
+equivalence canary is running; the new core grid remains gated and supplements
+remain unstarted. The user has now explicitly authorized the gated ICU/mortality core run in
+tmux. The full-budget equivalence canary must pass before the remaining new
+configurations are admitted; main-core refits and supplements remain excluded.
 Drive/email/manuscript external writes remain separate. This is the single
 decision/evidence register; definitions belong in METHODS, commands in README,
 and outputs in RESULTS. Earlier diagnostics below retain their stated limits.
@@ -321,3 +322,16 @@ all human report/table exports. Removed dead code and stale/duplicate docs;
 retained focused behavioral/scientific tests without new dependencies or service
 infrastructure. Full suite: 550 passed, including bounded subprocess probes.
 No full-budget canary or production run was launched; the user's hold persists.
+
+## Authorized tmux launch
+
+The user explicitly requested starting the ICU sensitivity and mortality runs
+using tmux. Launched session `vitaldb-sensitivity` with `run` and `monitor`
+windows, frozen source `94c087f`, supported Conda interpreter and a 60-CPU
+budget. The supervisor started successfully and entered `legacy_canary`.
+It automatically proceeds through the optimized canary, exact equivalence gate,
+18 ICU plus 18 exploratory mortality core configurations, and saved-result
+reporting only when each preceding gate succeeds. No main-core refits or 144
+supplementary configurations are selected. Live status/logs and exact launch
+authorization are under the new study's `control/` directory. Earlier readiness
+holds above are historical and superseded by this explicit run request.

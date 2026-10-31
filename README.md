@@ -81,8 +81,11 @@ grid has 180 configurations.
 
 ## Execution after run approval
 
-Execution is held at readiness. After explicit approval, run the gated supervisor
-from the sealed study checkout. It validates the old 36 configurations, runs the
+The ICU/mortality core run was started in tmux session `vitaldb-sensitivity`.
+Live phase/status is in `<new-study>/control/supervisor_status.json`; attach with
+`tmux attach -t vitaldb-sensitivity`. The launch command below starts or resumes
+the gated supervisor after an explicit run request; avoid a second controller
+while this session is active. It validates the old 36 configurations, runs the
 single broader ICU XGBoost canary with 12 and four threads, and admits the two
 18-configuration batches only after the complete numerical comparison passes.
 It never selects the 144 main supplementary configurations.
