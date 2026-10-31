@@ -9,7 +9,7 @@ import pytest
 from data_preparation.artifact_metadata import file_sha256
 from data_preparation.cohort_scopes import selected_case_hash
 from model_creation.run_inventory import (
-    LEGACY_CODE_HASH, LEGACY_ENVIRONMENT, LEGACY_REVISION,
+    LEGACY_CODE_HASH, LEGACY_ENVIRONMENT, LEGACY_REVISION, REVIEWED_EXTENSION_CODE_HASH,
     configuration_key, import_legacy_inventory, verify_completed_configuration,
     verify_legacy_reference,
 )
@@ -174,7 +174,7 @@ def test_external_reference_requires_unchanged_inventory_and_exact_target(tmp_pa
     source = {"code_revision": LEGACY_REVISION, "code_hash": LEGACY_CODE_HASH,
               "environment": LEGACY_ENVIRONMENT, "validation_protocol_version": 4,
               "preprocessing_protocol": "fold-local-v4-finite-numeric-schema"}
-    target = {**source, "code_revision": "new", "code_hash": "new-code"}
+    target = {**source, "code_revision": "new", "code_hash": REVIEWED_EXTENSION_CODE_HASH}
     attestation = {"adapter": "reviewed-fcff7c7-scheduler-scope-extension-v1",
                    "source_study_identity": source, "target_study_identity": target}
     config = {"model_type": "xgboost", "outcome": "icu_admission", "branch": "non_windowed",
@@ -189,6 +189,43 @@ def test_external_reference_requires_unchanged_inventory_and_exact_target(tmp_pa
     monkeypatch.setattr(inventory, "verify_completed_configuration", lambda *args, **kwargs: {**record, "changed": True})
     with pytest.raises(ValueError, match="changed since inventory"):
         verify_legacy_reference(config, attestation, target)
+
+
+def test_same_protocol_cannot_attest_arbitrary_modeling_changes():
+    source = {"code_revision": LEGACY_REVISION, "code_hash": LEGACY_CODE_HASH,
+              "environment": LEGACY_ENVIRONMENT, "validation_protocol_version": 4,
+              "preprocessing_protocol": "fold-local-v4-finite-numeric-schema"}
+    target = {**source, "code_revision": "unreviewed", "code_hash": "arbitrary-model-code"}
+    attestation = {"adapter": "reviewed-fcff7c7-scheduler-scope-extension-v1",
+                   "source_study_identity": source, "target_study_identity": target}
+    with pytest.raises(ValueError, match="reviewed modeling code hash"):
+        verify_legacy_reference({}, attestation, target)
+
+
+def test_main_reuse_rejects_unreviewed_modeling_before_writes_or_fits(tmp_path, monkeypatch, capsys):
+    import run_catch22
+    import model_creation.run_inventory as inventory
+    root = tmp_path / "untouched"
+    for variable, suffix in (("AKI_ARTIFACT_ROOT", "artifacts"), ("PROCESSED_DIR", "processed"),
+                             ("RESULTS_DIR", "results"), ("PAPER_DIR", "paper"), ("LOG_FILE", "log.txt")):
+        monkeypatch.setenv(variable, str(root / suffix))
+    key = "main_shared/xgboost/any_aki/non_windowed/preop_only"
+    catalog = {"source_results_dir": str(tmp_path / "protected/results/catch22/experiments/main_shared/nested_cv"),
+               "configurations": {key: {"validation_fingerprint": {"n_trials": 50}}}}
+    monkeypatch.setattr(inventory, "import_legacy_inventory", lambda *a, **kw: catalog)
+    identities = []
+    def unreviewed_identity():
+        identities.append(True)
+        return {"code_hash": "unreviewed"}
+    monkeypatch.setattr(run_catch22, "_study_identity", unreviewed_identity)
+    monkeypatch.setattr(run_catch22, "run_module", lambda *a, **kw: pytest.fail("Unreviewed source launched work"))
+    result = run_catch22.main(["experiments", "--preset", "core", "--model-types", "xgboost",
+        "--outcomes", "any_aki", "--branches", "non_windowed", "--feature-sets", "preop_only",
+        "--prep", "skip", "--reuse-from", str(tmp_path / "protected"), "--dry-run"])
+    assert result == 1
+    assert "reviewed modeling code hash" in capsys.readouterr().err
+    assert identities == [True]
+    assert not root.exists()
 
 
 def test_reporting_discovers_references_without_copying_artifacts(tmp_path, monkeypatch):

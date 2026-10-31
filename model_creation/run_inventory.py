@@ -22,6 +22,9 @@ from model_creation.validation import (
 
 LEGACY_REVISION = "fcff7c7c9794e0ea8405814c68176760a2eb9afc"
 LEGACY_CODE_HASH = "0592413369b4380af27f785a1c0481c8418a3bf1aceca829452beee9069b789e"
+# Modeling-source digest reviewed at f3b5dcf; consumer-only commits can change
+# revision while retaining this digest. A later modeling change needs review.
+REVIEWED_EXTENSION_CODE_HASH = "926b0f7a5eb8710b3d4de7a88ecab8ddad3a43de52e18a3c574e599ec3d30ce0"
 LEGACY_ENVIRONMENT = {
     "scikit-learn": "1.6.1", "numpy": "2.0.2", "pandas": "2.2.3",
     "xgboost-cpu": "2.1.4", "interpret-core": "0.7.8", "optuna": "4.6.0",
@@ -40,6 +43,17 @@ def configuration_key(config: dict, scope: str | None = None) -> str:
     if scope is not None:
         values["cohort_scope"] = scope
     return "/".join(str(values[field]) for field in IDENTITY_FIELDS)
+
+
+def validate_reviewed_extension(target_identity: dict) -> None:
+    """Authorize reuse only with the specifically reviewed modeling extension."""
+    if target_identity.get("code_hash") != REVIEWED_EXTENSION_CODE_HASH:
+        raise ValueError("Protected reuse requires the reviewed modeling code hash; unreviewed modeling changes need a new compatibility review")
+    expected = {"environment": LEGACY_ENVIRONMENT, "validation_protocol_version": 4,
+                "preprocessing_protocol": "fold-local-v4-finite-numeric-schema"}
+    for key, value in expected.items():
+        if target_identity.get(key) != value:
+            raise ValueError(f"Scientific protocol differs across reused/new runs: {key}")
 
 
 def _read_json(path: Path) -> dict:
@@ -241,6 +255,7 @@ def verify_legacy_reference(config: dict, attestation: dict, target_identity: di
     for key in ("environment", "validation_protocol_version", "preprocessing_protocol"):
         if target_identity.get(key) != source_identity[key]:
             raise ValueError(f"Scientific protocol differs across reused/new runs: {key}")
+    validate_reviewed_extension(target_identity)
     reference = config.get("reuse_reference", {})
     directory = Path(config["artifact_path"]).resolve()
     if str(directory) != reference.get("configuration_dir"):

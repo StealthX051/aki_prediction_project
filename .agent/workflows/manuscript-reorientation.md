@@ -234,7 +234,10 @@ configuration is admitted at a time. Numerical fitting policies remain fixed.
 - [x] Add exploratory mortality DCA, 0.001–0.050/step 0.001.
 - [x] Offline environment/native checks passed; final complete suite: 539 tests
   passed. Source changes during preflight now fail explicitly.
-- [ ] Complete sealed-checkout real-data interruption/resume verification.
+- [x] Sealed real-data mixed diagnostic passed: six configurations, 12 bundles,
+  actual interruption/resume, unchanged saved checkpoint, no live stopped workers,
+  and zero fits pending on relaunch. Full suite: 539 passed; subsequent narrow
+  compatibility-guard tests: 49 passed.
 - [ ] Validate one new broader ICU XGBoost combined/non-windowed configuration
   at full 5/3/5 and 50 trials: legacy 12 threads versus optimized four threads.
   This replaces the earlier per-family replay proposal; no old main fits repeat.
@@ -283,3 +286,12 @@ preserves exact train/test values and pooled/fold unions without changing fit
 calculations or weakening equivalence tolerances. Earlier disposable failed
 checks remain excluded from acceptance. Final evidence is under
 `diagnostics/sealed-readiness-final` and `control/integration-verification.json`.
+
+Readiness evidence: the final modeling diagnostic used frozen revision
+`f3b5dcf` and passed for LR, XGBoost and EBM across both new scopes. Subsequent
+consumer-only compatibility checks pin reuse to that reviewed modeling digest;
+they change neither fitting nor partition selection. The full main preview
+resolves 36 protected configurations reused and 144 pending supplementary
+configurations; none of those supplementary jobs were launched. The new core
+preview resolves 18 ICU plus 18 exploratory mortality configurations. The first
+future full-budget action remains the supervised XGBoost equivalence canary.

@@ -167,3 +167,8 @@ Full per-fold HPO histories are saved under each configuration's
 report before the remaining extension jobs are admitted. Mortality DCA records
 its exact 0.1–5% grid and exploratory interpretation. Reports and explanations
 consume saved predictions/bundles only.
+
+Fold metadata records floating prediction dtypes. Checkpoint reload uses those
+dtypes and round-trip CSV parsing so partial resume preserves native XGBoost
+float32 test predictions and float64 training predictions exactly. Legacy
+metadata remains readable; protected source artifacts are never rewritten.

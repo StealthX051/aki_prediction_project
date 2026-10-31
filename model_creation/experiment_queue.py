@@ -144,7 +144,7 @@ def _verify_holdout(directory: Path, identity: dict) -> dict:
 
 def execute(args) -> int:
     import run_catch22 as launcher
-    from model_creation.run_inventory import configuration_key, import_legacy_inventory
+    from model_creation.run_inventory import configuration_key, import_legacy_inventory, validate_reviewed_extension
     from model_creation.split_plan import prepare_split_plan
 
     if args.smoke:
@@ -195,6 +195,10 @@ def execute(args) -> int:
         for catalog in catalogs for context in contexts.values()
     ):
         raise ValueError("Protected processed data require --prep skip")
+    reuse_target_identity = None
+    if any(configuration_key(config) in imported for config in configurations):
+        reuse_target_identity = launcher._study_identity()
+        validate_reviewed_extension(reuse_target_identity)
     for config in configurations:
         reference = imported.get(configuration_key(config))
         if reference:
@@ -238,7 +242,7 @@ def execute(args) -> int:
             launcher._write_manifest(control / "reused_inventory.json", {"sources": catalogs})
             _copy_verified_split_caches(catalogs, control / "split_cache")
         launcher._write_manifest(control / "execution_plan.json", summary)
-        identity = launcher._study_identity()
+        identity = reuse_target_identity or launcher._study_identity()
         for context in contexts.values():
             if catalogs:
                 context["manifest"]["compatibility_attestation"]["target_study_identity"] = identity
