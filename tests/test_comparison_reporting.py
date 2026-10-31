@@ -40,6 +40,15 @@ def _saved_comparisons():
             {"availability": "available"}, {"availability": "not_requested"}]}}
 
 
+def test_mortality_report_role_is_exploratory_even_with_full_validation():
+    manifest = {"cohort_scope": "mortality_waveform_sensitivity", "diagnostic": False}
+    assert "Scientific analysis role: exploratory" in make_report._report_context_notes(manifest)[0]
+    assert make_report._analysis_role(manifest) == "exploratory"
+    assert make_report._analysis_role({"cohort_scope": "icu_waveform_sensitivity"}) == "sensitivity"
+    with pytest.raises(ValueError, match="exploratory scientific role"):
+        make_report._report_context_notes({**manifest, "analysis_role": "primary"})
+
+
 def _disable_legacy_exports(monkeypatch):
     for name in ("generate_html_tables", "generate_markdown_report", "generate_docx_report", "generate_pdf_report"):
         monkeypatch.setattr(make_report, name, lambda *args, **kwargs: None)
@@ -55,8 +64,17 @@ def test_strict_report_reads_saved_comparisons_and_labels_partial_coverage(tmp_p
     artifacts = _saved_comparisons()
     monkeypatch.setattr(make_report, "_load_comparisons", lambda *args, **kwargs: artifacts)
     _disable_legacy_exports(monkeypatch)
+    make_report.RESULTS_DIR.mkdir()
+    (make_report.RESULTS_DIR / "run_manifest.json").write_text(json.dumps({
+        "analysis_role": "exploratory", "branch_rosters": {
+            "non_windowed": {"operations": 4, "patients": 4}}}))
+    exported_context = []
+    for name in ("generate_html_tables", "generate_markdown_report", "generate_docx_report", "generate_pdf_report"):
+        monkeypatch.setattr(make_report, name, lambda frame: exported_context.append(frame.attrs["report_notes"]))
     tables, plots = [], []
-    monkeypatch.setattr(make_report, "_export_comparison_tables", lambda data, path: tables.append(data))
+    comparison_context = []
+    monkeypatch.setattr(make_report, "_export_comparison_tables", lambda data, path, **kwargs:
+                        (tables.append(data), comparison_context.append(kwargs["report_notes"])))
     monkeypatch.setattr(decision_curve, "render_comparison_curves", lambda data, pairs, path, **kwargs:
                         plots.append((data, pairs, kwargs)), raising=False)
     monkeypatch.setattr(decision_curve, "net_benefit", lambda *args, **kwargs: pytest.fail("Report must not recalculate DCA"))
@@ -74,6 +92,11 @@ def test_strict_report_reads_saved_comparisons_and_labels_partial_coverage(tmp_p
     assert status["comparison_status"] == "partial"
     assert status["comparison_coverage"] == {"available": 1, "not_requested": 1}
     assert status["delong_status_counts"] == {"unsupported_design": 1}
+    assert status["analysis_role"] == "exploratory"
+    assert len(exported_context) == 4
+    assert all("Scientific analysis role: exploratory" in notes[0] and "4 operations; 4 patients" in notes[1]
+               for notes in exported_context)
+    assert comparison_context == [exported_context[0]]
 
 
 def test_strict_comparison_validation_precedes_every_export(tmp_path, monkeypatch):
@@ -106,12 +129,13 @@ def test_comparison_table_export_preserves_negative_and_uncertain_differences(tm
     artifacts["paired"].loc[0, ["delta", "lower", "upper"]] = [-.03, -.07, .01]
     captured = []
     monkeypatch.setattr(assets, "export_dataframe_bundle", lambda *args, **kwargs: captured.append(kwargs))
-    make_report._export_comparison_tables(artifacts, tmp_path)
+    make_report._export_comparison_tables(artifacts, tmp_path, report_notes=["Scientific analysis role: exploratory."])
     display = captured[0]["display_dataframe"]
     assert display["Difference (95% interval)"].iloc[0] == "-0.030 (-0.070, 0.010)"
     assert "[partial]" in captured[0]["title"]
     assert "[diagnostic]" in captured[0]["title"]
     assert "candidate minus reference" in captured[0]["notes"]
+    assert "Scientific analysis role: exploratory." in captured[0]["notes"]
 
 
 def test_comparison_tables_keep_prespecified_family_and_metric_order(tmp_path, monkeypatch):

@@ -7,7 +7,7 @@ from pathlib import Path
 import sys
 
 from model_creation.config_scheduler import ConfigJob, default_cpu_budget, run_configurations
-from runtime_resources import available_cpu_count, resource_snapshot
+from runtime_resources import available_cpu_count
 
 
 def resource_plan(args, family: str) -> dict:
@@ -300,7 +300,6 @@ def execute(args) -> int:
                     for config in requested:
                         if "reuse_reference" in config:
                             continue
-                        directory = layout.results_dir / "models" / config["model_type"] / config["outcome"] / config["branch"] / config["feature_set"]
                         if not args.rerun_completed:
                             reference = _completed_reference(args, config, context, manifest)
                         else:

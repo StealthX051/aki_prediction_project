@@ -150,12 +150,14 @@ run_configurations([job], output_dir=root/'profile', cpu_budget=1, profile=False
 ''')
     env = dict(os.environ, PYTHONPATH=str(root))
     controller = subprocess.Popen([sys.executable, str(script), str(tmp_path)], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    owned_children = []
     try:
         deadline = time.monotonic() + 10
         while not (tmp_path / "child.log").exists() or not (tmp_path / "child.log").read_text().strip():
             assert time.monotonic() < deadline
             time.sleep(0.02)
         grandchild = int((tmp_path / "child.log").read_text().strip())
+        owned_children = scheduler.psutil.Process(controller.pid).children(recursive=True)
         controller.send_signal(signal.SIGTERM)
         assert controller.wait(timeout=10) != 0
         # A reparented zombie may await host init; it must no longer execute.
@@ -168,5 +170,20 @@ run_configurations([job], output_dir=root/'profile', cpu_budget=1, profile=False
         assert summary["configurations"][0]["status"] == "interrupted"
     finally:
         if controller.poll() is None:
-            controller.kill()
-            controller.wait()
+            if not owned_children:
+                try:
+                    owned_children = scheduler.psutil.Process(controller.pid).children(recursive=True)
+                except scheduler.psutil.NoSuchProcess:
+                    pass
+            controller.terminate()
+            try:
+                controller.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                controller.kill()
+                controller.wait()
+        # A failed assertion must not leave independently grouped test workers.
+        for child in owned_children:
+            try:
+                child.kill()
+            except scheduler.psutil.NoSuchProcess:
+                pass

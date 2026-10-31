@@ -1,6 +1,7 @@
 import logging
 import os
 import sys
+from html import escape
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Set, Tuple
@@ -358,6 +359,8 @@ def _build_report_tables(
 def generate_html_tables(metrics_df: pd.DataFrame, renderer: FeatureSetDisplay = FEATURE_SET_DISPLAY):
     """Generate styled HTML tables and manuscript-ready per-table bundles."""
     _prepare_output_directory(TABLES_DIR)
+    report_notes = metrics_df.attrs.get("report_notes", [])
+    context_html = "".join(f"<p>{escape(note)}</p>" for note in report_notes)
 
     for (outcome, branch, model_name), group in metrics_df.groupby(["Outcome", "Branch", "Model"]):
         table_df, table_df_display, delta_df, component_cols, _label_col = _build_report_tables(group, renderer)
@@ -479,6 +482,7 @@ def generate_html_tables(metrics_df: pd.DataFrame, renderer: FeatureSetDisplay =
         <body>
             <h1>Model Performance Analysis</h1>
             <div class="subtitle">Outcome: {outcome} | Branch: {branch} | Model: {model_name}</div>
+            {context_html}
             {html_table}
             {('<h2>Δ vs Reference</h2>' + delta_html) if delta_html else ''}
             <div class="footer">
@@ -495,7 +499,7 @@ def generate_html_tables(metrics_df: pd.DataFrame, renderer: FeatureSetDisplay =
             title=f"Model Performance Analysis: {outcome} | {branch} | {model_name}",
             main_dataframe=table_df_display,
             delta_dataframe=delta_df,
-            summary_text=f"Outcome: {outcome} | Branch: {branch} | Model: {model_name}",
+            summary_text="\n\n".join([f"Outcome: {outcome} | Branch: {branch} | Model: {model_name}", *report_notes]),
         )
 
     refresh_paper_bundle(PAPER_DIR)
@@ -508,6 +512,8 @@ def generate_markdown_report(metrics_df: pd.DataFrame, renderer: FeatureSetDispl
 
     ordered_metrics = _order_metrics_for_reporting(metrics_df)
     sections: List[Dict[str, object]] = []
+    if metrics_df.attrs.get("report_notes"):
+        sections.append({"heading": "Analysis context", "text": "\n\n".join(metrics_df.attrs["report_notes"])})
     for (outcome, branch, model_name), group in ordered_metrics.groupby(["Outcome", "Branch", "Model"], sort=False):
         _table_df, table_df_display, delta_df, _component_cols, _label_col = _build_report_tables(group, renderer)
         heading = f"Outcome: {outcome} | Branch: {branch} | Model: {model_name}"
@@ -1067,6 +1073,8 @@ def generate_docx_report(metrics_df: pd.DataFrame, renderer: FeatureSetDisplay =
     doc.add_heading('AKI Prediction Project - Results Report', 0)
     if "analysis_status" in metrics_df:
         doc.add_paragraph("Analysis status: " + ", ".join(sorted(metrics_df.analysis_status.unique())))
+    for note in metrics_df.attrs.get("report_notes", []):
+        doc.add_paragraph(note)
     
     component_cols = renderer.component_labels if renderer.show_checkbox else []
     label_source = "Feature Set" if renderer.show_label else None
@@ -1211,6 +1219,15 @@ def generate_pdf_report(metrics_df: pd.DataFrame, renderer: FeatureSetDisplay = 
     label_source = "Feature Set" if renderer.show_label else None
     
     with PdfPages(REPORTS_DIR / 'report.pdf') as pdf:
+        if metrics_df.attrs.get("report_notes"):
+            fig, ax = plt.subplots(figsize=(12, 3.5))
+            ax.axis("off")
+            ax.set_title("Analysis context", fontsize=14, fontweight="bold", pad=18)
+            status = ", ".join(sorted(metrics_df.analysis_status.unique())) if "analysis_status" in metrics_df else "legacy"
+            ax.text(.02, .95, "\n\n".join([f"Analysis status: {status}", *metrics_df.attrs["report_notes"]]),
+                    va="top", ha="left", wrap=True)
+            pdf.savefig(fig, bbox_inches="tight")
+            plt.close(fig)
         for (outcome, branch, model_name), group in ordered_metrics.groupby(['Outcome', 'Branch', 'Model'], sort=False):
             # Sort
             table_df = order_feature_sets(group)

@@ -90,12 +90,22 @@ It never selects the 144 main supplementary configurations.
 ```bash
 cd /media/volume/catch22/data/aki_prediction_project/studies/manuscript-optimized-v1/code
 python scripts/cpu/run-optimized-core.py --print-commands  # read-only preview
-python scripts/cpu/run-optimized-core.py                   # starts research work
+
+# Starts research work; survives closing the terminal/SSH connection
+RUN_ROOT=/media/volume/catch22/data/aki_prediction_project/studies/manuscript-optimized-v1
+mkdir -p "$RUN_ROOT/control"
+nohup python -u scripts/cpu/run-optimized-core.py \
+  > "$RUN_ROOT/control/supervisor.log" 2>&1 < /dev/null &
+echo $! > "$RUN_ROOT/control/supervisor.pid"
 ```
 
 Status is `<new-study>/control/supervisor_status.json`; a failed gate stops
 execution. Root overrides are listed by `--help`. Reuse the sealed processed
 features; this extension requires no preprocessing or waveform extraction.
+The supervisor uses the active Conda interpreter. The same command resumes
+verified completed folds after an interruption; a VM shutdown still requires
+relaunching it. Routine stage transitions require no input, and a scientific
+gate or integrity failure stops execution with its reason in the status/log.
 
 `--outcomes`, `--branches`, and `--feature-sets` restrict configurations;
 `--model-types` selects families. Definitive validation uses five outer, three
@@ -148,6 +158,10 @@ Reporting defaults to 5,000 unstratified patient-cluster bootstrap draws, seed 0
 reporting policy without fitting models. Family-stage reports remain partial
 until the full requested core is available. See [RESULTS.md](RESULTS.md) for
 saved-prediction comparisons, DCA, explanations, and publication outputs.
+The supervised run pins process reporting. Its 1,800-second bootstrap deadline
+applies per configuration task; bounded process retries fail visibly. Explicit
+thread/single-worker execution cannot enforce this deadline. Setting
+`--bootstrap-timeout 0` on the metrics entrypoint permits backend fallbacks.
 
 ## Paths and advanced entrypoints
 

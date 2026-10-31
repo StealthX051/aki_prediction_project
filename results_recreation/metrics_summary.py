@@ -12,7 +12,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import concurrent.futures
 import logging
 import sys
 from collections import defaultdict
@@ -21,9 +20,10 @@ import os
 import shutil
 from dataclasses import dataclass, replace
 from pathlib import Path
+from multiprocessing import TimeoutError as ProcessTimeoutError
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
-from joblib import Parallel, delayed
+from joblib import Parallel, delayed, effective_n_jobs
 import numpy as np
 import pandas as pd
 from sklearn.metrics import (
@@ -616,19 +616,6 @@ def _bootstrap_metrics(
     return pd.DataFrame(records)
 
 
-def _run_with_timeout(func, timeout: Optional[float], desc: str):
-    """Run a callable with an optional wall-clock timeout."""
-    if timeout is None or timeout <= 0:
-        return func()
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-        future = executor.submit(func)
-        try:
-            return future.result(timeout=timeout)
-        except concurrent.futures.TimeoutError as exc:
-            raise TimeoutError(f"{desc} timed out after {timeout} seconds.") from exc
-
-
 def _run_bootstrap_jobs(
     tasks: List,
     *,
@@ -637,7 +624,7 @@ def _run_bootstrap_jobs(
     timeout: Optional[float],
     max_retries: int,
 ) -> List[pd.DataFrame]:
-    """Execute bootstrap tasks with retries, backend fallbacks, and timeout safeguards."""
+    """Retry ordered tasks; enforce deadlines only on cancellable process workers."""
 
     backend_plan: List[str] = []
     backend_plan.append(parallel_backend)
@@ -650,6 +637,14 @@ def _run_bootstrap_jobs(
     last_error: Optional[BaseException] = None
 
     for backend in backend_plan:
+        jobs = 1 if backend == "sequential" else n_jobs
+        deadline_requested = timeout is not None and timeout > 0
+        deadline = timeout if deadline_requested and backend == "processes" and effective_n_jobs(jobs) > 1 else None
+        if deadline_requested and deadline is None:
+            logger.warning(
+                "Bootstrap backend=%s with n_jobs=%s cannot enforce a hard task deadline; running without one.",
+                backend, jobs,
+            )
         attempt_limit = 1 if backend == "sequential" else max_retries
         for attempt in range(1, attempt_limit + 1):
             try:
@@ -658,38 +653,37 @@ def _run_bootstrap_jobs(
                     backend,
                     attempt,
                     attempt_limit,
-                    n_jobs if backend != "sequential" else 1,
-                    timeout if timeout and timeout > 0 else None,
+                    jobs,
+                    deadline,
                 )
-
-                def runner():
-                    if backend == "sequential":
-                        return [task() for task in tasks]
-                    backend_name = "loky" if backend == "processes" else "threading"
-                    return Parallel(n_jobs=n_jobs, backend=backend_name)(tasks)
-
-                effective_timeout = timeout if timeout and timeout > 0 else None
-                return _run_with_timeout(runner, effective_timeout, f"Bootstrap ({backend})")
-            except TimeoutError as exc:
+                if backend == "sequential":
+                    return Parallel(n_jobs=1)(tasks)
+                backend_name = "loky" if backend == "processes" else "threading"
+                return Parallel(n_jobs=jobs, backend=backend_name, timeout=deadline, batch_size=1)(tasks)
+            except (TimeoutError, ProcessTimeoutError) as exc:
                 last_error = exc
                 logger.error(
-                    "Bootstrap attempt %d/%d (backend=%s) timed out after %s seconds. Falling back if available.",
+                    "Bootstrap attempt %d/%d (backend=%s) exceeded its %s-second task deadline.",
                     attempt,
                     attempt_limit,
                     backend,
-                    timeout if timeout and timeout > 0 else "unspecified",
+                    deadline,
                 )
             except Exception as exc:  # noqa: BLE001
                 last_error = exc
                 logger.exception(
-                    "Bootstrap attempt %d/%d (backend=%s) failed: %s. Falling back if available.",
+                    "Bootstrap attempt %d/%d (backend=%s) failed: %s.",
                     attempt,
                     attempt_limit,
                     backend,
                     exc,
                 )
+        if deadline is not None:
+            # A thread/serial fallback cannot preserve a configured hard
+            # deadline. Stop visibly after bounded process retries instead.
+            break
 
-    raise RuntimeError("Bootstrapping failed after retries and fallbacks.") from last_error
+    raise RuntimeError("Bootstrapping failed after allowed retries/backends.") from last_error
 
 
 def _evaluation_hash(df: pd.DataFrame) -> str:
@@ -951,14 +945,15 @@ def parse_args() -> argparse.Namespace:
         "--bootstrap-timeout",
         type=float,
         default=1800.0,
-        help="Wall-clock timeout (seconds) for executing all bootstrap tasks per backend (default: 1800). "
-        "Set to 0 to disable timeouts.",
+        help="Per-task deadline (seconds) for process bootstrap workers with n_jobs > 1 (default: 1800). "
+        "Process retries fail visibly rather than falling back to uncancellable threads. "
+        "Threads/single-worker execution has no hard deadline; set to 0 to disable deadlines and permit backend fallbacks.",
     )
     parser.add_argument(
         "--bootstrap-max-retries",
         type=int,
         default=2,
-        help="Number of retry attempts per backend before falling back (default: 2).",
+        help="Attempts per backend (default: 2); configured process deadlines stop after these attempts.",
     )
     parser.add_argument(
         "--bootstrap-stratified",

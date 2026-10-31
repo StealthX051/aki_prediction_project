@@ -7,6 +7,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 import fcntl
 import hashlib
+import importlib.metadata
 import json
 import os
 import platform
@@ -18,6 +19,7 @@ import sys
 import psutil
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(PROJECT_ROOT))
 STUDIES = Path("/media/volume/catch22/data/aki_prediction_project/studies")
 SCOPES = ("icu_waveform_sensitivity", "mortality_waveform_sensitivity")
 
@@ -40,6 +42,8 @@ def _execution_snapshot() -> dict:
              "scripts/cpu/run-optimized-core.py")
     return {"recorded_at": _now(), "study_identity": _study_identity(), "python": sys.version,
             "python_executable": sys.executable, "platform": platform.platform(),
+            "numerical_runtime_versions": {name: importlib.metadata.version(name)
+                                           for name in ("scipy", "joblib", "threadpoolctl")},
             "source_sha256": {name: hashlib.sha256((PROJECT_ROOT / name).read_bytes()).hexdigest() for name in names}}
 
 
@@ -82,10 +86,11 @@ def _environment(args, root: Path) -> dict:
 
 
 def commands(args) -> list[dict]:
-    common = [args.python, "-m", "run_catch22", "experiments", "--preset", "core", "--prep", "skip",
+    common = [sys.executable, "-m", "run_catch22", "experiments", "--preset", "core", "--prep", "skip",
               "--validation-scheme", "nested_cv", "--outer-folds", "5", "--inner-folds", "3",
               "--calibration-folds", "5", "--repeats", "1", "--max-workers", "5", "--resume",
-              "--bootstrap", "5000", "--bootstrap-seed", "0", "--no-bootstrap-stratified"]
+              "--bootstrap", "5000", "--bootstrap-seed", "0", "--no-bootstrap-stratified",
+              "--parallel-backend", "processes"]
     if args.cpu_budget is not None:
         common += ["--cpu-budget", str(args.cpu_budget)]
     extensions = [*common, "--cohort-scopes", *SCOPES, "--scheduler", "optimized", "--reuse-from", str(args.baseline_root)]
@@ -98,7 +103,7 @@ def commands(args) -> list[dict]:
         {"stage": "preflight", "command": [*extensions, "--dry-run"], "env": _environment(args, args.study_root)},
         {"stage": "legacy_canary", "command": [*common, *canary, "--scheduler", "legacy", "--threads-per-model", "12"], "env": _environment(args, legacy_root)},
         {"stage": "optimized_canary", "command": [*common, *canary, "--scheduler", "optimized", "--threads-per-model", "4"], "env": _environment(args, args.study_root)},
-        {"stage": "equivalence_gate", "command": [args.python, "-m", "model_creation.scheduler_canary",
+        {"stage": "equivalence_gate", "command": [sys.executable, "-m", "model_creation.scheduler_canary",
              "--legacy-config", str(config(legacy_root)), "--optimized-config", str(config(args.study_root)),
              "--output", str(args.study_root / "control/canary-agreement.json"), "--bootstrap", "5000", "--bootstrap-seed", "0"],
          "env": _environment(args, args.study_root)},
@@ -188,13 +193,19 @@ def run_pipeline(args, *, runner=_run):
         if agreement_file.exists() and json.loads(agreement_file.read_text()).get("status") != "passed":
             raise ValueError("A previous canary gate failed; investigate before any further full-budget execution")
         try:
-            for signum in (signal.SIGINT, signal.SIGTERM):
+            for signum in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+                # nohup deliberately ignores HUP; foreground runs instead need
+                # the same owned-process cleanup as an explicit interruption.
+                if signum == signal.SIGHUP and signal.getsignal(signum) == signal.SIG_IGN:
+                    continue
                 old_handlers[signum] = signal.signal(signum, interrupted)
             snapshot = _execution_snapshot()
             snapshot_file = control / "execution-snapshot.json"
             if snapshot_file.exists():
                 previous_snapshot = json.loads(snapshot_file.read_text())
-                if any(snapshot[key] != previous_snapshot.get(key) for key in ("study_identity", "source_sha256", "python")):
+                if any(snapshot[key] != previous_snapshot.get(key) for key in (
+                    "study_identity", "source_sha256", "python", "python_executable", "numerical_runtime_versions"
+                )):
                     raise ValueError("Supervisor source/environment changed since its frozen execution snapshot")
             else:
                 _write(snapshot_file, snapshot)
@@ -274,7 +285,6 @@ def main(argv=None):
     parser.add_argument("--baseline-root", type=Path, default=STUDIES / "manuscript-core-v1")
     parser.add_argument("--study-root", type=Path, default=STUDIES / "manuscript-optimized-v1")
     parser.add_argument("--raw-dir", type=Path, default=Path("/media/volume/catch22/projects/aki_prediction_project/data/raw"))
-    parser.add_argument("--python", default=sys.executable)
     parser.add_argument("--cpu-budget", type=int)
     parser.add_argument("--print-commands", action="store_true", help="Read-only command inspection; does not create directories")
     args = parser.parse_args(argv)

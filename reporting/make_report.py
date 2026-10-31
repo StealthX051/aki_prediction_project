@@ -59,6 +59,33 @@ def _load_metrics(metrics_path: Path) -> pd.DataFrame:
     return pd.read_csv(metrics_path)
 
 
+def _analysis_role(manifest: dict) -> str:
+    defaults = {"main_shared": "primary", "icu_waveform_sensitivity": "sensitivity",
+                "mortality_waveform_sensitivity": "exploratory"}
+    scope = manifest.get("cohort_scope")
+    role = manifest.get("analysis_role", defaults.get(scope, "primary"))
+    if scope == "mortality_waveform_sensitivity" and role != "exploratory":
+        raise ValueError("Mortality sensitivity reports must retain their exploratory scientific role")
+    return role
+
+
+def _report_context_notes(manifest: dict) -> list[str]:
+    """Carry scientific role and cohort denominators into every human export."""
+    if not manifest:
+        return []
+    role = _analysis_role(manifest)
+    notes = [f"Scientific analysis role: {role}. Validation status records validation completeness."]
+    for branch, cohort in manifest.get("branch_rosters", {}).items():
+        if not {"operations", "patients"}.issubset(cohort):
+            continue
+        note = f"{branch}: {cohort['operations']} operations; {cohort['patients']} patients."
+        mortality = cohort.get("outcomes", {}).get("mortality")
+        if mortality:
+            note += f" Mortality-positive operations: {mortality['events']}; positive patients: {mortality['event_patients']}."
+        notes.append(note)
+    return notes
+
+
 def _prediction_sets_to_frame(prediction_sets: Iterable[PredictionSet]) -> pd.DataFrame:
     """Combine validated prediction sets into a single DataFrame for plotting."""
 
@@ -87,7 +114,7 @@ def _load_comparisons(tables_dir, prediction_sets, summary, *, run_manifest=None
     return load_comparison_artifacts(tables_dir, prediction_sets, summary, run_manifest=run_manifest)
 
 
-def _export_comparison_tables(artifacts: dict, tables_dir: Path) -> None:
+def _export_comparison_tables(artifacts: dict, tables_dir: Path, *, report_notes=()) -> None:
     """Present the prespecified contrasts without altering their saved statistics."""
     from reporting.display_dictionary import load_display_dictionary
     from reporting.feature_set_display import feature_set_sort_key
@@ -108,6 +135,7 @@ def _export_comparison_tables(artifacts: dict, tables_dir: Path) -> None:
         "predictions; they do not establish simultaneous superiority. Shown estimates are never used to select "
         "thresholds or refit models. Comparison coverage: " + status + "."
     )
+    notes = "\n\n".join([*report_notes, notes])
     sections = [
         ("comparison_primary", "Primary waveform added-value comparisons",
          paired.loc[paired.designation.eq("primary") & paired.metric.eq("auprc")]),
@@ -203,6 +231,9 @@ def main() -> None:
         "paper_reports_dir": REPORTS_DIR, "paper_bundle_dir": TABLES_DIR.parent,
     })
     metrics_df = prepare_metrics_for_display(summary)
+    manifest_path = args.run_manifest or RESULTS_DIR / "run_manifest.json"
+    manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else {}
+    metrics_df.attrs["report_notes"] = _report_context_notes(manifest)
     from reporting.manuscript_assets import export_core_comparisons
     export_core_comparisons(metrics_df, TABLES_DIR)
 
@@ -212,17 +243,15 @@ def main() -> None:
     generate_docx_report(metrics_df)
     generate_pdf_report(metrics_df)
     if comparisons is not None:
-        _export_comparison_tables(comparisons, TABLES_DIR)
+        _export_comparison_tables(comparisons, TABLES_DIR, report_notes=metrics_df.attrs["report_notes"])
     statuses = sorted(summary.analysis_status.unique().tolist()) if "analysis_status" in summary else ["legacy"]
     status_record = {"analysis_status": statuses, "configurations": len(summary),
                      "source": "saved validation predictions; no model fitting",
                      "calibration_assessment": "Brier scores and binned held-out reliability curves; held-out calibration intercept/slope and their intervals are not estimated. Saved training calibrator parameters are not evaluation calibration statistics.",
                      "uncertainty_scope": "Patient-cluster resampling conditions on saved fitted-model predictions; it does not repeat model selection or estimate full training-pipeline variability.",
                      "run_manifest": str(args.run_manifest or RESULTS_DIR / "run_manifest.json")}
-    manifest_path = args.run_manifest or RESULTS_DIR / "run_manifest.json"
-    if manifest_path.exists():
-        manifest = json.loads(manifest_path.read_text())
-        status_record["analysis_role"] = manifest.get("analysis_role", "primary")
+    if manifest:
+        status_record["analysis_role"] = _analysis_role(manifest)
         status_record["branch_cohorts"] = {
             branch: {key: roster[key] for key in ("operations", "patients", "outcomes") if key in roster}
             for branch, roster in manifest.get("branch_rosters", {}).items()
@@ -247,16 +276,7 @@ def main() -> None:
     if report_path.exists():
         coverage_note = (f"**Comparison coverage: {comparisons['inventory']['comparison_status']}**\n\n"
                          if comparisons is not None else "")
-        role = status_record.get("analysis_role", "primary")
-        cohort_notes = []
-        for branch, cohort in status_record.get("branch_cohorts", {}).items():
-            note = f"{branch}: {cohort['operations']} operations; {cohort['patients']} patients."
-            mortality = cohort.get("outcomes", {}).get("mortality")
-            if mortality:
-                note += f" Mortality-positive operations: {mortality['events']}; positive patients: {mortality['event_patients']}."
-            cohort_notes.append(note)
         report_path.write_text("**Analysis status: " + ", ".join(statuses) + "**\n\n"
-            + f"**Analysis role: {role}.**\n\n" + "\n\n".join(cohort_notes) + "\n\n"
             + coverage_note + report_path.read_text())
 
     logger.info("Loading prediction files for plots")

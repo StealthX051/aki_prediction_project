@@ -151,20 +151,34 @@ def test_results_analysis_exports_table_bundles_and_reports(tmp_path: Path, monk
     monkeypatch.setattr(results_analysis, "REPORTS_DIR", reports_dir)
     monkeypatch.setattr(results_analysis, "FIGURES_DIR", figures_dir)
 
-    metrics_df = results_analysis.prepare_metrics_for_display(_summary_df())
+    from reporting.make_report import _report_context_notes
+    summary = _summary_df().assign(outcome="mortality", analysis_status="definitive")
+    metrics_df = results_analysis.prepare_metrics_for_display(summary)
+    notes = _report_context_notes({"analysis_role": "exploratory", "branch_rosters": {
+        "windowed": {"operations": 5765, "patients": 5543,
+                     "outcomes": {"mortality": {"events": 52, "event_patients": 47}}}}})
+    metrics_df.attrs["report_notes"] = notes
+    pdf_text = {}
+    original_savefig = results_analysis.PdfPages.savefig
+    def inspect_pdf(self, figure, *args, **kwargs):
+        from matplotlib.text import Text
+        pdf_text.setdefault(Path(self._filename).name, []).append(
+            "\n".join(text.get_text() for text in figure.findobj(Text)))
+        return original_savefig(self, figure, *args, **kwargs)
+    monkeypatch.setattr(results_analysis.PdfPages, "savefig", inspect_pdf)
     results_analysis.generate_html_tables(metrics_df)
     results_analysis.generate_markdown_report(metrics_df)
     results_analysis.generate_docx_report(metrics_df)
     results_analysis.generate_pdf_report(metrics_df)
 
-    base = tables_dir / "results_any_aki_windowed_XGBoost"
+    base = tables_dir / "results_mortality_windowed_XGBoost"
     for suffix in (".html", ".md"):
         assert "0.810" in base.with_suffix(suffix).read_text()
     document = Document(base.with_suffix(".docx"))
     assert any("0.810" in cell.text for row in document.tables[0].rows for cell in row.cells)
     assert base.with_suffix(".pdf").read_bytes().startswith(b"%PDF-")
-    main = pd.read_csv(tables_dir / "results_any_aki_windowed_XGBoost_main.csv")
-    delta = pd.read_csv(tables_dir / "results_any_aki_windowed_XGBoost_delta.csv")
+    main = pd.read_csv(tables_dir / "results_mortality_windowed_XGBoost_main.csv")
+    delta = pd.read_csv(tables_dir / "results_mortality_windowed_XGBoost_delta.csv")
     assert main.loc[0, "AUROC"] == "0.810 (0.750-0.870)"
     assert delta.loc[0, "Δ Brier Score"] == "-0.020 (-0.030--0.010)"
 
@@ -172,12 +186,20 @@ def test_results_analysis_exports_table_bundles_and_reports(tmp_path: Path, monk
     report = Document(reports_dir / "report.docx")
     assert any("0.810" in cell.text for table in report.tables for row in table.rows for cell in row.cells)
     assert (reports_dir / "report.pdf").read_bytes().startswith(b"%PDF-")
+    context = ("Scientific analysis role: exploratory", "5765 operations; 5543 patients",
+               "Mortality-positive operations: 52; positive patients: 47")
+    for text in context:
+        assert text in base.with_suffix(".html").read_text()
+        assert text in (reports_dir / "report.md").read_text()
+        assert any(text in paragraph.text for paragraph in report.paragraphs)
+        assert any(text in page for page in pdf_text["report.pdf"])
+        assert any(text in paragraph.text for paragraph in document.paragraphs)
 
     manifest_path = paper_dir / "manifest.json"
     readme_path = paper_dir / "README.md"
     assert manifest_path.exists()
     assert readme_path.exists()
-    assert "results_any_aki_windowed_XGBoost" in manifest_path.read_text(encoding="utf-8")
+    assert "results_mortality_windowed_XGBoost" in manifest_path.read_text(encoding="utf-8")
     assert "Core reports" in readme_path.read_text(encoding="utf-8")
 
 

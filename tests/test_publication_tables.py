@@ -26,7 +26,9 @@ def _scores():
 
 
 def test_core_paper_view_keeps_full_data_and_consistent_descriptive_styling(tmp_path):
-    assets.export_core_comparisons(prepare_metrics_for_display(_scores()), tmp_path)
+    display = prepare_metrics_for_display(_scores())
+    display.attrs["report_notes"] = ["Scientific analysis role: exploratory."]
+    assets.export_core_comparisons(display, tmp_path)
     base = tmp_path / 'manuscript_any_aki_main'
     raw = pd.read_csv(base.with_suffix('.csv'))
     assert {'Sensitivity', 'Specificity', 'Precision', 'Accuracy', 'Operations', 'Patients'} <= set(raw)
@@ -36,6 +38,7 @@ def test_core_paper_view_keeps_full_data_and_consistent_descriptive_styling(tmp_
     assert '40 operations from 40 patients' in html
     assert 'not evidence of statistical superiority' in html
     assert 'diagnostic' in html and 'not definitive manuscript evidence' in html
+    assert 'Scientific analysis role: exploratory.' in html
     assert 'background-color' in html and 'font-weight: bold' in html
     document = Document(base.with_suffix('.docx'))
     assert [cell.text for cell in document.tables[0].rows[0].cells] == ['Model', 'Feature set', 'AP', 'AUROC', 'Brier', 'Δ AP']
@@ -44,6 +47,7 @@ def test_core_paper_view_keeps_full_data_and_consistent_descriptive_styling(tmp_
         for cell in row.cells[2:5]:
             assert any(run.bold for paragraph in cell.paragraphs for run in paragraph.runs) == best
     assert any('40 operations from 40 patients' in paragraph.text for paragraph in document.paragraphs)
+    assert any('Scientific analysis role: exploratory.' in paragraph.text for paragraph in document.paragraphs)
     gain = pd.read_csv(tmp_path.parent / 'figures/incremental_ap_any_aki_main.csv')
     assert gain.Model.tolist() == ['Logistic regression', 'XGBoost', 'EBM']
     assert gain.analysis_status.eq('diagnostic').all()

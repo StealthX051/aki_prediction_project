@@ -3,9 +3,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 import runpy
+import signal
+import subprocess
 import sys
+import time
 
 import pytest
 
@@ -17,7 +21,7 @@ def arguments(tmp_path):
     baseline.mkdir()
     (baseline / "original.csv").write_text("original data")
     return argparse.Namespace(baseline_root=baseline, study_root=tmp_path / "new", raw_dir=tmp_path / "raw",
-                              python=sys.executable, cpu_budget=60)
+                              cpu_budget=60)
 
 
 def preflight():
@@ -46,10 +50,12 @@ def test_commands_pin_scientific_budget_and_isolate_outputs(tmp_path, monkeypatc
     monkeypatch.setenv("SMOKE_TEST_FLAG", "True")
     monkeypatch.setenv("RESULTS_DIR", str(args.baseline_root))
     monkeypatch.setenv("N_TRIALS", "1")
+    monkeypatch.setenv("PARALLEL_BACKEND", "threads")
     stages = SUPERVISOR["commands"](args)
     assert [s["stage"] for s in stages] == ["preflight", "legacy_canary", "optimized_canary", "equivalence_gate", "extensions"]
     for stage in stages:
         env = stage["env"]
+        assert stage["command"][0] == sys.executable
         assert env["PROCESSED_DIR"] == str(args.baseline_root / "data/processed")
         assert env["RAW_DIR"] == str(args.raw_dir)
         assert env["SAVE_FINAL_REFIT_FLAG"] == "False"
@@ -61,6 +67,7 @@ def test_commands_pin_scientific_budget_and_isolate_outputs(tmp_path, monkeypatc
             assert command[command.index("--inner-folds") + 1] == "3"
             assert command[command.index("--calibration-folds") + 1] == "5"
             assert "--diagnostic" not in command and "--save-final-refit" not in command
+            assert command[command.index("--parallel-backend") + 1] == "processes"
     assert stages[1]["env"]["AKI_ARTIFACT_ROOT"] == str(args.study_root / "validation/legacy-canary")
     assert stages[2]["env"]["AKI_ARTIFACT_ROOT"] == str(args.study_root)
     assert stages[1]["command"][stages[1]["command"].index("--threads-per-model") + 1] == "12"
@@ -176,3 +183,85 @@ def test_relaunch_that_would_refit_is_rejected(tmp_path):
     assert len(visited) == 6 and "--dry-run" in visited[-1]
     status = json.loads((args.study_root / "control/supervisor_status.json").read_text())
     assert status["status"] == "failed" and status["stage"] == "zero_fit_relaunch"
+
+
+@pytest.mark.parametrize("ignore_hup", [False, True], ids=["foreground-cleanup", "nohup-survival"])
+def test_terminal_hangup_preserves_detached_run_or_cleans_foreground(tmp_path, ignore_hup):
+    """Exercise the actual supervisor/runner using a sleeping stage, never models."""
+    args = arguments(tmp_path)
+    script = tmp_path / "hangup_probe.py"
+    project = Path(__file__).resolve().parents[1]
+    pid_file = tmp_path / "stage.pid"
+    script.write_text('''import argparse,json,os,runpy,signal,sys
+from pathlib import Path
+root=Path(sys.argv[1])
+if sys.argv[2]=='ignore': signal.signal(signal.SIGHUP,signal.SIG_IGN)
+supervisor=runpy.run_path(sys.argv[3])
+args=argparse.Namespace(baseline_root=root/'old',study_root=root/'new',raw_dir=root/'raw',cpu_budget=60)
+def runner(command,**kwargs):
+    if '--dry-run' in command: return sys.argv[4]
+    code="import os,time; from pathlib import Path; Path("+repr(str(root/'stage.pid'))+").write_text(str(os.getpid())); time.sleep(60)"
+    return supervisor['_run']([sys.executable,'-c',code],env=os.environ.copy(),cwd=root)
+supervisor['run_pipeline'](args,runner=runner)
+''')
+    process = subprocess.Popen(
+        [sys.executable, str(script), str(tmp_path), "ignore" if ignore_hup else "foreground",
+         str(project / "scripts/cpu/run-optimized-core.py"), json.dumps(preflight())],
+        env={**os.environ, "PYTHONPATH": str(project)}, stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL, start_new_session=True,
+    )
+    stage_pid = None
+    try:
+        deadline = time.monotonic() + 15
+        while not pid_file.exists() or not pid_file.read_text().strip():
+            assert process.poll() is None, "Supervisor failed before its sleeping test stage"
+            assert time.monotonic() < deadline
+            time.sleep(.02)
+        stage_pid = int(pid_file.read_text())
+        process.send_signal(signal.SIGHUP)
+        if ignore_hup:
+            time.sleep(.15)
+            assert process.poll() is None, "nohup's inherited HUP ignore was replaced"
+            os.kill(stage_pid, 0)
+            process.send_signal(signal.SIGTERM)
+        assert process.wait(timeout=10) != 0
+        with pytest.raises(ProcessLookupError):
+            os.kill(stage_pid, 0)
+        status = json.loads((args.study_root / "control/supervisor_status.json").read_text())
+        assert status["status"] == "interrupted"
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+        if stage_pid:
+            try:
+                os.killpg(stage_pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+
+def test_resume_rejects_changed_numerical_runtime_before_commands(tmp_path):
+    args = arguments(tmp_path)
+    snapshot = SUPERVISOR["_execution_snapshot"]()
+    snapshot["numerical_runtime_versions"]["scipy"] = "unreviewed-version"
+    SUPERVISOR["_write"](args.study_root / "control/execution-snapshot.json", snapshot)
+    with pytest.raises(ValueError, match="source/environment changed"):
+        SUPERVISOR["run_pipeline"](args, runner=lambda *a, **k: pytest.fail("Changed runtime launched a stage"))
+
+
+def test_documented_script_imports_project_without_pythonpath(tmp_path):
+    project = Path(__file__).resolve().parents[1]
+    env = dict(os.environ)
+    env.pop("PYTHONPATH", None)
+    study = tmp_path / "new-study"
+    result = subprocess.run(
+        [sys.executable, str(project / "scripts/cpu/run-optimized-core.py"),
+         "--baseline-root", str(tmp_path / "missing-baseline"), "--study-root", str(study)],
+        cwd=tmp_path, env=env, capture_output=True, text=True, timeout=15,
+    )
+    assert result.returncode != 0
+    assert "Protected study does not exist" in result.stderr
+    assert "ModuleNotFoundError" not in result.stderr
+    status = json.loads((study / "control/supervisor_status.json").read_text())
+    assert status["status"] == "failed" and status["stage"] == "baseline_inventory"
+    assert not (study / "results").exists()

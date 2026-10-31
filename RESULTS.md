@@ -4,8 +4,10 @@ This document describes saved artifacts and paper-output regeneration.
 Scientific definitions and inference limits are in [METHODS.md](METHODS.md);
 execution and root selection are in [README.md](README.md).
 
-**Pre-run status:** definitive results have not been generated. Historical and
-reduced-validation outputs remain separate, explicitly labeled evidence.
+The 36-configuration main core study is complete at frozen revision `fcff7c7`.
+Broader ICU and exploratory mortality runs are held at readiness; their
+full-budget equivalence canary has not started. Historical and diagnostic
+outputs remain separate, explicitly labeled evidence.
 
 ## Layout and integrity
 
@@ -57,21 +59,13 @@ or upgraded in place.
 
 ## Regenerate from saved artifacts
 
-Activate the Conda environment and select the existing study root as documented
-in the README. These commands consume saved data and models without fitting:
-
-```bash
-python -m run_catch22 experiments --report-only \
-  --bootstrap 5000 --bootstrap-seed 0 --no-bootstrap-stratified
-python -m run_catch22 descriptive --branch non_windowed
-python -m run_catch22 descriptive --branch windowed
-python -m reporting.fold_explanations
-```
-
-Add `--cohort-scope icu_waveform_sensitivity` to launcher commands, and set
-`COHORT_SCOPE=icu_waveform_sensitivity` for standalone explanation exports.
-The report-only launcher records changed bootstrap settings before regeneration;
-direct metrics commands must agree with the manifest policy.
+Use the [scoped saved-result commands](README.md#diagnostics-and-saved-result-reporting)
+after selecting the existing study and processed-data paths. These consume saved
+data and models without fitting. The default reporting policy is 5,000
+unstratified patient-cluster draws, seed 0. The report-only launcher records
+changed bootstrap settings before regeneration; direct metrics commands must
+agree with the manifest policy. Standalone explanations require the appropriate
+`COHORT_SCOPE`.
 
 Strict reports align unique cases and verify patient, truth, and fold identity.
 They require the same family's clinical reference and reject missing requested

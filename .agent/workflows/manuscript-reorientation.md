@@ -6,9 +6,11 @@ The user subsequently authorized the main core run. All 36 configurations and
 their bootstrap/report stages completed successfully on October 31, 2026 at
 frozen modeling revision `fcff7c7c9794e0ea8405814c68176760a2eb9afc`. The pre-run
 code was committed and pushed; local, remote, and frozen revisions were verified
-identical before optimization benchmarking. Broader ICU and supplementary grids
-remain unstarted. Current authorization covers bounded optimization diagnostics
-and a reviewable implementation plan, preserving completed research artifacts.
+identical before optimization benchmarking. The optimized scheduler and broader
+ICU/mortality support are implemented and checked. Broader ICU, mortality and
+supplementary grids remain unstarted. The current user instruction is to finish
+readiness checks and stop before the full-budget canary or production batches,
+preserving completed research artifacts.
 Drive/email/manuscript external writes remain separate. This is the single
 decision/evidence register; definitions belong in METHODS, commands in README,
 and outputs in RESULTS. Earlier diagnostics below retain their stated limits.
@@ -20,7 +22,7 @@ and outputs in RESULTS. Earlier diagnostics below retain their stated limits.
 | AKI horizon | Absolute rise ≥0.3 mg/dL by 48 hours or relative rise ≥1.5× by 72 hours; acute-rise gate for stage 3 |
 | AKI ascertainment | Finite positive baseline ≤4 mg/dL and ≥1 finite positive result in `(opend, opend+72h]`; otherwise stages/labels remain missing |
 | Population | General anesthesia; exclude ASA V/VI, retain missing ASA and repeat operations |
-| Scopes | `main_shared` for both AKI/ICU; broader `icu_waveform_sensitivity` for ICU only |
+| Scopes | `main_shared` for AKI/ICU; broader `icu_waveform_sensitivity` for ICU; independent `mortality_waveform_sensitivity` for exploratory in-hospital mortality |
 | Matching | Freeze branch rosters/folds before feature sets; same operations across families/input sets within a branch; partial-feature NaNs retained |
 | Predictors | Preoperative clinical variables plus operative waveforms only; postoperative audit metadata excluded |
 | Cleaning | Explicit source-mg/dL creatinine; unknown admission/sex/age inputs remain missing; invalid ICU durations are ineligible; latest finite preop extra labs |
@@ -261,8 +263,8 @@ inventory rather than proliferating support documents.
 
 The first disposable mixed diagnostic was interrupted after checkpoints appeared
 because final integration edits overlapped its fold-preparation phase. Its
-outputs under `diagnostics/mixed-integration` are excluded from acceptance;
-repeat from the sealed checkout under `diagnostics/sealed-integration-v2`. Scheduler
+outputs under `diagnostics/mixed-integration` are excluded from acceptance.
+The later sealed attempts and final successful check are distinguished below. Scheduler
 process groups were reaped after SIGTERM. No protected main artifacts changed.
 
 The first sealed interruption check exposed a consumer-side verifier error:
@@ -304,3 +306,18 @@ predictions with 100 diagnostic bootstrap draws (no fitting), including mortalit
 DCA; these are diagnostic artifacts, not definitive manuscript results. New
 canonical model namespaces remain empty. User-requested launch hold remains in
 force for the full-budget canary and both production batches.
+
+## Unattended-readiness audit
+
+Independent operations, scientific-boundary and bloat reviews found no new
+leakage or fitting-method changes. The reviewed modeling digest remains
+`926b0f7a5eb8710b3d4de7a88ecab8ddad3a43de52e18a3c574e599ec3d30ce0`.
+Fixed clean-terminal supervisor imports, foreground hangup cleanup while
+preserving nohup operation, interpreter/runtime provenance, and real cancellable
+process bootstrap deadlines. Removed the ineffective thread timeout wrapper and
+repaired delayed-task sequential fallback; resampling draws/calculations are
+unchanged. Mortality's exploratory role and cohort denominators now appear in
+all human report/table exports. Removed dead code and stale/duplicate docs;
+retained focused behavioral/scientific tests without new dependencies or service
+infrastructure. Full suite: 550 passed, including bounded subprocess probes.
+No full-budget canary or production run was launched; the user's hold persists.

@@ -533,6 +533,8 @@ def export_core_comparisons(metrics: pd.DataFrame, tables_dir: Path) -> List[Pat
             status = frame.analysis_status.iloc[0] if "analysis_status" in frame else "legacy"
             outcome_label = {"any_aki": "Acute kidney injury within 72 hours", "icu_admission": "ICU admission", "mortality": "In-hospital mortality"}.get(outcome, outcome)
             notes = "AP, average precision; AUROC, area under the receiver operating characteristic curve. The AP no-skill reference is the event prevalence. Lower Brier scores are better. Intervals are 95% patient-cluster bootstrap intervals when available, conditional on the saved fitted models. Δ AP compares each input set with the same model family's clinical-only reference. Shading and bold identify descriptive within-family ranks, not evidence of statistical superiority. Full operating-point metrics and denominators are retained in the companion CSV and consolidated report."
+            if metrics.attrs.get("report_notes"):
+                notes = " ".join([*metrics.attrs["report_notes"], notes])
             common_population = "n" in frame and all(frame[c].nunique(dropna=False) == 1 for c in ("n", "n_patients", "prevalence") if c in frame)
             if common_population:
                 population = f"{int(frame['n'].iloc[0]):,} operations"
