@@ -936,6 +936,18 @@ def train_evaluate(
         threads_per_model = available_cpus
     if validation_scheme == "nested_cv":
         max_feasible_workers = max(1, available_cpus // max(1, threads_per_model))
+        reservation = os.getenv("AKI_CONFIG_CPU_RESERVATION")
+        if reservation:
+            budget = min(available_cpus, int(reservation))
+            if model_type == "ebm":
+                # Concurrent outer fits share this process's joblib bag pool.
+                max_feasible_workers = budget - threads_per_model - 1
+            elif model_type == "logistic_regression":
+                max_feasible_workers = budget // int(os.getenv("OPENBLAS_NUM_THREADS", "1"))
+            else:
+                max_feasible_workers = budget // threads_per_model
+            if max_feasible_workers < 1:
+                raise ValueError("Configuration CPU reservation cannot support its fixed estimator settings")
         if max_workers > max_feasible_workers:
             logger.warning(
                 "Reducing max_workers from %s to %s to avoid oversubscribing %s CPUs "
@@ -981,6 +993,9 @@ def train_evaluate(
     else:
         fold_roster = working_df[["caseid", "split_group"]].to_dict("records")
     fold_assignment_hash = hashlib.sha256(json.dumps(fold_roster, sort_keys=True).encode()).hexdigest()
+    expected_fold_hash = os.getenv("AKI_EXPECTED_FOLD_HASH")
+    if expected_fold_hash and expected_fold_hash != fold_assignment_hash:
+        raise ValueError("Training partitions differ from the frozen preflight split plan")
     model_label = {"xgboost": "XGBoost", "ebm": "EBM", "logistic_regression": "Logistic regression"}[model_type]
     pipeline_name = f"{PIPELINE_NAME}_{validation_scheme}"
     validation_fingerprint = build_validation_fingerprint(

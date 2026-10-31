@@ -15,7 +15,7 @@ from data_preparation.artifact_metadata import (
     ARTIFACT_SCHEMA_VERSIONS,
     file_sha256,
 )
-from data_preparation.cohort_scopes import COHORT_SCOPES, build_cohort_manifest
+from data_preparation.cohort_scopes import COHORT_SCOPES, LEGACY_STORED_SCOPES, build_cohort_manifest
 from data_preparation.inputs import (
     COHORT_FILE,
     PREOP_PROCESSED_FILE,
@@ -65,7 +65,7 @@ def validate_prepared_artifacts(
     *,
     cohort_path: Path,
     source_paths: dict[str, Path] | None = None,
-) -> None:
+) -> dict[str, dict[str, object]]:
     """Verify shared source identity and actual branch rosters before reuse.
 
     Raw files are optional; when present their content must agree with the
@@ -77,6 +77,7 @@ def validate_prepared_artifacts(
         required_columns=[*COHORT_REQUIRED_COLUMNS, *COHORT_IDENTITY_COLUMNS],
     )
     metadata_by_path = {}
+    derived_scope_manifests = {}
     if preop_path is not None:
         frame, metadata = read_versioned_csv(
             preop_path, artifact_role=STEP_03_PREOP_ARTIFACT, required_columns=PREOP_REQUIRED_COLUMNS
@@ -94,10 +95,7 @@ def validate_prepared_artifacts(
         if metadata.get("branch") != branch:
             raise ArtifactCompatibilityError(f"Processing branch identity mismatch in {path}.")
         manifests = metadata.get("cohort_scopes", {})
-        for scope in COHORT_SCOPES:
-            current = build_cohort_manifest(frame, scope, branch)
-            if manifests.get(scope) != current:
-                raise ArtifactCompatibilityError(f"Cohort roster/count metadata mismatch for {scope} in {path}.")
+        derived_scope_manifests[branch] = validate_scope_manifests(frame, manifests, branch, path)
         extraction_mode = {"non_windowed": "full", "windowed": "windowed"}.get(branch)
         if extraction_mode is None:
             raise ArtifactCompatibilityError(f"Unsupported processing branch {branch!r} in {path}.")
@@ -135,6 +133,23 @@ def validate_prepared_artifacts(
     for key, source_path in (source_paths or {}).items():
         if Path(source_path).is_file() and (reference_hashes or {}).get(key) != file_sha256(source_path):
             raise ArtifactCompatibilityError(f"Raw source changed since preprocessing: {source_path}.")
+
+    return derived_scope_manifests
+
+
+def validate_scope_manifests(frame, manifests, branch, path):
+    """Validate stored scope contracts and derive new scope overlays read-only.
+
+    Only the newly introduced mortality entry may be absent from schema-v5
+    sidecars. If present, it must match just as strictly as original entries.
+    Callers may persist the returned overlay under their new study root.
+    """
+    current = {scope: build_cohort_manifest(frame, scope, branch) for scope in COHORT_SCOPES}
+    for scope in COHORT_SCOPES:
+        if scope in LEGACY_STORED_SCOPES or scope in manifests:
+            if manifests.get(scope) != current[scope]:
+                raise ArtifactCompatibilityError(f"Cohort roster/count metadata mismatch for {scope} in {path}.")
+    return current
 
 
 def main() -> None:

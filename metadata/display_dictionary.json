@@ -1,6 +1,14 @@
 {
   "schema_version": 1,
   "outcomes": {
+    "mortality": {
+      "label": "In-hospital mortality",
+      "short_label": "Mortality"
+    },
+    "icu_admission": {
+      "label": "ICU admission",
+      "short_label": "ICU"
+    },
     "any_aki": {
       "label": "Any AKI",
       "short_label": "AKI"

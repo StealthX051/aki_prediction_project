@@ -235,6 +235,16 @@ def crawl_predictions(results_dir: Path, *, strict: bool = False, run_manifest: 
             pred_files.extend(matched)
             logger.info("Found %d prediction files for pattern %s", len(matched), pattern)
 
+    manifest_path = run_manifest or results_dir / "run_manifest.json"
+    if manifest_path.exists():
+        manifest = json.loads(manifest_path.read_text())
+        for config in manifest.get("configurations", []):
+            if "artifact_path" in config:
+                if not config.get("reuse_reference"):
+                    raise ValidationError("External artifacts require a verified reuse reference")
+                pred_files.append(Path(config["artifact_path"]) / "predictions" / "test.csv")
+    pred_files = list(dict.fromkeys(path.resolve() for path in pred_files))
+
     if not pred_files:
         raise FileNotFoundError(
             "No test prediction files found. Expected them under 'results/models/**/predictions/test.csv' "
@@ -297,6 +307,8 @@ def _validate_run_manifest(prediction_sets: List[PredictionSet], path: Path, *, 
     from data_preparation.cohort_scopes import selected_case_hash
     protocol_keys = ("validation_protocol_version", "code_revision", "code_hash", "environment", "preprocessing_protocol")
     expected_protocol = manifest.get("study_identity")
+    config_by_key = {(c["model_type"], c["outcome"], c["branch"], c["feature_set"]): c
+                     for c in manifest["configurations"]}
     diagnostic = bool(manifest.get("diagnostic", False))
     if not diagnostic and not expected_protocol:
         raise ValidationError("Definitive reporting requires study_identity in the run manifest")
@@ -338,7 +350,16 @@ def _validate_run_manifest(prediction_sets: List[PredictionSet], path: Path, *, 
             raise ValidationError(f"Incomplete saved protocol identity: {metadata_path}")
         if expected_protocol is None:
             expected_protocol = protocol
-        if protocol != expected_protocol:
+        config = config_by_key.get(key, {})
+        if config.get("reuse_reference"):
+            try:
+                from model_creation.run_inventory import verify_legacy_reference
+                reference = verify_legacy_reference(config, manifest.get("compatibility_attestation", {}), expected_protocol)
+            except (ValueError, OSError, KeyError) as exc:
+                raise ValidationError(f"Invalid protected reference: {metadata_path}: {exc}") from exc
+            if ps.path.resolve() != Path(reference["prediction_path"]):
+                raise ValidationError("Protected reference prediction path differs from imported inventory")
+        elif protocol != expected_protocol:
             raise ValidationError(f"Mixed or stale model code/environment protocol: {metadata_path}")
         declared_diagnostic = ps.df.get("diagnostic", pd.Series(dtype=object)).astype(str).str.lower().map(
             {"true": True, "false": False, "1": True, "0": False})

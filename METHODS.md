@@ -67,6 +67,14 @@ while still enforcing outcome-specific clinical requirements where needed.
 `main_shared` requires valid AKI eligibility/labels and valid ICU labels and is
 used for both manuscript outcomes. `icu_waveform_sensitivity` requires valid ICU
 labels without requiring baseline or postoperative creatinine for eligibility.
+`mortality_waveform_sensitivity` uses the broader waveform-qualified population
+with valid mortality eligibility and binary in-hospital mortality labels. It
+requires neither creatinine ascertainment nor ICU admission/label eligibility.
+Mortality analyses are exploratory, with the same full validation and patient
+clustering as the primary analyses. Report positive operations and positive
+patients separately because repeat operations remain present. No event count
+alone establishes outcome stability; report uncertainty and fold-level support.
+
 The scope selector runs before feature selection. Every family/feature set
 within a scope, outcome, and processing branch uses the same operation roster.
 Partial waveform-feature NaNs are retained; successful extraction of every
@@ -569,3 +577,20 @@ exploratory curves as clinical utility.
 Aeon time-series models are exploratory and are intentionally separated from
 the default Catch22 paper path. Their commands and caveats live in
 `experimental/aeon/README.md`.
+
+## Scheduling and execution provenance
+
+Configuration scheduling changes execution order and resource admission only.
+Each fold retains serial seeded HPO, training-only learned preprocessing,
+calibration and threshold selection, and the established patient partitions.
+Resource settings, full trial histories, source/environment identity and exact
+cohort/fold hashes are recorded. Protected older configurations retain their
+original provenance; compatibility is attested narrowly for the reviewed frozen
+baseline rather than rewriting its fingerprints. Cold split preparation
+parallelizes independent cache keys while retaining serial candidate selection
+and tie-breaking within each key.
+
+Exploratory mortality decision curves use thresholds 0.001–0.050 in increments
+of 0.001, with treat-all/treat-none comparators and patient-cluster uncertainty.
+These exploratory thresholds do not establish a clinical intervention or claim
+clinical utility. Existing AKI and ICU threshold grids remain unchanged.

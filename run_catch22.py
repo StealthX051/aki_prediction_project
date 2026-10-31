@@ -24,7 +24,7 @@ from artifact_paths import (
     refresh_repo_convenience_paths,
     resolve_log_file,
 )
-from data_preparation.cohort_scopes import COHORT_SCOPES
+from data_preparation.cohort_scopes import COHORT_SCOPES, SCOPE_OUTCOMES, scope_required_columns
 from runtime_resources import available_cpu_count, resource_snapshot
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -164,10 +164,10 @@ def _allowlist(raw, defaults, allowed, label: str) -> list[str]:
 
 def _configuration_grid(args) -> list[dict]:
     models = _resolve_model_types(args)
-    defaults = ("icu_admission",) if args.cohort_scope == "icu_waveform_sensitivity" else DEFAULT_OUTCOMES
-    outcomes = _allowlist(args.outcomes, defaults, DEFAULT_OUTCOMES, "outcomes")
-    if args.cohort_scope == "icu_waveform_sensitivity" and outcomes != ["icu_admission"]:
-        raise ValueError("icu_waveform_sensitivity supports only icu_admission")
+    defaults = SCOPE_OUTCOMES[args.cohort_scope]
+    if args.outcomes is not None and any(item not in defaults for value in args.outcomes for item in _csv_items(value)):
+        raise ValueError(f"{args.cohort_scope} supports only {', '.join(defaults)}")
+    outcomes = _allowlist(args.outcomes, defaults, defaults, "outcomes")
     features = _allowlist(args.feature_sets, CORE_FEATURE_SETS if args.preset == "core" else ALL_FEATURE_SETS,
                           ALL_FEATURE_SETS, "feature sets")
     branches = _allowlist(args.branches, DEFAULT_BRANCHES, DEFAULT_BRANCHES, "branches")
@@ -203,8 +203,7 @@ def _freeze_branch_rosters(processed_dir: Path, results_dir: Path, scope: str, b
         suffix = "_windowed" if branch == "windowed" else ""
         data_path = processed_dir / f"aki_features_master_wide{suffix}.csv"
         frame, _ = read_versioned_csv(data_path, artifact_role=STEP_05_MERGED_ARTIFACT,
-                                     required_columns=["caseid", "subjectid", "eligible_any_aki", "aki_label",
-                                                       "eligible_icu_admission", "y_icu_admit"])
+                                     required_columns=["caseid", "subjectid", *scope_required_columns(scope)])
         selected = select_cohort(frame, scope)
         if selected.empty:
             raise ValueError(f"No operations available for {scope}/{branch}")
@@ -271,6 +270,8 @@ def _report_env(base_env: dict[str, str]) -> dict[str, str]:
     env = dict(base_env)
     for key, value in REPORT_ENV_DEFAULTS.items():
         env.setdefault(key, value)
+    if "AKI_REPORT_CPU_BUDGET" in env:
+        env["PLOT_N_JOBS"] = str(min(available_cpu_count(), int(env["AKI_REPORT_CPU_BUDGET"])))
     return env
 
 
@@ -317,7 +318,7 @@ def _run_reporting(
     _emit("--- Evaluating models and generating reports ---", log_handle)
     _emit("  > Running evaluation (results -> results directory)...", log_handle)
     manifest_path = results_dir / "run_manifest.json"
-    report_workers = available_cpu_count()
+    report_workers = min(available_cpu_count(), int(env.get("AKI_REPORT_CPU_BUDGET", available_cpu_count())))
     if manifest_path.exists():
         report_workers = min(report_workers, max(1, len(json.loads(manifest_path.read_text())["configurations"])))
     metrics_args = [
@@ -400,203 +401,15 @@ def _ensure_data_prepared(
 
 
 def _run_experiments(args: argparse.Namespace) -> int:
-    try:
-        configurations = _configuration_grid(args)
-        layout, log_file = _prepare_primary_layout("experiment_log.txt", args.cohort_scope, args.validation_scheme)
-        if not args.diagnostic and not args.smoke and args.validation_scheme == "nested_cv" and (
-            args.outer_folds != 5 or args.inner_folds != 3 or args.calibration_folds != 5 or args.repeats != 1
-        ):
-            raise ValueError("Definitive validation requires 5 outer/3 inner HPO/5 calibration folds and one repeat; use --diagnostic for reduced checks.")
-    except ValueError as exc:
-        print(exc, file=sys.stderr)
-        return 1
-
-    manifest = {
-        "cohort_scope": args.cohort_scope, "validation_scheme": args.validation_scheme,
-        "diagnostic": bool(args.diagnostic or args.smoke or args.validation_scheme == "holdout"),
-        "preset": args.preset, "configurations": configurations,
-        "outer_folds": args.outer_folds, "inner_folds": args.inner_folds,
-        "calibration_folds": args.calibration_folds, "repeats": args.repeats,
-        "results_dir": str(layout.results_dir), "paper_dir": str(layout.paper_dir),
-        "processed_dir": str(layout.processed_dir), "raw_dir": str(layout.raw_dir),
-        "max_workers": args.max_workers, "threads_per_model": args.threads_per_model,
-        "lr_blas_threads": args.blas_threads,
-        "reporting": {"bootstrap_replicates": min(args.bootstrap, 100) if args.smoke else args.bootstrap,
-                      "bootstrap_seed": args.bootstrap_seed,
-                      "bootstrap_stratified": args.bootstrap_stratified},
-    }
-    if args.dry_run:
-        print(json.dumps(manifest, indent=2))
-        return 0
-    try:
-        _ensure_paths(
-            {
-                "processed_dir": layout.processed_dir,
-                "results_dir": layout.results_dir,
-                "paper_dir": layout.paper_dir,
-                "log_file": log_file,
-            }
-        )
-    except StoragePolicyError as exc:
-        print(exc, file=sys.stderr)
-        return 1
-
-    if args.refresh_links:
-        refresh_repo_convenience_paths(PROJECT_ROOT, processed_dir=layout.processed_dir,
-                                       results_dir=layout.results_dir, paper_dir=layout.paper_dir)
-
-    env = _base_env(layout, log_file=log_file)
-    env.update({"COHORT_SCOPE": args.cohort_scope, "VALIDATION_SCHEME": args.validation_scheme,
-                "OMP_NUM_THREADS": str(args.threads_per_model), "OPENBLAS_NUM_THREADS": "1",
-                "MKL_NUM_THREADS": "1", "NUMBA_NUM_THREADS": str(args.threads_per_model)})
-    manifest_path = layout.results_dir / "run_manifest.json"
-    with _exclusive_run(layout.results_dir / ".run.lock"), _open_log_file(log_file) as log_handle:
-        _emit("Starting Experiments...", log_handle)
-        _emit(
-            f"Prep mode: {args.prep} | Configurations: {len(configurations)} | Results dir: {layout.results_dir} | "
-            f"Validation: {args.validation_scheme}",
-            log_handle,
-        )
-        _emit(f"Python runner: {sys.executable}", log_handle)
-
-        if args.report_only:
-            if not manifest_path.exists():
-                raise ValueError("--report-only requires an existing run_manifest.json")
-            saved = json.loads(manifest_path.read_text())
-            saved["reporting"] = manifest["reporting"]
-            _write_manifest(manifest_path, saved)
-            result = _run_reporting(
-                layout.results_dir, args.parallel_backend, env=env, log_handle=log_handle,
-                bootstrap=manifest["reporting"]["bootstrap_replicates"],
-                bootstrap_seed=args.bootstrap_seed, bootstrap_stratified=args.bootstrap_stratified,
-            )
-            saved = json.loads(manifest_path.read_text())
-            saved["status"] = "validated" if result == 0 else "reporting_failed"
-            _write_manifest(manifest_path, saved)
-            return result
-        manifest["study_identity"] = _study_identity()
-        with _exclusive_run(layout.processed_dir.parent / ".preparation.lock"):
-            prep_result = _ensure_data_prepared(args.prep, env=env, processed_dir=layout.processed_dir, log_handle=log_handle)
-        if prep_result != 0:
-            return 1
-
-        manifest["branch_rosters"] = _freeze_branch_rosters(
-            layout.processed_dir, layout.results_dir, args.cohort_scope,
-            [config["branch"] for config in configurations])
-
-        if manifest_path.exists():
-            previous = json.loads(manifest_path.read_text())
-            if any(previous.get(key) != manifest[key] for key in (
-                "cohort_scope", "validation_scheme", "diagnostic", "study_identity",
-                "outer_folds", "inner_folds", "calibration_folds", "repeats",
-            )):
-                raise ValueError("Existing run manifest describes another analysis; choose a fresh study root.")
-            keys = ("model_type", "outcome", "branch", "feature_set")
-            requested = {tuple(config[key] for key in keys) for config in configurations}
-            previous_configs = {tuple(config[key] for key in keys): config for config in previous["configurations"]}
-            for config in configurations:
-                old = previous_configs.get(tuple(config[key] for key in keys))
-                if old is not None and old.get("n_trials") != config["n_trials"]:
-                    raise ValueError("HPO budget changed within this study; choose a fresh study root.")
-            manifest["configurations"] = [config for config in previous["configurations"]
-                                          if tuple(config[key] for key in keys) not in requested] + configurations
-            for branch, roster in previous.get("branch_rosters", {}).items():
-                if branch in manifest["branch_rosters"] and any(
-                    roster.get(key) != manifest["branch_rosters"][branch].get(key)
-                    for key in ("selected_case_hash", "dataset_sha256")
-                ):
-                    raise ValueError("Frozen data or operation roster changed; use a fresh study root.")
-                manifest["branch_rosters"].setdefault(branch, roster)
-            manifest["execution_history"] = previous.get("execution_history", previous.get("execution", []))
-        manifest["updated_at"] = datetime.now(timezone.utc).isoformat()
-        manifest["status"] = "running"
-        manifest["resources"] = resource_snapshot(layout.artifact_root)
-        _write_manifest(manifest_path, manifest)
-
-        successful_validation_runs = 0
-        failed_validation_runs = 0
-        failed_configs: list[str] = []
-        execution = []
-
-        for config in configurations:
-            model_type, outcome, branch, feature_set = (config[key] for key in
-                                                       ("model_type", "outcome", "branch", "feature_set"))
-            _emit(f"Running: Model={model_type} | Outcome={outcome} | Branch={branch} | FeatureSet={feature_set}", log_handle)
-            validation_args = ["--outcome", outcome, "--branch", branch, "--feature_set", feature_set,
-                               "--model_type", model_type, "--cohort-scope", args.cohort_scope,
-                               "--validation-scheme", args.validation_scheme,
-                               "--outer-folds", str(args.outer_folds), "--inner-folds", str(args.inner_folds),
-                               "--calibration-folds", str(args.calibration_folds),
-                               "--repeats", str(args.repeats), "--max-workers", str(args.max_workers),
-                               "--threads-per-model", str(args.threads_per_model)]
-            validation_args.extend(["--n-trials", str(config["n_trials"])])
-            if args.resume:
-                validation_args.append("--resume")
-            if args.save_final_refit:
-                validation_args.append("--save-final-refit")
-            if args.smoke:
-                validation_args.append("--smoke_test")
-            if manifest["diagnostic"]:
-                validation_args.append("--diagnostic")
-            started = time.monotonic()
-            fit_env = dict(env)
-            blas_threads = args.blas_threads if model_type == "logistic_regression" else 1
-            fit_env.update(OPENBLAS_NUM_THREADS=str(blas_threads), MKL_NUM_THREADS=str(blas_threads))
-            result = run_module("model_creation.step_07_train_evaluate", validation_args, env=fit_env, log_handle=log_handle)
-            execution.append({**config, "elapsed_seconds": time.monotonic() - started, "exit_code": result})
-            manifest["execution"] = execution
-            manifest.setdefault("execution_history", []).append({**execution[-1],
-                "finished_at": datetime.now(timezone.utc).isoformat()})
-            _write_manifest(manifest_path, manifest)
-            if result == 0:
-                successful_validation_runs += 1
-            else:
-                failed_validation_runs += 1
-                failed_configs.append(f"model={model_type} outcome={outcome} branch={branch} feature_set={feature_set}")
-
-        if failed_validation_runs > 0:
-            manifest.update(status="failed", failures=failed_configs)
-            _write_manifest(manifest_path, manifest)
-            _emit("--- Validation completed with failures; skipping metrics/report generation ---", log_handle)
-            for failed_config in failed_configs:
-                _emit(f"  > FAILED: {failed_config}", log_handle)
-            _emit(
-                f"Launcher finished with {failed_validation_runs} failed validation configuration(s).",
-                log_handle,
-            )
-            return 1
-
-        if successful_validation_runs == 0:
-            _emit("--- No validation artifacts were produced during this run; skipping metrics/report generation ---", log_handle)
-            return 1
-
-        artifacts_present = all((layout.results_dir / "models" / config["model_type"] / config["outcome"] /
-                                 config["branch"] / config["feature_set"] / "predictions" / "test.csv").exists()
-                                for config in manifest["configurations"])
-        manifest.update(status="models_complete" if artifacts_present else "partial", failures=[])
-        _write_manifest(manifest_path, manifest)
-        if not args.skip_report:
-            result = _run_reporting(
-                layout.results_dir, args.parallel_backend, env=env, log_handle=log_handle,
-                bootstrap=manifest["reporting"]["bootstrap_replicates"],
-                bootstrap_seed=args.bootstrap_seed, bootstrap_stratified=args.bootstrap_stratified,
-            )
-            manifest["status"] = "validated" if result == 0 else "reporting_failed"
-            _write_manifest(manifest_path, manifest)
-            if result != 0:
-                return 1
-
-        _emit("All experiments finished.", log_handle)
-    return 0
+    from model_creation.experiment_queue import execute
+    return execute(args)
 
 
 def _run_smoke(args: argparse.Namespace) -> int:
     try:
         model_types = _resolve_model_types(args)
-        args.outcomes = _allowlist(args.outcomes, ("icu_admission",) if args.cohort_scope == "icu_waveform_sensitivity"
-                                  else DEFAULT_OUTCOMES, DEFAULT_OUTCOMES, "outcomes")
-        if args.cohort_scope == "icu_waveform_sensitivity" and args.outcomes != ["icu_admission"]:
-            raise ValueError("ICU sensitivity smoke supports only icu_admission")
+        allowed = SCOPE_OUTCOMES[args.cohort_scope]
+        args.outcomes = _allowlist(args.outcomes, allowed, allowed, "outcomes")
     except ValueError as exc:
         print(exc, file=sys.stderr)
         return 1
@@ -883,7 +696,15 @@ def build_parser() -> argparse.ArgumentParser:
     experiments.add_argument("--feature-sets", nargs="+", help="Feature allowlist; overrides the preset.")
     experiments.add_argument("--outcomes", nargs="+", help="Outcome allowlist.")
     experiments.add_argument("--branches", nargs="+", help="Processing branch allowlist.")
-    experiments.add_argument("--cohort-scope", choices=COHORT_SCOPES, default="main_shared")
+    scopes = experiments.add_mutually_exclusive_group()
+    scopes.add_argument("--cohort-scope", choices=COHORT_SCOPES, default=None)
+    scopes.add_argument("--cohort-scopes", choices=COHORT_SCOPES, nargs="+")
+    experiments.add_argument("--scheduler", choices=("optimized", "legacy"), default="optimized")
+    experiments.add_argument("--cpu-budget", type=int)
+    experiments.add_argument("--max-concurrent-configs", type=int)
+    experiments.add_argument("--reuse-from", type=Path, action="append", default=[])
+    experiments.add_argument("--rerun-completed", action="store_true", help="Explicit fresh-root rerun; requires --no-resume.")
+    experiments.add_argument("--no-profile-resources", dest="profile_resources", action="store_false", default=True)
     experiments.add_argument("--dry-run", action="store_true", help="Print configurations without filesystem changes.")
     experiments.add_argument("--diagnostic", action="store_true", help="Label reduced validation as diagnostic.")
     experiments.add_argument("--report-only", action="store_true", help="Regenerate from saved predictions without fitting.")
@@ -914,7 +735,7 @@ def build_parser() -> argparse.ArgumentParser:
     experiments.add_argument("--repeats", type=int, default=_env_int("REPEATS", 1))
     experiments.add_argument("--max-workers", type=int, default=_env_int("MAX_WORKERS", min(5, available_cpu_count())))
     experiments.add_argument("--threads-per-model", type=int, default=int(os.environ["THREADS_PER_MODEL"]) if os.getenv("THREADS_PER_MODEL") else None)
-    experiments.add_argument("--blas-threads", type=int, default=1,
+    experiments.add_argument("--blas-threads", type=int, default=None,
                              help="Bounded BLAS threads for LR; other families use one BLAS thread.")
     experiments.add_argument("--n-trials", type=int, default=int(os.environ["N_TRIALS"]) if os.getenv("N_TRIALS") else None,
                              help="HPO trials; defaults to 20 for LR and 50 for XGBoost/EBM.")
@@ -1014,10 +835,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             if args.max_workers < 1 or (args.threads_per_model is not None and args.threads_per_model < 1):
                 raise ValueError("Worker and thread counts must be positive")
             cpus = available_cpu_count()
-            args.threads_per_model = min(cpus, args.threads_per_model or max(1, cpus // args.max_workers))
-            args.max_workers = min(args.max_workers, max(1, cpus // args.threads_per_model))
-            if not 1 <= args.blas_threads <= args.threads_per_model:
-                raise ValueError("LR BLAS threads must be between 1 and the per-model thread budget")
+            if args.cpu_budget is not None and not 1 <= args.cpu_budget <= cpus:
+                raise ValueError("CPU budget must be positive and within available affinity/quota")
+            if args.max_concurrent_configs is not None and args.max_concurrent_configs < 1:
+                raise ValueError("Maximum concurrent configurations must be positive")
+            if args.blas_threads is not None and args.blas_threads < 1:
+                raise ValueError("LR BLAS threads must be positive")
             if args.n_trials is not None and args.n_trials < 1:
                 raise ValueError("HPO trials must be positive")
             if args.bootstrap < 0 or args.bootstrap_seed < 0:

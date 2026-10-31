@@ -49,6 +49,7 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import FancyBboxPatch
 
 from artifact_paths import enforce_storage_policy, get_scoped_results_dir, get_scoped_paper_dir
+from data_preparation.cohort_scopes import COHORT_SCOPES
 from reporting.display_dictionary import DisplayDictionary, load_display_dictionary
 from reporting.figure_rendering import mirror_figure_variants, report_figure_style_context, save_report_figure_bundle
 from reporting.manuscript_assets import PNG_DPI, refresh_paper_bundle
@@ -858,7 +859,7 @@ def render_cohort_flow(
 def _build_argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dataset", type=Path, default=None, help="Prepared shared cohort CSV for scope-specific flow.")
-    parser.add_argument("--cohort-scope", choices=("main_shared", "icu_waveform_sensitivity"), default=os.getenv("COHORT_SCOPE", "main_shared"))
+    parser.add_argument("--cohort-scope", choices=COHORT_SCOPES, default=os.getenv("COHORT_SCOPE", "main_shared"))
     parser.add_argument("--branch-roster", type=Path, default=None)
     parser.add_argument(
         "--counts-file",
@@ -906,6 +907,8 @@ def flow_from_cohort(df: pd.DataFrame, scope: str, branch_roster: Optional[Path]
     from data_preparation.cohort_scopes import select_cohort
     from reporting.preop_descriptives import _restrict_to_roster
 
+    scope_title = {"main_shared": "Shared AKI/ICU eligibility", "icu_waveform_sensitivity": "ICU sensitivity eligibility",
+                   "mortality_waveform_sensitivity": "Mortality sensitivity eligibility"}[scope]
     selected = select_cohort(df, scope)
     branch = _restrict_to_roster(selected, branch_roster)
     def stage(title, frame, removed=None):
@@ -947,7 +950,7 @@ def flow_from_cohort(df: pd.DataFrame, scope: str, branch_roster: Optional[Path]
                         or not observed[1] <= scoped[1] <= previous[1]):
                     raise ValueError("Source scope counts disagree with the diagnostic population")
                 if scoped != previous:
-                    title = "Shared AKI/ICU eligibility" if scope == "main_shared" else "ICU sensitivity eligibility"
+                    title = scope_title
                     stages.append(CohortStage(title=title, count=scoped[0], n_patients=scoped[1],
                         removed=previous[0] - scoped[0], removal_reason=f"Outside {title.lower()}"))
                     previous = scoped
@@ -956,7 +959,7 @@ def flow_from_cohort(df: pd.DataFrame, scope: str, branch_roster: Optional[Path]
     else:
         stages = [stage("General-anesthesia waveform-qualified operations", df)]
     if len(selected) != len(df):
-        stages.append(stage("Shared AKI/ICU eligibility" if scope == "main_shared" else "ICU sensitivity eligibility", selected, len(df)-len(selected)))
+        stages.append(stage(scope_title, selected, len(df)-len(selected)))
     if len(branch) != len(selected):
         stages.append(stage("Frozen branch roster", branch, len(selected)-len(branch)))
     final = stages[-1]

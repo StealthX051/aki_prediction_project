@@ -28,6 +28,7 @@ def _cohort():
         "ane_type": ["General"] * 4 + ["Spinal"],
         "eligible_any_aki": [1, 0, 1, 1, 1], "aki_label": [0, np.nan, 1, 0, 0],
         "eligible_icu_admission": [1, 1, 1, 0, 1], "y_icu_admit": [0, 1, 0, np.nan, 0],
+        "eligible_mortality": [1, 1, 0, 1, 1], "y_inhosp_mortality": [1, 1, np.nan, 0, 0],
         "preop_value": [1, np.nan, 3, 4, 5],
     })
 
@@ -121,6 +122,54 @@ def test_scope_rejects_unsupported_combinations(scope, outcome):
     with pytest.raises(ValueError):
         select_cohort(_cohort(), scope, outcome)
 
+
+
+def test_mortality_scope_is_independent_of_creatinine_and_icu_labels():
+    frame = _cohort().drop(columns=["eligible_any_aki", "aki_label", "eligible_icu_admission", "y_icu_admit"])
+    selected = select_cohort(frame, "mortality_waveform_sensitivity", "mortality")
+    assert selected.caseid.tolist() == [1, 2, 4]
+    assert selected.subjectid.tolist() == [10, 10, 12]
+    assert pd.isna(selected.loc[1, "preop_value"])
+    manifest = build_cohort_manifest(frame, "mortality_waveform_sensitivity", "non_windowed")
+    assert manifest["operations"] == 3 and manifest["patients"] == 2
+    assert manifest["outcomes"]["mortality"] == {
+        "operations": 3, "events": 2, "missing": 0, "patients": 2, "event_patients": 1}
+    for outcome in ("any_aki", "icu_admission"):
+        with pytest.raises(ValueError, match="only supports mortality"):
+            select_cohort(frame, "mortality_waveform_sensitivity", outcome)
+    from model_creation.utils import get_feature_sets
+    from reporting.preop_descriptives import _filter_to_report_cohort
+    from reporting.cohort_flow import flow_from_cohort
+    predictors = get_feature_sets(frame.assign(split_group_mortality="train", postop_mortality_audit=1))
+    for columns in predictors.values():
+        assert not {"eligible_mortality", "y_inhosp_mortality", "split_group_mortality", "postop_mortality_audit"}.intersection(columns)
+    assert _filter_to_report_cohort(frame, "mortality_waveform_sensitivity").caseid.tolist() == selected.caseid.tolist()
+    flow = flow_from_cohort(frame, "mortality_waveform_sensitivity")
+    assert flow.stages[-1].count == 3 and flow.stages[-1].n_patients == 2
+    frame.loc[0, "y_inhosp_mortality"] = 2
+    frame.loc[1, "eligible_mortality"] = 0
+    assert select_cohort(frame, "mortality_waveform_sensitivity").caseid.tolist() == [4]
+
+
+def test_legacy_scope_metadata_derives_mortality_without_weakening_original_checks():
+    from data_preparation.validate_processed_artifacts import validate_scope_manifests
+    frame = _cohort()
+    old = {scope: build_cohort_manifest(frame, scope, "non_windowed")
+           for scope in ("main_shared", "icu_waveform_sensitivity")}
+    before = json.dumps(old, sort_keys=True)
+    overlay = validate_scope_manifests(frame, old, "non_windowed", Path("legacy.csv"))
+    assert json.dumps(old, sort_keys=True) == before
+    assert overlay["mortality_waveform_sensitivity"]["caseids"] == [1, 2, 4]
+    assert "mortality" not in old["main_shared"]["outcomes"]
+    with pytest.raises(ArtifactCompatibilityError, match="main_shared"):
+        validate_scope_manifests(frame, {}, "non_windowed", Path("legacy.csv"))
+    changed = json.loads(before)
+    changed["icu_waveform_sensitivity"]["operations"] += 1
+    with pytest.raises(ArtifactCompatibilityError, match="icu_waveform_sensitivity"):
+        validate_scope_manifests(frame, changed, "non_windowed", Path("legacy.csv"))
+    overlay["mortality_waveform_sensitivity"]["operations"] += 1
+    with pytest.raises(ArtifactCompatibilityError, match="mortality_waveform_sensitivity"):
+        validate_scope_manifests(frame, overlay, "non_windowed", Path("new.csv"))
 
 def test_roster_hash_is_order_independent_and_tracks_patient_identity():
     selected = select_cohort(_cohort(), "main_shared")

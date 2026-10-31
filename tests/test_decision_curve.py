@@ -88,6 +88,9 @@ def test_empty_bootstrap_has_no_interval_and_patient_identity_is_required():
 def test_outcome_grids_are_prespecified_and_include_decimal_boundaries():
     np.testing.assert_allclose(dca.outcome_thresholds("any_aki"), np.arange(1, 31) / 100)
     np.testing.assert_allclose(dca.outcome_thresholds("icu_admission"), np.arange(5, 61) / 100)
+    mortality = dca.outcome_thresholds("mortality")
+    np.testing.assert_array_equal(mortality, np.arange(1, 51) / 1000)
+    assert len(mortality) == 50 and mortality[0] == .001 and mortality[-1] == .05
     with pytest.raises(ValueError, match="No exploratory"):
         dca.outcome_thresholds("unknown")
 
@@ -205,3 +208,24 @@ def test_delta_panels_follow_stable_input_and_family_order(tmp_path, monkeypatch
     assert labels["preop_and_all_waveforms"] in first[2] and labels["all_waveforms"] in first[2]
     names = list(figures)
     assert names.index("dca_any_aki_non_windowed_Logistic regression") < names.index("dca_any_aki_non_windowed_XGBoost")
+
+
+def test_mortality_dca_has_correct_low_risk_values_and_exported_grid(tmp_path, monkeypatch):
+    # At 0.1%, select both positive and one negative; at 5%, only the
+    # 0.05-positive remains. The operation denominator stays four.
+    table = dca.net_benefit([1, 0, 1, 0], [.05, .001, .002, 0], [.001, .05])
+    np.testing.assert_allclose(table.model, [.5 - .25 * .001 / .999, .25], atol=1e-15)
+    np.testing.assert_allclose(table.treat_all, [.5 - .5 * .001 / .999, .5 - .5 * .05 / .95])
+    monkeypatch.setattr(dca, "save_report_figure_bundle", lambda fig, *args, **kwargs: (plt.close(fig) or []))
+    predictions = pd.DataFrame({"caseid": [1, 2, 3, 4], "subjectid": [9, 9, 10, 11],
+        "y_true": [1, 0, 1, 0], "y_prob_calibrated": [.05, .001, .002, 0], "outcome": "mortality",
+        "branch": "non_windowed", "model_name": "XGBoost", "feature_set": "preop_only",
+        "cohort_scope": "mortality_waveform_sensitivity", "validation_scheme": "nested_cv"})
+    dca.export_decision_curves(predictions, tmp_path)
+    metadata = json.loads((tmp_path / "dca_mortality_non_windowed_XGBoost.json").read_text())
+    saved = pd.read_csv(tmp_path / "dca_mortality_non_windowed_XGBoost.csv")
+    assert len(saved) == 50 and saved.threshold_probability.min() == .001
+    assert metadata["threshold_step"] == pytest.approx(.001)
+    assert len(metadata["threshold_grid_hash"]) == 64
+    assert metadata["threshold_probabilities"] == dca.outcome_thresholds("mortality").tolist()
+    assert "does not establish clinical utility" in metadata["interpretation"]

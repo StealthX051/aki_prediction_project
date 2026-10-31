@@ -42,11 +42,41 @@ def _write_prepared_fixture(processed_dir):
     processed_dir = Path(processed_dir)
     processed_dir.mkdir(parents=True, exist_ok=True)
     frame = pd.DataFrame({"caseid": [1, 2], "subjectid": [101, 102], "aki_label": [0, 1],
-                          "eligible_any_aki": [1, 1], "y_icu_admit": [1, 0], "eligible_icu_admission": [1, 1]})
+                          "eligible_any_aki": [1, 1], "y_icu_admit": [1, 0], "eligible_icu_admission": [1, 1],
+                          "eligible_mortality": [1, 1], "y_inhosp_mortality": [0, 1]})
     for suffix in ("", "_windowed"):
         path = processed_dir / f"aki_features_master_wide{suffix}.csv"
         frame.to_csv(path, index=False)
         write_artifact_metadata(path, artifact_role=STEP_05_MERGED_ARTIFACT, available_columns=frame.columns)
+
+
+
+def _mock_experiment_queue(monkeypatch, calls, *, exit_code=0, verify=True):
+    """Replace process execution, retaining CLI construction and status callbacks."""
+    from model_creation import experiment_queue, split_plan
+    completed = set()
+    def prepare(processed, configs, *a, **k):
+        return {"status": "validated", "fold_assignment_hashes": {
+            "/".join(c[field] for field in ("cohort_scope", "outcome", "branch")): "test-frozen-folds"
+            for c in configs}}
+    monkeypatch.setattr(split_plan, "prepare_split_plan", prepare)
+    def queue(jobs, *, on_finished, **kwargs):
+        records = []
+        for job in jobs:
+            calls.append(("model_creation.step_07_train_evaluate", list(job.command[3:])))
+            record = {"key": job.key, "exit_code": exit_code,
+                      "status": "complete" if exit_code == 0 else "failed"}
+            if verify and exit_code == 0:
+                completed.add(job.key)
+            on_finished(record)
+            records.append(record)
+        return records
+    monkeypatch.setattr(experiment_queue, "run_configurations", queue)
+    if verify:
+        from model_creation.run_inventory import configuration_key
+        monkeypatch.setattr(experiment_queue, "_completed_reference",
+                            lambda args, config, *a, **k: {"status": "verified_completed"}
+                            if configuration_key(config) in completed else None)
 
 
 def test_experiments_fail_fast_when_generated_paths_are_off_media(tmp_path: Path, monkeypatch, capsys):
@@ -93,6 +123,7 @@ def test_experiments_skip_reporting_on_validation_failures(tmp_path: Path, monke
         pytest.fail(f"Unexpected module call: {module}")
 
     monkeypatch.setattr(run_catch22, "run_module", fake_run_module)
+    _mock_experiment_queue(monkeypatch, calls, exit_code=1)
 
     result = run_catch22.main(["experiments", "--prep", "skip", "--only-xgboost", "--no-resume"])
 
@@ -101,7 +132,10 @@ def test_experiments_skip_reporting_on_validation_failures(tmp_path: Path, monke
     assert any(module == "data_preparation.validate_processed_artifacts" for module, _ in calls)
     assert any(module == "model_creation.step_07_train_evaluate" for module, _ in calls)
     assert "skipping metrics/report generation" in captured.out
-    assert "FAILED: model=xgboost" in captured.out
+    import json
+    saved = json.loads((tmp_path / "results/catch22/experiments/main_shared/nested_cv/run_manifest.json").read_text())
+    assert saved["status"] == "failed"
+    assert saved["execution_history"] and all(row["exit_code"] == 1 for row in saved["execution_history"])
     assert "Running evaluation (results -> results directory)" not in captured.out
 
 
@@ -239,14 +273,15 @@ def test_staged_families_extend_manifest_without_duplicate_configs(tmp_path, mon
             _write_prepared_fixture(kwargs["env"]["PROCESSED_DIR"])
         return 0
     monkeypatch.setattr(run_catch22, "run_module", fake_run)
+    _mock_experiment_queue(monkeypatch, calls)
     common = ["experiments", "--preset", "core", "--prep", "skip", "--outcomes", "any_aki",
               "--branches", "non_windowed", "--skip-report"]
     for family in ("logistic_regression", "xgboost", "ebm", "logistic_regression"):
         assert run_catch22.main(common + ["--model-types", family]) == 0
     manifest = json.loads((tmp_path / "results/main_shared/nested_cv/run_manifest.json").read_text())
     assert len(manifest["configurations"]) == 9
-    assert manifest["status"] == "partial"  # subprocess mocks wrote no prediction artifacts
-    assert len(manifest["execution_history"]) == 12
+    assert manifest["status"] == "models_complete"  # bundle validation is explicitly mocked above
+    assert len(manifest["execution_history"]) == 9  # repeated completed family launches zero jobs
     assert not any(module.startswith("reporting") for module, _ in calls)
     assert all("--export_ebm_explanations" not in args for module, args in calls if module.endswith("step_07_train_evaluate"))
     assert all("--cohort-scope" in args for module, args in calls if module.endswith("step_07_train_evaluate"))
@@ -380,3 +415,89 @@ def test_descriptive_branches_have_distinct_artifact_names(tmp_path, monkeypatch
     assert flows == ['cohort_flow', 'cohort_flow_windowed']
     tables = [args[args.index('--output-prefix') + 1] for module, args in calls if module != 'reporting.cohort_flow']
     assert tables == ['preop_descriptives', 'missingness_table', 'preop_descriptives_windowed', 'missingness_table_windowed']
+
+
+def test_multiscope_core_dry_run_defaults_to_optimized_and_preserves_fixed_budgets(tmp_path, monkeypatch, capsys):
+    import json
+    from model_creation import experiment_queue, config_scheduler
+    untouched = tmp_path / "new-study"
+    monkeypatch.setenv("AKI_ARTIFACT_ROOT", str(untouched))
+    for name in ("PROCESSED_DIR", "RESULTS_DIR", "PAPER_DIR", "LOG_FILE", "THREADS_PER_MODEL", "MAX_WORKERS"):
+        monkeypatch.delenv(name, raising=False)
+    for module in (run_catch22, experiment_queue, config_scheduler):
+        monkeypatch.setattr(module, "available_cpu_count", lambda: 64)
+    monkeypatch.setattr(run_catch22, "run_module", lambda *a, **k: pytest.fail("Dry run executed work"))
+    monkeypatch.setattr(experiment_queue, "run_configurations", lambda *a, **k: pytest.fail("Dry run queued training"))
+    assert run_catch22.main(["experiments", "--preset", "core", "--cohort-scopes",
+        "icu_waveform_sensitivity", "mortality_waveform_sensitivity", "--dry-run"]) == 0
+    plan = json.loads(capsys.readouterr().out)
+    assert plan["scheduler"] == "optimized" and plan["cpu_budget"] == 60
+    assert plan["pending_configurations"] == 36
+    assert len(plan["configurations"]) == 36
+    scope_outcomes = {(c["cohort_scope"], c["outcome"]) for c in plan["configurations"]}
+    assert scope_outcomes == {("icu_waveform_sensitivity", "icu_admission"), ("mortality_waveform_sensitivity", "mortality")}
+    for config in plan["configurations"]:
+        resources = config["resources"]
+        assert resources["max_workers"] == 5
+        if config["model_type"] == "logistic_regression":
+            assert resources["blas_threads"] == 4 and resources["cpu_reservation"] == 20
+        elif config["model_type"] == "xgboost":
+            assert resources["threads_per_model"] == 4 and resources["cpu_reservation"] == 20
+        else:
+            assert resources["threads_per_model"] == 12 and resources["cpu_reservation"] == 18
+        assert config["n_trials"] == (20 if config["model_type"] == "logistic_regression" else 50)
+        assert config["feature_set"] in run_catch22.CORE_FEATURE_SETS
+    assert all(scope in plan["scope_paths"][scope]["results_dir"] for scope in plan["cohort_scopes"])
+    assert not untouched.exists()
+
+
+def test_mortality_scope_dry_run_has_exploratory_role_and_no_aki_requirement(tmp_path, monkeypatch, capsys):
+    import json
+    root = tmp_path / "absent-inputs-and-outputs"
+    monkeypatch.setenv("AKI_ARTIFACT_ROOT", str(root))
+    monkeypatch.setattr(run_catch22, "_ensure_data_prepared", lambda *a, **k: pytest.fail("Dry run prepared data"))
+    assert run_catch22.main(["experiments", "--preset", "core", "--cohort-scope",
+                            "mortality_waveform_sensitivity", "--dry-run"]) == 0
+    plan = json.loads(capsys.readouterr().out)
+    assert len(plan["configurations"]) == 18
+    assert {c["outcome"] for c in plan["configurations"]} == {"mortality"}
+    assert plan["analysis_role"] == "exploratory" and plan["diagnostic"] is False
+    assert plan["outer_folds"] == 5 and plan["inner_folds"] == 3 and plan["calibration_folds"] == 5
+    assert not root.exists()
+
+
+@pytest.mark.parametrize("arguments", [
+    ["--cpu-budget", "0"], ["--max-concurrent-configs", "0"],
+    ["--blas-threads", "0"], ["--rerun-completed"],
+    ["--cohort-scope", "mortality_waveform_sensitivity", "--outcomes", "icu_admission"],
+])
+def test_queue_rejects_invalid_controls_before_writes(arguments, tmp_path, monkeypatch):
+    root = tmp_path / "untouched"
+    monkeypatch.setenv("AKI_ARTIFACT_ROOT", str(root))
+    assert run_catch22.main(["experiments", "--dry-run", *arguments]) == 1
+    assert not root.exists()
+
+
+@pytest.mark.parametrize("exit_code", [0, None], ids=["missing-bundles", "spawn-failure"])
+def test_failed_or_incomplete_configuration_skips_reports(tmp_path, monkeypatch, exit_code):
+    import json
+    root = tmp_path / "new-study"
+    monkeypatch.setenv("AKI_ARTIFACT_ROOT", str(root))
+    monkeypatch.setenv("AKI_STORAGE_POLICY", "off")
+    for name in ("PROCESSED_DIR", "RESULTS_DIR", "PAPER_DIR", "LOG_FILE"):
+        monkeypatch.delenv(name, raising=False)
+    calls = []
+    def prepare(module, args, **kwargs):
+        calls.append((module, args))
+        assert module == "data_preparation.validate_processed_artifacts"
+        _write_prepared_fixture(kwargs["env"]["PROCESSED_DIR"])
+        return 0
+    monkeypatch.setattr(run_catch22, "run_module", prepare)
+    _mock_experiment_queue(monkeypatch, calls, verify=False, exit_code=exit_code)
+    assert run_catch22.main(["experiments", "--prep", "skip", "--preset", "core", "--only-xgboost",
+        "--outcomes", "icu_admission", "--branches", "non_windowed", "--feature-sets", "preop_only"]) == 1
+    manifest_path = root / "results/catch22/experiments/main_shared/nested_cv/run_manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    assert manifest["status"] == "failed"
+    assert manifest["execution_history"][0]["status"] == ("artifact_validation_failed" if exit_code == 0 else "failed")
+    assert not any(module.startswith("reporting") or module == "results_recreation.metrics_summary" for module, _ in calls)

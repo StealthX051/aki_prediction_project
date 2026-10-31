@@ -1,6 +1,7 @@
 """Exploratory decision curves from locked saved out-of-fold probabilities."""
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -12,7 +13,9 @@ from reporting.feature_set_display import CORE_FEATURE_SET_ORDER, feature_set_so
 from reporting.display_dictionary import load_display_dictionary
 from reporting.figure_rendering import feature_set_color, report_figure_style_context, save_report_figure_bundle
 
-DEFAULT_RANGES = {"any_aki": (0.01, 0.30), "icu_admission": (0.05, 0.60)}
+DEFAULT_RANGES = {"any_aki": (0.01, 0.30), "icu_admission": (0.05, 0.60), "mortality": (0.001, 0.050)}
+# Integer grids avoid rounding rare-outcome thresholds to zero.
+_GRID_INTEGERS = {"any_aki": (1, 30, 100), "icu_admission": (5, 60, 100), "mortality": (1, 50, 1000)}
 FAMILY_ORDER = ("logistic_regression", "xgboost", "ebm")
 FAMILY_COLORS = {"logistic_regression": "#2d6ba3", "xgboost": "#bf3b3b", "ebm": "#2f855a"}
 FAMILY_LABELS = {"logistic_regression": "LR", "xgboost": "XGBoost", "ebm": "EBM"}
@@ -22,8 +25,17 @@ def outcome_thresholds(outcome: str) -> np.ndarray:
     """The prespecified exploratory grid, including both decimal boundaries."""
     if outcome not in DEFAULT_RANGES:
         raise ValueError(f"No exploratory DCA range for {outcome!r}")
-    lower, upper = DEFAULT_RANGES[outcome]
-    return np.arange(round(lower * 100), round(upper * 100) + 1, dtype=float) / 100
+    lower, upper, denominator = _GRID_INTEGERS[outcome]
+    return np.arange(lower, upper + 1, dtype=float) / denominator
+
+
+def threshold_grid_metadata(thresholds) -> dict:
+    cutoffs = np.asarray(thresholds, dtype=float)
+    steps = np.diff(cutoffs)
+    step = float(steps[0]) if len(steps) and np.allclose(steps, steps[0]) else None
+    return {"threshold_min": float(cutoffs.min()), "threshold_max": float(cutoffs.max()),
+            "threshold_step": step, "threshold_probabilities": cutoffs.tolist(),
+            "threshold_grid_hash": hashlib.sha256(json.dumps(cutoffs.tolist(), separators=(",", ":")).encode()).hexdigest()}
 
 
 def _patient_codes(groups):
@@ -131,7 +143,7 @@ def export_decision_curves(predictions: pd.DataFrame, output_dir: Path) -> list[
         if outcome not in DEFAULT_RANGES:
             continue
         lower, upper = DEFAULT_RANGES[outcome]
-        thresholds = np.arange(round(lower * 100), round(upper * 100) + 1) / 100
+        thresholds = outcome_thresholds(outcome)
         fig, ax = plt.subplots(figsize=(8, 6), constrained_layout=True)
         tables = []
         reference_identity = None
@@ -161,7 +173,7 @@ def export_decision_curves(predictions: pd.DataFrame, output_dir: Path) -> list[
         pd.concat(tables, ignore_index=True).to_csv(table_path, index=False)
         paths.append(table_path)
         metadata = {"outcome": outcome, "branch": branch, "model_name": family,
-                    "threshold_min": lower, "threshold_max": upper, "threshold_step": 0.01,
+                    **threshold_grid_metadata(thresholds),
                     "source": "saved calibrated validation predictions", "n_operations": len(group) // group['feature_set'].nunique(),
                     "interpretation": "Exploratory net benefit does not establish clinical utility or define an intervention."}
         for column in ("cohort_scope", "validation_scheme", "analysis_status"):
@@ -192,9 +204,7 @@ def _saved_curve_metadata(frame, *, outcome, branch, comparison_status, plotted_
         plotted_feature_sets = set().union(*(set(frame[column]) for column in feature_columns))
     metadata["plotted_feature_sets"] = sorted(plotted_feature_sets, key=feature_set_sort_key)
     thresholds = np.sort(frame.threshold_probability.unique())
-    steps = np.diff(thresholds)
-    step = float(steps[0]) if len(steps) and np.allclose(steps, steps[0]) else None
-    metadata.update(threshold_min=float(thresholds.min()), threshold_max=float(thresholds.max()), threshold_step=step)
+    metadata.update(threshold_grid_metadata(thresholds))
     return metadata
 
 

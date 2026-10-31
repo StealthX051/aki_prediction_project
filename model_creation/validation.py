@@ -610,6 +610,7 @@ def tune_model(
     preserve_nan: bool,
     threads_per_model: int,
     diagnostic: bool = False,
+    trial_history_path: Optional[Path] = None,
 ) -> Tuple[Dict[str, Any], float, int]:
     cached_folds, actual_inner_folds = build_cached_folds(
         X,
@@ -659,6 +660,14 @@ def tune_model(
     except TypeError:
         study = optuna.create_study(direction="maximize")
     study.optimize(objective, n_trials=n_trials, n_jobs=1, show_progress_bar=False)
+    if trial_history_path is not None:
+        trial_history_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = trial_history_path.with_suffix(".json.tmp")
+        temporary.write_text(json.dumps([
+            {"number": trial.number, "params": trial.params, "value": trial.value,
+             "state": trial.state.name} for trial in study.trials
+        ], indent=2) + "\n")
+        temporary.replace(trial_history_path)
     return study.best_params, float(study.best_value), actual_inner_folds
 
 
@@ -828,6 +837,9 @@ def run_outer_split(
     if groups is not None and set(train_groups) & set(test_groups):
         raise AssertionError("Patient overlap detected across outer split.")
 
+    history_root = os.getenv("AKI_TRIAL_HISTORY_DIR")
+    history_path = (Path(history_root) / f"repeat_{repeat_id:02d}_outer_{outer_fold_id:02d}.json"
+                    if history_root else None)
     best_params, best_score, actual_inner_folds = tune_model(
         X_train_raw,
         y_train,
@@ -839,6 +851,7 @@ def run_outer_split(
         preserve_nan=preserve_nan,
         threads_per_model=threads_per_model,
         diagnostic=diagnostic,
+        **({"trial_history_path": history_path} if history_path is not None else {}),
     )
 
     oof_predictions, fold_indices, actual_calibration_folds = generate_cross_fitted_predictions(

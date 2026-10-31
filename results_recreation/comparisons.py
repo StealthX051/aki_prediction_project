@@ -17,7 +17,7 @@ import pandas as pd
 from results_recreation import metrics_summary as metrics
 from results_recreation.delong import gated_delong, add_holm_adjustment
 from reporting.decision_curve import (
-    outcome_thresholds, cluster_resample_counts, bootstrap_net_benefit,
+    DEFAULT_RANGES, outcome_thresholds, threshold_grid_metadata, cluster_resample_counts, bootstrap_net_benefit,
 )
 
 CONTEXT = ("cohort_scope", "validation_scheme", "outcome", "branch")
@@ -49,7 +49,8 @@ def calculation_fingerprint():
     return {"uncertainty_protocol_version": metrics.UNCERTAINTY_PROTOCOL_VERSION,
             "code": {p: _file_hash(root / p) for p in paths},
             "numpy": np.__version__, "pandas": pd.__version__, "scipy": scipy.__version__,
-            "scikit-learn": sklearn_version}
+            "scikit-learn": sklearn_version,
+            "dca_grids": {key: threshold_grid_metadata(outcome_thresholds(key)) for key in DEFAULT_RANGES}}
 
 
 def manifest_identity(manifest):

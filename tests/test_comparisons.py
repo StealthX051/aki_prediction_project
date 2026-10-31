@@ -182,3 +182,15 @@ def test_comparison_engine_never_calls_missing_patients_known_patients_in_legacy
     with pytest.raises(metrics.ValidationError, match="Patient IDs"):
         comparisons.build_comparison_artifacts(sets, summary, bootstrap, n_bootstrap=0,
                                               bootstrap_seed=17, strict=False)
+
+
+def test_mortality_comparisons_are_exploratory_and_use_rare_outcome_grid(tmp_path):
+    sets = [replace(ps, cohort_scope="mortality_waveform_sensitivity")
+            for ps in prediction_sets(tmp_path, outcomes=("mortality",))]
+    _, _, result = calculate(sets, budget=0)
+    assert set(result["paired"].designation) == {"exploratory"}
+    assert result["dca"].threshold_probability.nunique() == 50
+    assert result["dca"].threshold_probability.min() == .001
+    assert result["dca"].threshold_probability.max() == .05
+    assert result["inventory"]["dca_ranges"]["mortality"] == (np.arange(1, 51) / 1000).tolist()
+    assert result["delong"].status.eq("unsupported_design").all()

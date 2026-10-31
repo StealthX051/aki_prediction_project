@@ -1,14 +1,17 @@
-# VitalDB manuscript: pre-run checkpoint
+# VitalDB manuscript: execution and optimization register
 
 ## Status and authorization
 
-Implementation, cleanup, and offline verification are complete at the pre-run
-checkpoint. The user authorized committing and pushing this work, and explicitly
-prohibited starting full runs. No definitive reconstruction/model grid has been
-launched. Drive/email/manuscript external writes remain separately authorized.
-Earlier real-data diagnostics precede the latest protocol and are not validation
-of current full-cohort results. This file is the single decision/evidence
-register; definitions belong in METHODS, commands in README, and outputs in RESULTS.
+The user subsequently authorized the main core run. All 36 configurations and
+their bootstrap/report stages completed successfully on October 31, 2026 at
+frozen modeling revision `fcff7c7c9794e0ea8405814c68176760a2eb9afc`. The pre-run
+code was committed and pushed; local, remote, and frozen revisions were verified
+identical before optimization benchmarking. Broader ICU and supplementary grids
+remain unstarted. Current authorization covers bounded optimization diagnostics
+and a reviewable implementation plan, preserving completed research artifacts.
+Drive/email/manuscript external writes remain separate. This is the single
+decision/evidence register; definitions belong in METHODS, commands in README,
+and outputs in RESULTS. Earlier diagnostics below retain their stated limits.
 
 ## Scientific decisions
 
@@ -100,8 +103,9 @@ numerically with those historical results.
 - A–D implemented: scientific eligibility/staging/scopes; three-family models;
   core/full orchestration; fitted fold bundles; strict paired comparisons;
   publication tables, curves, DCA, and saved-fold explanations.
-- E/resource checks: earlier isolated real-data diagnostics plus current offline
-  tests. Exact current scientific reproduction remains pending execution.
+- E/resource checks: earlier isolated diagnostics and offline tests, followed by
+  the completed main core run recorded below. Scientific interpretation and
+  publication review remain distinct from successful execution.
 - Final cleanup removes unused discarded flags, redundant copies/imports/parser
   calls, and import-time report writes; streams hashes and defers SHAP imports.
   Scientific defaults, artifact basenames, and legacy explicit entrypoints remain.
@@ -139,24 +143,121 @@ invalid/degenerate designs now fail explicitly. Synthetic/native checks establis
 implementation behavior, not complete clinical validity or exact inferential
 coverage. Resampling timings exclude loading, channel filters, and Catch24.
 The final cleanup checks passed with no research reconstruction or experiments.
-The commit is explicitly a pre-run checkpoint; its revision is available through
-`git log -1`. Commit/push do not authorize executing the pending study.
+The frozen modeling commit is the pre-run checkpoint `fcff7c7`; subsequent user
+authorization and execution are recorded below.
 
-## Pending execution
+## Completed main core and pending extensions
 
-1. On explicit run approval, select a fresh root, source paths, and the frozen
-   commit/environment. Prepare both branches once; validate provenance, actual
-   fold support, scope counts, branch intersections, and extraction failures.
-2. Stage main core LR, XGBoost, then EBM, reviewing complete family reports and
-   measured runtime/memory. Initial full-data refits remain disabled.
-3. Run broader ICU sensitivity and remaining supplements; regenerate manuscript
-   artifacts from saved predictions/bundles. Preserve null/negative comparisons.
+Study root: `/media/volume/catch22/data/aki_prediction_project/studies/manuscript-core-v1`.
+`control/status.json` records completed/exit 0; the main nested manifest records
+validated and 12 successful configurations per family. Metrics contain all 36
+configurations. Five grouped outer/three HPO/five calibration folds, 20 LR/50
+tree trials, and 5,000 patient-cluster resamples were retained; no full-data refits.
+Both branches have 3,571 main operations/3,432 patients; the broader ICU selector
+has 5,765 operations/5,543 patients. These are refreshed branch-qualified counts.
+
+Next scientific work is review of core results, then broader ICU sensitivity and
+selected supplements. Preserve null/negative comparisons. No additional grid is
+part of the optimization diagnostics. Saved predictions/bundles support further
+reports and explanations without refitting.
 
 Main core 36 configurations; sensitivity 18; full main 180 (144 additional after
 core). At 5/3/5 with 20 LR/50 tree trials, main core requires about 22,680 estimator
 fits before retries/internal bagging. This is not a wall-time forecast.
-Use affinity/quota-aware outer workers, bounded native/BLAS threads, validated
-fold caches and resumable bundles. Extraction has an independent worker budget;
-start at 16 and measure before increasing it. Heavy artifacts belong on the 1 TB
-volume. Resource inventory and dry runs are read-only; no new experiment,
-reconstruction, or external document update is authorized by this checkpoint.
+Use affinity/quota-aware worker budgets, validated fold caches and resumable
+bundles. The main run increased extraction from 16 to 64 workers while preserving
+saved rows; its operational record is `control/resource-adjustment.json`.
+Heavy artifacts and diagnostic scripts stay on the 1 TB volume.
+
+## Bounded runtime investigation, October 31, 2026
+
+No production Python, environment, clinical definition, or waveform setting was
+changed for this investigation. Diagnostic scripts call the frozen production
+functions. Completed model fitting/validation took LR 59.9 minutes, XGBoost
+255.2 minutes, EBM 470.1 minutes; all three report stages totaled 17.0 minutes.
+One windowed AKI EBM configuration took 250.2 minutes; four folds finished within
+34.8 minutes, leaving a 215.4-minute single-fold tail. Tables below measure
+diagnostic work, not the remaining grid's runtime.
+
+Diagnostic roots under `/media/volume/catch22/data/aki_prediction_project/diagnostics/`:
+
+| Evidence | Current result |
+| --- | --- |
+| `runtime-plan-20261031-mixed-v2` | Three repetitions of 22 fixed jobs: median total wall 66.0 s current staged threads, 59.2 s staged processes, 42.6 s shared process queue; startup, data loading, prediction, saving, and shutdown included |
+| `runtime-plan-20261031-large` | One larger 32-job confirmation: 148.3 s current versus 64.3 s shared queue |
+| `runtime-plan-20261031-split-cache` | Four cold split keys: one worker 102.0 s, four workers 33.9 s; cache envelopes and partitions byte-identical |
+| `runtime-plan-20261031-whole-input` | Original outer-0 training operations only (2,850); two of its five grouped calibration partitions reused as diagnostic evaluation partitions; original outer-test patients excluded |
+| `runtime-plan-20261031-whole-v2` | Six complete fold jobs per policy: 189.4 s current staged execution, 96.8 s overlapping configurations, 91.6 s individual-fold process queue; one pass each, common warmed split cache |
+
+Kernel jobs retain identical inputs, seeds, parameters and EBM patient bags.
+LR keeps BLAS 4; tree families keep BLAS 1. Kernel candidate tree fits use four jobs,
+one-bag EBM HPO uses one. Fixed EBM kernels cap HPO at 100 rounds and bagged
+refits at 25 rounds (14 outer/20 inner bags). Every saved training probability
+across all rows/jobs/repetitions matched exactly. The shared queue reserves at
+most 60 CPUs. Peak summed process RSS was below 10 GiB, with over 233 GiB system
+memory available; summed RSS includes shared pages. CPU figures are sampled
+process-tree accounting, not exact whole-tree resource integrals.
+
+`analysis.json`, `runtime_summary.csv`, and `numerical-agreement.json` contain
+the checks. Scripts are saved with their diagnostic roots. Earlier single-fit
+probes are in `cpu-profile-20261031-v1` and `cpu-profile-20261031-lr-repeats`.
+Changing LR BLAS 4 to 1 changed some probabilities; retain BLAS 4 when evaluating
+scheduling alone. Initial prototypes exposed nested-pool shutdown waits and an
+overly strict float32 CSV assertion; failed timings are preserved and excluded.
+
+The whole-function replay uses three HPO trials, three inner folds and five
+calibration folds. EBM uses the existing diagnostic protocol (200-round cap,
+two outer/no inner bags), not production's 14 outer/20 inner bags. All 18 fold
+jobs passed exact inner/calibration training-index containment, grouped EBM bag
+separation, nine preprocessing fits, sequential trial tracing and bundle reload.
+Trial order/parameters/scores, chosen parameters, calibration, thresholds,
+feature order and every train/held-out prediction matched across all policies.
+`scientific-agreement.json` records these checks. Native float32 probabilities
+round-trip exactly after restoring float32; their float64 CSV representations
+differ from the native values by up to 2.81e-8, not a model discrepancy.
+`runtime-plan-20261031-final-audit/checkpoint-audit.json` records rejection of
+incomplete metadata, changed protocol and a corrupted model; saved loading did
+not fit. These checks do not replace an actual interrupted-controller test.
+
+## Approved optimized extension (October 31, 2026)
+
+The approved implementation replaces the prior proposal: use a bounded queue of
+configuration subprocesses, cold split-cache preparation with up to eight
+single-threaded workers, LR BLAS 4, XGBoost four threads, and unchanged EBM 12-job
+production settings. CPU admission defaults to 60 on this 64-CPU VM. One EBM
+configuration is admitted at a time. Numerical fitting policies remain fixed.
+
+- [x] Add independent `mortality_waveform_sensitivity` selector and read-only
+  legacy-sidecar overlays; preserve main/ICU manifest shapes.
+- [x] Add queue, lightweight resource sampling, protected inventory validation,
+  strict completed-run skipping and saved trial histories.
+- [x] Add exploratory mortality DCA, 0.001–0.050/step 0.001.
+- [x] Offline environment/native checks passed; final complete suite: 535 tests
+  passed. Source changes during preflight now fail explicitly.
+- [ ] Complete sealed-checkout real-data interruption/resume verification.
+- [ ] Validate one new broader ICU XGBoost combined/non-windowed configuration
+  at full 5/3/5 and 50 trials: legacy 12 threads versus optimized four threads.
+  This replaces the earlier per-family replay proposal; no old main fits repeat.
+- [ ] Only after the gate passes, finish 18 broader ICU and 18 broader mortality
+  core configurations (the optimized canary counts toward ICU's 18).
+- [ ] Verify 180 new fold bundles, complete OOF coverage, reports, zero-fit
+  repeat planning, and unchanged protected-study integrity inventory.
+
+Protected root: `/media/volume/catch22/data/aki_prediction_project/studies/manuscript-core-v1`.
+New root: `/media/volume/catch22/data/aki_prediction_project/studies/manuscript-optimized-v1`.
+Reuse the protected processed features; no extraction/reconstruction. The
+supervisor `scripts/cpu/run-optimized-core.py` controls the gate, batch and status.
+The 144 remaining main supplementary configurations stay unstarted. Mortality
+is exploratory but uses full validation; infeasible folds/bags fail explicitly.
+
+Baseline aggregate estimates are 5,765 operations/5,543 patients, with 52
+mortality-positive operations across 47 patients. Freeze exact counts per branch
+before execution. Preserve legacy `fcff7c7` provenance and never patch old
+fingerprints. Current run status/evidence belong under the new root's control
+inventory rather than proliferating support documents.
+
+The first disposable mixed diagnostic was interrupted after checkpoints appeared
+because final integration edits overlapped its fold-preparation phase. Its
+outputs under `diagnostics/mixed-integration` are excluded from acceptance;
+repeat from the sealed checkout under `diagnostics/sealed-integration`. Scheduler
+process groups were reaped after SIGTERM. No protected main artifacts changed.

@@ -132,7 +132,7 @@ def _export_comparison_tables(artifacts: dict, tables_dir: Path) -> None:
         display_rows = []
         for row in selected.itertuples(index=False):
             display_rows.append({
-                "Outcome": {"any_aki": "AKI", "icu_admission": "ICU admission"}.get(row.outcome, row.outcome),
+                "Outcome": {"any_aki": "AKI", "icu_admission": "ICU admission", "mortality": "In-hospital mortality"}.get(row.outcome, row.outcome),
                 "Reference": f"{family_labels.get(row.reference_model, row.reference_model)}: {labels.get(row.reference_feature_set, row.reference_feature_set)}",
                 "Candidate": f"{family_labels.get(row.candidate_model, row.candidate_model)}: {labels.get(row.candidate_feature_set, row.candidate_feature_set)}",
                 "Metric": metric_labels.get(row.metric, row.metric),
@@ -219,6 +219,14 @@ def main() -> None:
                      "calibration_assessment": "Brier scores and binned held-out reliability curves; held-out calibration intercept/slope and their intervals are not estimated. Saved training calibrator parameters are not evaluation calibration statistics.",
                      "uncertainty_scope": "Patient-cluster resampling conditions on saved fitted-model predictions; it does not repeat model selection or estimate full training-pipeline variability.",
                      "run_manifest": str(args.run_manifest or RESULTS_DIR / "run_manifest.json")}
+    manifest_path = args.run_manifest or RESULTS_DIR / "run_manifest.json"
+    if manifest_path.exists():
+        manifest = json.loads(manifest_path.read_text())
+        status_record["analysis_role"] = manifest.get("analysis_role", "primary")
+        status_record["branch_cohorts"] = {
+            branch: {key: roster[key] for key in ("operations", "patients", "outcomes") if key in roster}
+            for branch, roster in manifest.get("branch_rosters", {}).items()
+        }
     if comparisons is not None:
         inventory = comparisons["inventory"]
         coverage = pd.Series([row["availability"] for row in inventory["comparisons"]], dtype=object).value_counts()
@@ -239,7 +247,17 @@ def main() -> None:
     if report_path.exists():
         coverage_note = (f"**Comparison coverage: {comparisons['inventory']['comparison_status']}**\n\n"
                          if comparisons is not None else "")
-        report_path.write_text("**Analysis status: " + ", ".join(statuses) + "**\n\n" + coverage_note + report_path.read_text())
+        role = status_record.get("analysis_role", "primary")
+        cohort_notes = []
+        for branch, cohort in status_record.get("branch_cohorts", {}).items():
+            note = f"{branch}: {cohort['operations']} operations; {cohort['patients']} patients."
+            mortality = cohort.get("outcomes", {}).get("mortality")
+            if mortality:
+                note += f" Mortality-positive operations: {mortality['events']}; positive patients: {mortality['event_patients']}."
+            cohort_notes.append(note)
+        report_path.write_text("**Analysis status: " + ", ".join(statuses) + "**\n\n"
+            + f"**Analysis role: {role}.**\n\n" + "\n\n".join(cohort_notes) + "\n\n"
+            + coverage_note + report_path.read_text())
 
     logger.info("Loading prediction files for plots")
     prediction_frame = _prediction_sets_to_frame(prediction_sets)

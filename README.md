@@ -4,11 +4,10 @@ Postoperative AKI and ICU-admission prediction from VitalDB intraoperative
 Catch24 waveform features and preoperative clinical data. The manuscript path
 uses logistic regression, XGBoost, and EBM. Aeon remains experimental.
 
-**Pre-run checkpoint:** the implementation is prepared for definitive execution;
-full-cohort reconstruction and manuscript model runs have not started. Offline
-checks verify code and numerical contracts. Earlier real-data diagnostics
-predate the latest cleaning, anti-aliasing, and comparison changes; they do not
-validate the definitive results. See the [evidence register](.agent/workflows/manuscript-reorientation.md).
+The main core study has completed (36 configurations at frozen revision
+`fcff7c7`). The optimized scheduler and broader ICU/mortality extension use a
+fresh study root and a full-budget numerical equivalence gate. Existing main
+artifacts remain read-only. See the [evidence register](.agent/workflows/manuscript-reorientation.md).
 
 - [METHODS.md](METHODS.md): scientific definitions and analysis protocol
 - [RESULTS.md](RESULTS.md): saved artifacts and paper-output regeneration
@@ -97,14 +96,46 @@ are 20 LR trials and 50 each for XGBoost/EBM. Reduced settings require
 optional and disabled by default. Strict manifests and complete fold bundles
 prevent resuming incompatible or incomplete analyses.
 
-Model workers/threads respect CPU affinity and quota. On the audited 64-CPU VM,
-the default is five outer workers with 12 threads each. LR uses one BLAS thread;
-`--blas-threads` can increase it within `--threads-per-model`. Other families
-keep BLAS at one alongside native model threads. Extraction has its own budget:
-start with `AKI_EXTRACTION_WORKERS=16`, then adjust only from measured throughput
-and memory. Avoid simultaneous study writers or extra configuration-level
-parallelism. `scripts/cpu/benchmark-resources.py` offers a bounded synthetic LR
-benchmark; it is not a production runtime estimate.
+The default `--scheduler optimized` mixes independent configuration processes
+within affinity/quota-aware CPU and memory budgets. On this 64-CPU VM it admits
+up to 60 reserved CPUs: LR uses BLAS 4, XGBoost uses four threads per fit, and
+EBM retains 12 jobs with its shared bag pool. HPO remains serial inside each
+fold. `--max-workers` bounds outer folds; `--cpu-budget` and
+`--max-concurrent-configs` bound admission. Explicit thread overrides remain
+available; numerical settings stay fixed throughout each configuration.
+`--scheduler legacy` runs configurations sequentially. Per-job logs, sampled
+CPU/RSS/I/O and controller summaries live under `<study>/control/`;
+`--no-profile-resources` disables sampling. Summed RSS can include shared pages.
+
+For the authorized extension, use the gated supervisor from a frozen checkout:
+
+```bash
+python scripts/cpu/run-optimized-core.py
+```
+
+It validates the old 36 runs, runs one broader ICU XGBoost configuration with
+12 and four threads, compares complete trial histories/predictions/calibration,
+and starts the two 18-configuration batches only if equivalence passes. Status
+is `<new-study>/control/supervisor_status.json`; a failed gate stops execution.
+It never selects the 144 main supplementary configurations. Defaults and explicit
+root overrides are shown by `--help`.
+
+A read-only preview of the extension is:
+
+```bash
+export AKI_ARTIFACT_ROOT=/media/volume/catch22/data/aki_prediction_project/studies/manuscript-optimized-v1
+export PROCESSED_DIR=/media/volume/catch22/data/aki_prediction_project/studies/manuscript-core-v1/data/processed
+python -m run_catch22 experiments --preset core --prep skip \
+  --cohort-scopes icu_waveform_sensitivity mortality_waveform_sensitivity \
+  --reuse-from /media/volume/catch22/data/aki_prediction_project/studies/manuscript-core-v1 --dry-run
+```
+
+`--reuse-from` verifies protected completed configurations before skipping them;
+it never rewrites old fingerprints. Complete local runs are also verified before
+skipping. Future main supplements can use `--preset full --reuse-from ...` to
+reuse main core references. Deliberate repeats require a fresh output root,
+`--rerun-completed --no-resume`, and no imported inventory. Extraction retains
+its independent `AKI_EXTRACTION_WORKERS` budget; this extension reuses features.
 
 ## Diagnostics and saved-result reporting
 

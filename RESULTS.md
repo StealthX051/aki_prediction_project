@@ -18,7 +18,8 @@ results/catch22/paper/<cohort_scope>/<validation_scheme>/
 logs/
 ```
 
-Scopes are `main_shared` and `icu_waveform_sensitivity`; validation schemes are
+Scopes are `main_shared`, `icu_waveform_sensitivity`, and
+`mortality_waveform_sensitivity`; validation schemes are
 `nested_cv` and diagnostic `holdout`. Explicit results/paper overrides are base
 roots unless already scoped. Historical roots and model basenames are retained.
 
@@ -148,3 +149,21 @@ Explanations describe fitted associations rather than causal mechanisms;
 logistic recalibration remains separate. Legacy single-model SHAP/EBM HTML
 exports are opt-in. Smoke outputs live only under their disposable `SMOKE_ROOT`.
 Aeon and archived outputs are outside the manuscript pathway.
+
+## Optimized extension and protected references
+
+The broader ICU and exploratory mortality core batches contain 18 configurations
+each. Their results/paper namespaces are separate from the completed main core.
+The new study's `control/reused_inventory.json` records absolute original paths,
+original fingerprints and integrity hashes for the protected 36 main runs.
+External baseline references are validated against their own frozen provenance;
+new checkpoints retain strict current-source matching. Missing or corrupt
+required references fail rather than trigger refitting.
+
+`control/execution_plan.json`, `control/scheduler/scheduler_summary.json`, per-job
+logs/resource samples, and `control/supervisor_status.json` describe execution.
+Full per-fold HPO histories are saved under each configuration's
+`artifacts/trials/`. The equivalence gate exports a saved-artifact agreement
+report before the remaining extension jobs are admitted. Mortality DCA records
+its exact 0.1–5% grid and exploratory interpretation. Reports and explanations
+consume saved predictions/bundles only.
