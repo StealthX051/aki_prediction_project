@@ -295,3 +295,12 @@ resolves 36 protected configurations reused and 144 pending supplementary
 configurations; none of those supplementary jobs were launched. The new core
 preview resolves 18 ICU plus 18 exploratory mortality configurations. The first
 future full-budget action remains the supervised XGBoost equivalence canary.
+
+Final readiness checks also passed at production partition counts: both outcomes
+and both branches support the exact 5/3/5 plan, with all production EBM bags
+checked. The 22 unique grouped partition keys are warmed under the new study's
+control directory. Both scoped diagnostic reports regenerated from saved
+predictions with 100 diagnostic bootstrap draws (no fitting), including mortality
+DCA; these are diagnostic artifacts, not definitive manuscript results. New
+canonical model namespaces remain empty. User-requested launch hold remains in
+force for the full-budget canary and both production batches.

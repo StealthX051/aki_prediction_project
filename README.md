@@ -47,16 +47,20 @@ values, CPU models, SHAP additivity, serialization, and report exports.
 ## Configure a fresh study
 
 Raw data are not shipped. This VM's source CSVs are at the path below. Override
-it on other machines. The launcher also needs VitalDB waveform access.
+it on other machines. Fresh extraction needs VitalDB access; this extension
+reuses sealed waveform features.
 
 ```bash
 unset DATA_DIR PROCESSED_DIR RESULTS_DIR PAPER_DIR LOG_FILE SMOKE_ROOT INPUT_FILE LAB_DATA_FILE
 export RAW_DIR=/media/volume/catch22/projects/aki_prediction_project/data/raw
-export AKI_ARTIFACT_ROOT=/media/volume/catch22/data/aki_prediction_project/studies/manuscript-core-v1
+export AKI_ARTIFACT_ROOT=/media/volume/catch22/data/aki_prediction_project/studies/manuscript-optimized-v1
+export PROCESSED_DIR=/media/volume/catch22/data/aki_prediction_project/studies/manuscript-core-v1/data/processed
 
 # Read-only inspection: no preprocessing, training, or output directories
 python -m runtime_resources --volume "$AKI_ARTIFACT_ROOT"
-python -m run_catch22 experiments --preset core --dry-run
+python -m run_catch22 experiments --preset core --prep skip \
+  --cohort-scopes icu_waveform_sensitivity mortality_waveform_sensitivity \
+  --reuse-from /media/volume/catch22/data/aki_prediction_project/studies/manuscript-core-v1 --dry-run
 ```
 
 Use a fresh study root on the attached volume. Historical extraction outputs
@@ -70,23 +74,28 @@ The core order is `preop_only`, `all_waveforms`, `preop_and_all_waveforms`.
 Main core: 36 configurations across two outcomes, two branches, and three
 families. `main_shared` uses the same AKI/ICU-eligible operations within a branch;
 `icu_waveform_sensitivity` uses the broader ICU-eligible population. Repeat
-operations remain grouped by patient. The full main grid has 180 configurations.
+operations remain grouped by patient. `mortality_waveform_sensitivity` uses valid
+in-hospital mortality labels in the broader waveform population and remains
+exploratory. The two new core scopes have 18 configurations each. The full main
+grid has 180 configurations.
 
 ## Execution after run approval
 
-The following commands start research work; they are not readiness checks.
-Use the same root and unchanged code/environment throughout a staged study.
+Execution is held at readiness. After explicit approval, run the gated supervisor
+from the sealed study checkout. It validates the old 36 configurations, runs the
+single broader ICU XGBoost canary with 12 and four threads, and admits the two
+18-configuration batches only after the complete numerical comparison passes.
+It never selects the 144 main supplementary configurations.
 
 ```bash
-# First family prepares both waveform branches once
-python -m run_catch22 experiments --preset core --model-types logistic_regression
-python -m run_catch22 experiments --preset core --model-types xgboost --prep skip
-python -m run_catch22 experiments --preset core --model-types ebm --prep skip
-
-# Broader ICU sensitivity, then the remaining supplementary main grid
-python -m run_catch22 experiments --preset core --cohort-scope icu_waveform_sensitivity --prep skip
-python -m run_catch22 experiments --preset full --prep skip
+cd /media/volume/catch22/data/aki_prediction_project/studies/manuscript-optimized-v1/code
+python scripts/cpu/run-optimized-core.py --print-commands  # read-only preview
+python scripts/cpu/run-optimized-core.py                   # starts research work
 ```
+
+Status is `<new-study>/control/supervisor_status.json`; a failed gate stops
+execution. Root overrides are listed by `--help`. Reuse the sealed processed
+features; this extension requires no preprocessing or waveform extraction.
 
 `--outcomes`, `--branches`, and `--feature-sets` restrict configurations;
 `--model-types` selects families. Definitive validation uses five outer, three
@@ -106,29 +115,6 @@ available; numerical settings stay fixed throughout each configuration.
 `--scheduler legacy` runs configurations sequentially. Per-job logs, sampled
 CPU/RSS/I/O and controller summaries live under `<study>/control/`;
 `--no-profile-resources` disables sampling. Summed RSS can include shared pages.
-
-When execution is authorized, use the gated supervisor from a frozen checkout:
-
-```bash
-python scripts/cpu/run-optimized-core.py
-```
-
-It validates the old 36 runs, runs one broader ICU XGBoost configuration with
-12 and four threads, compares complete trial histories/predictions/calibration,
-and starts the two 18-configuration batches only if equivalence passes. Status
-is `<new-study>/control/supervisor_status.json`; a failed gate stops execution.
-It never selects the 144 main supplementary configurations. Defaults and explicit
-root overrides are shown by `--help`.
-
-A read-only preview of the extension is:
-
-```bash
-export AKI_ARTIFACT_ROOT=/media/volume/catch22/data/aki_prediction_project/studies/manuscript-optimized-v1
-export PROCESSED_DIR=/media/volume/catch22/data/aki_prediction_project/studies/manuscript-core-v1/data/processed
-python -m run_catch22 experiments --preset core --prep skip \
-  --cohort-scopes icu_waveform_sensitivity mortality_waveform_sensitivity \
-  --reuse-from /media/volume/catch22/data/aki_prediction_project/studies/manuscript-core-v1 --dry-run
-```
 
 `--reuse-from` verifies protected completed configurations before skipping them;
 it never rewrites old fingerprints. Complete local runs are also verified before
@@ -150,10 +136,11 @@ python -m run_catch22 smoke --raw-source-dir "$RAW_DIR" --case-limit 40 \
   --model-types logistic_regression,xgboost,ebm
 
 # Saved results only; no estimator, calibrator, or threshold fitting
-python -m run_catch22 experiments --report-only
-python -m run_catch22 descriptive --branch non_windowed
-python -m run_catch22 descriptive --branch windowed
-python -m reporting.fold_explanations
+python -m run_catch22 experiments --preset core --report-only \
+  --cohort-scopes icu_waveform_sensitivity mortality_waveform_sensitivity
+python -m run_catch22 descriptive --cohort-scope mortality_waveform_sensitivity --branch non_windowed
+python -m run_catch22 descriptive --cohort-scope mortality_waveform_sensitivity --branch windowed
+COHORT_SCOPE=mortality_waveform_sensitivity python -m reporting.fold_explanations
 ```
 
 Reporting defaults to 5,000 unstratified patient-cluster bootstrap draws, seed 0.
