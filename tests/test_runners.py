@@ -432,6 +432,7 @@ def test_multiscope_core_dry_run_defaults_to_optimized_and_preserves_fixed_budge
         "icu_waveform_sensitivity", "mortality_waveform_sensitivity", "--dry-run"]) == 0
     plan = json.loads(capsys.readouterr().out)
     assert plan["scheduler"] == "optimized" and plan["cpu_budget"] == 60
+    assert plan["admission_policy"] == "adaptive" and plan["max_concurrent_configs"] == 12
     assert plan["pending_configurations"] == 36
     assert len(plan["configurations"]) == 36
     scope_outcomes = {(c["cohort_scope"], c["outcome"]) for c in plan["configurations"]}
@@ -501,3 +502,35 @@ def test_failed_or_incomplete_configuration_skips_reports(tmp_path, monkeypatch,
     assert manifest["status"] == "failed"
     assert manifest["execution_history"][0]["status"] == ("artifact_validation_failed" if exit_code == 0 else "failed")
     assert not any(module.startswith("reporting") or module == "results_recreation.metrics_summary" for module, _ in calls)
+
+
+def test_native_drain_before_reporting_skips_completed_fits_and_preserves_old_profiles(tmp_path, monkeypatch):
+    import json
+    import os
+    import psutil
+    from model_creation import experiment_queue
+    root = tmp_path / "study"
+    monkeypatch.setenv("AKI_ARTIFACT_ROOT", str(root))
+    monkeypatch.setenv("AKI_STORAGE_POLICY", "off")
+    for name in ("PROCESSED_DIR", "RESULTS_DIR", "PAPER_DIR", "LOG_FILE"):
+        monkeypatch.delenv(name, raising=False)
+    historical = root / "control/scheduler/scheduler_summary.json"
+    historical.parent.mkdir(parents=True)
+    historical.write_text("original resource summary")
+    def prepare(module, args, **kwargs):
+        assert module == "data_preparation.validate_processed_artifacts"
+        _write_prepared_fixture(kwargs["env"]["PROCESSED_DIR"])
+        (root / "control/drain-request.json").write_text(json.dumps({
+            "pid": os.getpid(), "create_time": psutil.Process().create_time()}))
+        return 0
+    monkeypatch.setattr(run_catch22, "run_module", prepare)
+    monkeypatch.setattr(experiment_queue, "_completed_reference", lambda *a, **k: {"status": "verified_completed"})
+    monkeypatch.setattr(experiment_queue, "run_configurations", lambda *a, **k: pytest.fail("Completed fits were scheduled"))
+    assert run_catch22.main(["experiments", "--prep", "skip", "--preset", "core", "--only-xgboost",
+        "--outcomes", "icu_admission", "--branches", "non_windowed", "--feature-sets", "preop_only"]) == 75
+    manifest = json.loads((root / "results/catch22/experiments/main_shared/nested_cv/run_manifest.json").read_text())
+    assert manifest["status"] == "drained"
+    assert historical.read_text() == "original resource summary"
+    active = json.loads((root / "control/active_scheduler.json").read_text())
+    assert active["native_drain"] and active["pid"] == os.getpid()
+    assert Path(active["summary_path"]).parent.parent == historical.parent

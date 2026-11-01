@@ -700,6 +700,8 @@ def build_parser() -> argparse.ArgumentParser:
     scopes.add_argument("--cohort-scope", choices=COHORT_SCOPES, default=None)
     scopes.add_argument("--cohort-scopes", choices=COHORT_SCOPES, nargs="+")
     experiments.add_argument("--scheduler", choices=("optimized", "legacy"), default="optimized")
+    experiments.add_argument("--admission-policy", choices=("adaptive", "reserved"), default="adaptive",
+                             help="Adaptive targets measured CPU use; reserved enforces summed peak reservations.")
     experiments.add_argument("--cpu-budget", type=int)
     experiments.add_argument("--max-concurrent-configs", type=int)
     experiments.add_argument("--reuse-from", type=Path, action="append", default=[])

@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import argparse
+import copy
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -12,8 +14,79 @@ import sys
 import time
 
 import pytest
+import psutil
 
 SUPERVISOR = runpy.run_path(str(Path(__file__).resolve().parents[1] / "scripts/cpu/run-optimized-core.py"))
+
+
+def test_drain_recognizes_only_the_standard_multiprocessing_tracker():
+    assert SUPERVISOR["_resource_tracker"]([sys.executable, "-c", "from multiprocessing.resource_tracker import main;main(9)"])
+    assert not SUPERVISOR["_resource_tracker"]([sys.executable, "-c", "import time;time.sleep(30)"])
+
+
+def test_orchestration_overlay_keeps_original_snapshot_and_checks_committed_sources(tmp_path, monkeypatch):
+    original = SUPERVISOR["_execution_snapshot"]()
+    path = tmp_path / "execution-snapshot.json"
+    path.write_text(json.dumps(original))
+    original_bytes = path.read_bytes()
+    current = copy.deepcopy(original)
+    name, payload = "model_creation/config_scheduler.py", b"reviewed scheduler source"
+    current["source_sha256"][name] = hashlib.sha256(payload).hexdigest()
+    validate = SUPERVISOR["_validate_execution_snapshot"]
+    with pytest.raises(ValueError, match="without a reviewed"):
+        validate(tmp_path, current)
+    attestation = {
+        "original_snapshot_sha256": hashlib.sha256(original_bytes).hexdigest(),
+        "before_source_sha256": original["source_sha256"],
+        "after_source_sha256": current["source_sha256"],
+        "study_identity": original["study_identity"],
+        "source_checkout": str(tmp_path), "source_commit": "a" * 40,
+    }
+    (tmp_path / "orchestration-overlay.json").write_text(json.dumps(attestation))
+    def committed(command, *, cwd):
+        assert command == ["git", "show", "a" * 40 + ":" + name]
+        assert cwd == tmp_path
+        return payload
+    monkeypatch.setattr(subprocess, "check_output", committed)
+    assert validate(tmp_path, current) == attestation
+    assert path.read_bytes() == original_bytes
+    monkeypatch.setattr(subprocess, "check_output", lambda *a, **k: b"unreviewed source")
+    with pytest.raises(ValueError, match="committed source"):
+        validate(tmp_path, current)
+    changed_science = copy.deepcopy(current)
+    changed_science["study_identity"]["code_hash"] = "changed"
+    with pytest.raises(ValueError, match="source/environment changed"):
+        validate(tmp_path, changed_science)
+    unapproved = copy.deepcopy(current)
+    unapproved["source_sha256"]["model_creation/split_plan.py"] = "changed"
+    with pytest.raises(ValueError, match="reviewed transition"):
+        validate(tmp_path, unapproved)
+
+
+def test_saved_canary_checks_original_hashes_without_fitting(tmp_path, monkeypatch):
+    from model_creation import run_inventory
+    args = argparse.Namespace(study_root=tmp_path, baseline_root=tmp_path / "baseline")
+    identity = {"code_hash": "original-scientific-digest"}
+    (tmp_path / "control").mkdir()
+    (tmp_path / "control/execution-snapshot.json").write_text(json.dumps({"study_identity": identity}))
+    agreement = {"artifact_sha256": {}, "bootstrap": {"replicates": 5000, "seed": 0, "stratified": False}}
+    verified = []
+    monkeypatch.setattr(run_inventory, "verify_completed_configuration",
+                        lambda path, **kwargs: verified.append((path, kwargs)))
+    for side in ("legacy", "optimized"):
+        root = tmp_path / "validation/legacy-canary" if side == "legacy" else tmp_path
+        directory = root / "results/catch22/experiments/icu_waveform_sensitivity/nested_cv/models/xgboost/icu_admission/non_windowed/preop_and_all_waveforms"
+        directory.mkdir(parents=True)
+        (directory / "prediction.csv").write_text("saved predictions")
+        agreement[side + "_config"] = str(directory)
+        agreement[side + "_fingerprint"] = {**identity, "outer_folds": 5, "inner_folds": 3, "calibration_folds": 5,
+            "repeats": 1, "n_trials": 50, "diagnostic": False, "threads_per_model": 12 if side == "legacy" else 4}
+        agreement["artifact_sha256"][side] = {"prediction.csv": hashlib.sha256(b"saved predictions").hexdigest()}
+    SUPERVISOR["_verify_saved_canary"](args, agreement)
+    assert len(verified) == 2 and verified[1][1]["expected_fingerprint"]["threads_per_model"] == 4
+    (directory / "prediction.csv").write_text("corruption")
+    with pytest.raises(ValueError, match="Saved canary artifact changed"):
+        SUPERVISOR["_verify_saved_canary"](args, agreement)
 
 
 def arguments(tmp_path):
@@ -265,3 +338,121 @@ def test_documented_script_imports_project_without_pythonpath(tmp_path):
     status = json.loads((study / "control/supervisor_status.json").read_text())
     assert status["status"] == "failed" and status["stage"] == "baseline_inventory"
     assert not (study / "results").exists()
+
+
+@pytest.mark.parametrize("verification_fails", [False, True], ids=["retire-without-admission", "failed-helper-resumes"])
+def test_legacy_drain_finishes_worker_and_retires_or_restores_queue(tmp_path, verification_fails):
+    """Real signals: stop only the queue; the independent worker must finish."""
+    worker_code = "import time; from pathlib import Path; time.sleep(.4); Path('complete').write_text('saved')"
+    script = tmp_path / "queue.py"
+    script.write_text('''import signal,subprocess,sys
+from pathlib import Path
+def interrupted(signum,frame): raise KeyboardInterrupt()
+signal.signal(signal.SIGTERM,interrupted)
+worker=subprocess.Popen([sys.executable,'-c',sys.argv[1]],start_new_session=True)
+Path('worker.pid').write_text(str(worker.pid))
+try:
+    worker.wait()
+    Path('extra-admission').write_text('unexpected after drain')
+except KeyboardInterrupt:
+    worker.wait()
+    sys.exit(75)
+''')
+    process = subprocess.Popen([sys.executable, str(script), worker_code], cwd=tmp_path)
+    queue = psutil.Process(process.pid)
+    try:
+        deadline = time.monotonic() + 5
+        while not (tmp_path / "worker.pid").exists():
+            assert time.monotonic() < deadline
+            time.sleep(.01)
+        captured = []
+        def capture(parent):
+            assert parent.status() == psutil.STATUS_STOPPED
+            children = [(p, {"pid": p.pid}) for p in parent.children()]
+            assert len(children) == 1
+            captured.extend(children)
+            return children
+        def verify(workers):
+            assert (tmp_path / "complete").read_text() == "saved"
+            if verification_fails:
+                raise ValueError("verification rejected artifact")
+            return ["verified"]
+        kwargs = dict(capture=capture, verify=verify, progress=lambda *args: None, poll_seconds=.01)
+        if verification_fails:
+            with pytest.raises(ValueError, match="verification rejected"):
+                SUPERVISOR["_drain_legacy_queue"](queue, **kwargs)
+            assert process.wait(timeout=5) == 0
+            assert (tmp_path / "extra-admission").exists()
+        else:
+            assert SUPERVISOR["_drain_legacy_queue"](queue, **kwargs) == ["verified"]
+            assert process.wait(timeout=5) == 75
+            assert not (tmp_path / "extra-admission").exists()
+        assert (tmp_path / "complete").exists()
+    finally:
+        if process.poll() is None:
+            queue.resume()
+            process.terminate()
+            process.wait(timeout=5)
+
+
+def test_native_drain_is_incomplete_and_skips_reports(tmp_path):
+    args = arguments(tmp_path)
+    commands = []
+    def runner(command, **kwargs):
+        commands.append(command)
+        if "--dry-run" in command:
+            return json.dumps(preflight())
+        if "model_creation.scheduler_canary" in command:
+            SUPERVISOR["_write"](args.study_root / "control/canary-agreement.json", {"status": "passed"})
+        elif "--cohort-scopes" in command:
+            raise SUPERVISOR["DrainedRun"]("requested drain")
+        return ""
+    assert SUPERVISOR["run_pipeline"](args, runner=runner) == 75
+    assert len(commands) == 5
+    status = json.loads((args.study_root / "control/supervisor_status.json").read_text())
+    assert status["status"] == "drained" and status["stage"] == "extensions"
+    assert not (args.study_root / "control/zero-fit-relaunch.json").exists()
+
+
+def test_terminated_drain_helper_resumes_the_original_queue(tmp_path):
+    """A handled helper SIGTERM must not strand a suspended production queue."""
+    queue_script = tmp_path / "queue.py"
+    queue_script.write_text('''import subprocess,sys
+from pathlib import Path
+worker=subprocess.Popen([sys.executable,'-c',"import time; time.sleep(1)"])
+Path('worker.pid').write_text(str(worker.pid))
+worker.wait()
+Path('queue-resumed').write_text('finished')
+''')
+    helper_script = tmp_path / "helper.py"
+    helper_script.write_text('''import runpy,sys,psutil
+from pathlib import Path
+s=runpy.run_path(sys.argv[1])
+def progress(*args): Path('helper-stopped-queue').write_text('ready')
+s['_drain_legacy_queue'](psutil.Process(int(sys.argv[2])),capture=lambda p:[(c,{}) for c in p.children()],verify=lambda workers:[],progress=progress,poll_seconds=.01)
+''')
+    queue = subprocess.Popen([sys.executable, str(queue_script)], cwd=tmp_path)
+    helper = None
+    try:
+        deadline = time.monotonic() + 10
+        while not (tmp_path / "worker.pid").exists():
+            assert time.monotonic() < deadline
+            time.sleep(.01)
+        helper = subprocess.Popen([sys.executable, str(helper_script), str(Path(__file__).resolve().parents[1] / "scripts/cpu/run-optimized-core.py"), str(queue.pid)],
+                                  cwd=tmp_path, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        while not (tmp_path / "helper-stopped-queue").exists():
+            assert helper.poll() is None
+            assert time.monotonic() < deadline
+            time.sleep(.01)
+        helper.terminate()
+        assert helper.wait(timeout=5) != 0
+        assert queue.wait(timeout=5) == 0
+        assert (tmp_path / "queue-resumed").read_text() == "finished"
+    finally:
+        if helper and helper.poll() is None:
+            helper.kill()
+            helper.wait()
+        if queue.poll() is None:
+            psutil.Process(queue.pid).resume()
+            queue.terminate()
+            queue.wait(timeout=5)

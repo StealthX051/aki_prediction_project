@@ -48,6 +48,7 @@ def test_backfills_within_resources_and_serializes_ebm(tmp_path):
         events.append(("finish", record["key"]))
 
     records = scheduler.run_configurations(jobs, output_dir=tmp_path / "profile", cpu_budget=4,
+                                           admission_policy="reserved",
                                            on_started=started, on_finished=finished, poll_seconds=0.01, sample_seconds=0.02)
     assert events[:2] == [("start", "a-ebm"), ("start", "c-lr")]
     assert all(record["status"] == "complete" for record in records)
@@ -70,7 +71,8 @@ def test_legacy_order_and_failure_do_not_lose_other_jobs(tmp_path):
                                            on_finished=lambda r: events.append(("finish", r["key"])))
     assert events == [("start", "z"), ("finish", "z"), ("start", "a"), ("finish", "a")]
     assert [(r["key"], r["status"], r["exit_code"]) for r in records] == [("z", "failed", 7), ("a", "complete", 0)]
-    assert not list((tmp_path / "profile").glob("*.jsonl"))
+    assert not list((tmp_path / "profile").glob("*.resources.jsonl"))
+    assert json.loads((tmp_path / "profile/scheduler_summary.json").read_text())["status"] == "failed"
 
 
 def test_duplicate_or_oversize_requests_fail_before_outputs(tmp_path):
@@ -187,3 +189,145 @@ run_configurations([job], output_dir=root/'profile', cpu_budget=1, profile=False
                 child.kill()
             except scheduler.psutil.NoSuchProcess:
                 pass
+
+
+def test_pressure_window_weights_time_and_rejects_missing_or_stale_samples():
+    window = scheduler._PressureWindow(4, 1, 0)
+    for second, busy in enumerate([20, 40, 60, 80], start=1):
+        window.add(second, busy)
+    assert window.mean(4) == pytest.approx(50)
+    window.add(5, 100)
+    assert window.mean(5) == pytest.approx(70)
+    assert window.mean(8) is None
+    window.add(9, 0)  # The missing interval cannot count as idle CPU.
+    assert window.mean(9) is None
+    for second in range(10, 14):
+        window.add(second, 0)
+    assert window.mean(13) == 0
+    window.add(14, None)
+    assert window.mean(14) is None
+
+
+def test_machine_pressure_includes_other_work_on_allowed_cpus(monkeypatch):
+    monkeypatch.setattr(scheduler.psutil, "cpu_percent", lambda **kwargs: [100, 50, 25, 0])
+    monkeypatch.setattr(scheduler.os, "sched_getaffinity", lambda pid: {0, 2})
+    assert scheduler._machine_busy_cores() == 1.25
+
+
+@pytest.mark.parametrize("busy,overlaps", [(0.0, True), (2.0, False), (None, False)])
+def test_adaptive_admission_requires_idle_window_and_cooldown(tmp_path, busy, overlaps):
+    active, events = set(), []
+
+    def started(record):
+        events.append(("start", record["key"], time.monotonic(), bool(active), record))
+        active.add(record["key"])
+
+    def finished(record):
+        active.remove(record["key"])
+
+    scheduler.run_configurations(
+        [job(tmp_path, "a", cpus=2, seconds=.5), job(tmp_path, "b", cpus=2, seconds=.1)],
+        output_dir=tmp_path / "profile", cpu_budget=2, profile=False,
+        on_started=started, on_finished=finished, poll_seconds=.005,
+        adaptive_window_seconds=.1, admission_cooldown_seconds=.15,
+        pressure_sample_seconds=.02, pressure_provider=lambda: busy,
+    )
+    assert events[1][3] is overlaps
+    if overlaps:
+        assert events[1][2] - events[0][2] >= .14
+        assert events[1][4]["admission_reason"] == "sustained_spare_cpu"
+    else:
+        assert events[1][4]["admission_reason"] == "reserved_capacity"
+    # Admission telemetry is independent of expensive per-process profiling.
+    rows = [json.loads(row) for row in (tmp_path / "profile/scheduler_pressure.jsonl").read_text().splitlines()]
+    assert rows and not list((tmp_path / "profile").glob("*.resources.jsonl"))
+
+
+def test_adaptive_allows_concurrent_ebm_and_defaults_to_twelve_jobs(tmp_path):
+    active, peak, first_finished = set(), [], []
+
+    def started(record):
+        active.add(record["key"])
+        peak.append(len(active))
+        if record["key"] == "ebm12":
+            assert first_finished
+
+    def finished(record):
+        active.remove(record["key"])
+        first_finished.append(record["key"])
+
+    jobs = [job(tmp_path, f"ebm{i:02d}", family="ebm", seconds=.4) for i in range(13)]
+    jobs = [scheduler.ConfigJob(**{**j.__dict__, "memory_reservation_bytes": 1}) for j in jobs]
+    scheduler.run_configurations(jobs, output_dir=tmp_path / "profile", cpu_budget=64,
+                                 profile=False, poll_seconds=.005,
+                                 on_started=started, on_finished=finished)
+    assert max(peak) == 12
+    assert not active
+
+
+def test_native_drain_finishes_active_jobs_and_preserves_pending_request(tmp_path):
+    request = tmp_path / "drain"
+    events = []
+
+    def started(record):
+        events.append(("start", record["key"]))
+        request.write_text(json.dumps({"pid": os.getpid(), "create_time": scheduler.psutil.Process().create_time()}))
+
+    with pytest.raises(scheduler.SchedulerDrained) as error:
+        scheduler.run_configurations(
+            [job(tmp_path, "a"), job(tmp_path, "b")], output_dir=tmp_path / "profile",
+            cpu_budget=2, drain_file=request, profile=False, poll_seconds=.005,
+            on_started=started, on_finished=lambda r: events.append(("finish", r["key"])),
+        )
+    assert events == [("start", "a"), ("finish", "a")]
+    assert error.value.pending_keys == ["b"]
+    assert (tmp_path / "a.log").read_text().strip() == "a"
+    assert not (tmp_path / "b.log").exists()
+    summary = json.loads((tmp_path / "profile/scheduler_summary.json").read_text())
+    assert summary["status"] == "drained"
+    assert summary["configurations"][-1]["status"] == "pending"
+
+
+def test_existing_drain_request_schedules_zero_fits(tmp_path):
+    request = tmp_path / "drain"
+    request.write_text(json.dumps({"pid": os.getpid(), "create_time": scheduler.psutil.Process().create_time()}))
+    with pytest.raises(scheduler.SchedulerDrained) as error:
+        scheduler.run_configurations([job(tmp_path, "untouched")], output_dir=tmp_path / "profile",
+                                     drain_file=request, cpu_budget=1)
+    assert error.value.pending_keys == ["untouched"]
+    assert not (tmp_path / "untouched.log").exists()
+
+
+def test_stale_or_invalid_drain_request_cannot_stop_a_different_controller(tmp_path):
+    request = tmp_path / "drain"
+    current = {"pid": os.getpid(), "create_time": scheduler.psutil.Process().create_time()}
+    for payload in ["{", "[]", "{}", json.dumps({**current, "pid": -1}),
+                    json.dumps({**current, "create_time": current["create_time"] - 1})]:
+        request.write_text(payload)
+        assert not scheduler._drain_requested(request)
+    # A stale file also must not change the actual queue behavior.
+    records = scheduler.run_configurations([job(tmp_path, "valid")], output_dir=tmp_path / "profile",
+                                           drain_file=request, cpu_budget=1, profile=False)
+    assert records[0]["status"] == "complete"
+    request.write_text(json.dumps(current))
+    assert scheduler._drain_requested(request)
+
+
+def test_adaptive_oversubscription_still_obeys_aggregate_memory(tmp_path, monkeypatch):
+    monkeypatch.setattr(scheduler, "resource_snapshot", lambda path: {
+        "memory_total_bytes": 80 * scheduler.GIB, "memory_available_bytes": 20 * scheduler.GIB,
+    })
+    active, peaks = set(), []
+
+    def started(record):
+        active.add(record["key"])
+        peaks.append(len(active))
+
+    scheduler.run_configurations(
+        [job(tmp_path, f"job{i}", seconds=.4) for i in range(3)],
+        output_dir=tmp_path / "profile", cpu_budget=1, profile=False,
+        on_started=started, on_finished=lambda r: active.remove(r["key"]), poll_seconds=.005,
+        adaptive_window_seconds=.1, admission_cooldown_seconds=.1,
+        pressure_sample_seconds=.02, pressure_provider=lambda: 0.,
+    )
+    assert max(peaks) == 2  # Two 8-GiB reservations fit; three exceed 80% of 20 GiB.

@@ -228,7 +228,8 @@ The approved implementation replaces the prior proposal: use a bounded queue of
 configuration subprocesses, cold split-cache preparation with up to eight
 single-threaded workers, LR BLAS 4, XGBoost four threads, and unchanged EBM 12-job
 production settings. CPU admission defaults to 60 on this 64-CPU VM. One EBM
-configuration is admitted at a time. Numerical fitting policies remain fixed.
+configuration was initially admitted at a time. The adaptive follow-up below
+replaces that admission limit; numerical fitting policies remain fixed.
 
 - [x] Add independent `mortality_waveform_sensitivity` selector and read-only
   legacy-sidecar overlays; preserve main/ICU manifest shapes.
@@ -335,3 +336,44 @@ reporting only when each preceding gate succeeds. No main-core refits or 144
 supplementary configurations are selected. Live status/logs and exact launch
 authorization are under the new study's `control/` directory. Earlier readiness
 holds above are historical and superseded by this explicit run request.
+
+## Adaptive admission and no-work-loss handoff
+
+The user authorized replacing static reservations with measured CPU admission,
+targeting the existing 60-CPU budget on the 64-CPU VM. Production profiling
+showed about 32 busy cores on average and EBM about 6.6 cores per configuration;
+the original single-EBM limit would leave a substantial serial tail. Adaptive
+admission permits multiple EBM configurations, at most 12 configurations, and
+one extra admission per 60 seconds after a full 60-second pressure window below
+93% of the CPU budget. Memory reservations/floors remain strict. Peaks at 100%
+CPU are acceptable; throughput and memory, not utilization alone, establish value.
+The `reserved` admission policy retains the original behavior for rollback.
+
+The selected handoff finishes active configurations. The tested drain helper
+suspends only the old queue, waits for its independent training workers, verifies
+their artifacts, and retires the queue before restart. Known multiprocessing
+resource trackers are coordination helpers, not training jobs. The first live
+attempt rejected that tracker and safely resumed the queue; the corrected
+attempt stopped admissions with all three training jobs continuing normally.
+During this legacy drain, resource sampling has an explicit gap. New controllers
+support native drain requests without suspending their sampler.
+
+Scientific files, Git HEAD and numerical settings remain frozen. A committed,
+allowlisted orchestration overlay records exact before/after source hashes in a
+new execution epoch; original snapshots, fingerprints and resource logs remain
+intact. The passed full-budget XGBoost canary is verified from saved integrity
+hashes rather than repeated. Live drain/migration evidence and diagnostic results
+remain under the existing study's control and diagnostic directories.
+
+Verification evidence: the offline environment/native checks and 566-test suite
+passed, followed by 70 focused final integration checks and 17 scheduler checks.
+Six audited outer jobs produced identical raw/calibrated predictions and trial
+scores under reserved versus adaptive scheduling (176.75 versus 102.71 seconds
+in this bounded diagnostic). Twelve simultaneous production-bagged EBM kernels
+(14 outer/20 inner bags, diagnostic 25-round cap) matched the reference exactly,
+reached 100% machine CPU, and retained at least 219 GiB available memory. All
+25 diagnostic process groups stopped. These timings use shortened diagnostic
+admission windows and concurrent production activity; they do not forecast
+production runtime. The diagnostic manifest distinguishes subsequent summary-
+telemetry edits from the executed controller source. Durable evidence is
+`diagnostics/adaptive-admission-20261101-v1/acceptance.json` on the study volume.

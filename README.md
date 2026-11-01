@@ -118,16 +118,27 @@ are 20 LR trials and 50 each for XGBoost/EBM. Reduced settings require
 optional and disabled by default. Strict manifests and complete fold bundles
 prevent resuming incompatible or incomplete analyses.
 
-The default `--scheduler optimized` mixes independent configuration processes
-within affinity/quota-aware CPU and memory budgets. On this 64-CPU VM it admits
-up to 60 reserved CPUs: LR uses BLAS 4, XGBoost uses four threads per fit, and
-EBM retains 12 jobs with its shared bag pool. HPO remains serial inside each
-fold. `--max-workers` bounds outer folds; `--cpu-budget` and
-`--max-concurrent-configs` bound admission. Explicit thread overrides remain
-available; numerical settings stay fixed throughout each configuration.
-`--scheduler legacy` runs configurations sequentially. Per-job logs, sampled
-CPU/RSS/I/O and controller summaries live under `<study>/control/`;
-`--no-profile-resources` disables sampling. Summed RSS can include shared pages.
+The default `--scheduler optimized --admission-policy adaptive` mixes independent
+configuration processes. On this 64-CPU VM, `--cpu-budget 60` targets near-full
+CPU use rather than imposing a ceiling on summed reservations. After a complete
+60-second window below 93% of that budget, another configuration can start;
+admissions beyond nominal reservations are at least 60 seconds apart. Up to 12
+configurations, including multiple EBM configurations, may run when memory permits.
+`--max-concurrent-configs` can lower this cap. Peaks may use all CPUs; numerical
+settings remain fixed: LR BLAS 4, XGBoost four threads, EBM 12 jobs, and serial HPO
+within each fold. `--max-workers` bounds outer-fold concurrency.
+`--admission-policy reserved` restores strict summed reservations and the single
+EBM limit; `--scheduler legacy` runs configurations sequentially. Missing CPU
+telemetry disables extra adaptive admissions. Existing memory safeguards apply.
+
+Per-job CPU/RSS/I/O logs and controller summaries use separate execution epochs
+under `<study>/control/scheduler/`; `control/active_scheduler.json` identifies the
+current summary. `--no-profile-resources` disables detailed job logs, while CPU
+pressure sampling continues for admission. Summed RSS can include shared pages.
+To finish active configurations and stop admission, run the supervisor with
+`--drain-current`. Relaunch the normal command to resume verified unfinished work.
+The drain helper also supports the original controller through a verified
+process-only handoff; it never suspends training workers.
 
 `--reuse-from` verifies protected completed configurations before skipping them;
 it never rewrites old fingerprints. Complete local runs are also verified before

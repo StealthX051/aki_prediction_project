@@ -669,6 +669,11 @@ their original provenance. Computational reuse requires verified compatibility;
 original fingerprints are not rewritten. Cold split preparation parallelizes
 independent cache keys while preserving candidate order and tie-breaking
 within each key. This optimization does not change the statistical design.
+Independent model configurations may run concurrently according to measured CPU
+and memory pressure. Numerical thread settings remain fixed within each
+configuration, and HPO trials remain sequential and seeded. Scheduler source
+changes are recorded separately from the unchanged scientific code; restarting
+reuses only checkpoints that pass the original scientific fingerprint checks.
 
 The manuscript should supply its verified dataset citation, collection period,
 and applicable ethics/data-use statement from source and study records; those

@@ -15,6 +15,7 @@ from pathlib import Path
 import signal
 import subprocess
 import sys
+import time
 
 import psutil
 
@@ -22,6 +23,14 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 STUDIES = Path("/media/volume/catch22/data/aki_prediction_project/studies")
 SCOPES = ("icu_waveform_sensitivity", "mortality_waveform_sensitivity")
+ORCHESTRATION_OVERLAY_FILES = frozenset({
+    "run_catch22.py", "model_creation/config_scheduler.py",
+    "model_creation/experiment_queue.py", "scripts/cpu/run-optimized-core.py",
+})
+
+
+class DrainedRun(RuntimeError):
+    """A requested drain finished active work but intentionally left a queue."""
 
 
 def _now():
@@ -45,6 +54,68 @@ def _execution_snapshot() -> dict:
             "numerical_runtime_versions": {name: importlib.metadata.version(name)
                                            for name in ("scipy", "joblib", "threadpoolctl")},
             "source_sha256": {name: hashlib.sha256((PROJECT_ROOT / name).read_bytes()).hexdigest() for name in names}}
+
+
+def _validate_execution_snapshot(control: Path, snapshot: dict) -> dict | None:
+    """Accept only exact original sources or an explicitly committed scheduler overlay."""
+    path = control / "execution-snapshot.json"
+    if not path.exists():
+        _write(path, snapshot)
+        return None
+    original_bytes = path.read_bytes()
+    original = json.loads(original_bytes)
+    fixed = ("study_identity", "python", "python_executable", "numerical_runtime_versions", "platform")
+    if any(snapshot.get(key) != original.get(key) for key in fixed):
+        raise ValueError("Supervisor source/environment changed since its frozen execution snapshot")
+    if snapshot["source_sha256"] == original["source_sha256"]:
+        return None
+    attestation_path = control / "orchestration-overlay.json"
+    if not attestation_path.exists():
+        raise ValueError("Supervisor source/environment changed without a reviewed orchestration overlay")
+    attestation = json.loads(attestation_path.read_text())
+    before, after = original["source_sha256"], snapshot["source_sha256"]
+    changed = {name for name in set(before) | set(after) if before.get(name) != after.get(name)}
+    if (not changed or not changed <= ORCHESTRATION_OVERLAY_FILES
+            or attestation.get("original_snapshot_sha256") != hashlib.sha256(original_bytes).hexdigest()
+            or attestation.get("before_source_sha256") != before
+            or attestation.get("after_source_sha256") != after
+            or attestation.get("study_identity") != snapshot["study_identity"]):
+        raise ValueError("Orchestration overlay differs from its reviewed transition")
+    source = Path(attestation["source_checkout"])
+    revision = attestation["source_commit"]
+    if not isinstance(revision, str) or len(revision) != 40 or any(c not in "0123456789abcdef" for c in revision):
+        raise ValueError("Overlay must name an exact source commit")
+    for name in changed:
+        committed = subprocess.check_output(["git", "show", f"{revision}:{name}"], cwd=source)
+        if hashlib.sha256(committed).hexdigest() != after[name]:
+            raise ValueError(f"Overlay file does not match committed source: {name}")
+    return attestation
+
+
+def _verify_saved_canary(args, agreement: dict) -> None:
+    """Recheck saved evidence and bundles without fitting or resampling again."""
+    from data_preparation.artifact_metadata import file_sha256
+    from model_creation.run_inventory import verify_completed_configuration
+    dataset = args.baseline_root / "data/processed/aki_features_master_wide.csv"
+    identity = json.loads((args.study_root / "control/execution-snapshot.json").read_text())["study_identity"]
+    if any(agreement["bootstrap"].get(k) != v for k, v in {"replicates": 5000, "seed": 0, "stratified": False}.items()):
+        raise ValueError("Saved canary statistical settings changed")
+    for side in ("legacy", "optimized"):
+        directory = Path(agreement[f"{side}_config"]).resolve()
+        expected_root = args.study_root / "validation/legacy-canary" if side == "legacy" else args.study_root
+        expected_directory = expected_root / "results/catch22/experiments" / SCOPES[0] / "nested_cv/models/xgboost/icu_admission/non_windowed/preop_and_all_waveforms"
+        expected_fp = {**identity, "outer_folds": 5, "inner_folds": 3, "calibration_folds": 5,
+                       "repeats": 1, "n_trials": 50, "diagnostic": False,
+                       "threads_per_model": 12 if side == "legacy" else 4}
+        fingerprint = agreement[f"{side}_fingerprint"]
+        if directory != expected_directory.resolve() or any(fingerprint.get(k) != v for k, v in expected_fp.items()):
+            raise ValueError("Saved canary identity or validation settings changed")
+        for relative, digest in agreement["artifact_sha256"][side].items():
+            artifact = (directory / relative).resolve()
+            if not artifact.is_relative_to(directory) or file_sha256(artifact) != digest:
+                raise ValueError(f"Saved canary artifact changed: {artifact}")
+        verify_completed_configuration(directory, dataset_path=dataset,
+                                       expected_fingerprint=fingerprint)
 
 
 def inventory(root: Path) -> dict:
@@ -94,6 +165,9 @@ def commands(args) -> list[dict]:
     if args.cpu_budget is not None:
         common += ["--cpu-budget", str(args.cpu_budget)]
     extensions = [*common, "--cohort-scopes", *SCOPES, "--scheduler", "optimized", "--reuse-from", str(args.baseline_root)]
+    extensions += ["--admission-policy", getattr(args, "admission_policy", "adaptive")]
+    if getattr(args, "max_concurrent_configs", None) is not None:
+        extensions += ["--max-concurrent-configs", str(args.max_concurrent_configs)]
     canary = ["--cohort-scope", SCOPES[0], "--model-types", "xgboost", "--branches", "non_windowed",
               "--feature-sets", "preop_and_all_waveforms", "--n-trials", "50", "--blas-threads", "1", "--skip-report"]
     legacy_root = args.study_root / "validation/legacy-canary"
@@ -101,8 +175,8 @@ def commands(args) -> list[dict]:
         return root / "results/catch22/experiments" / SCOPES[0] / "nested_cv/models/xgboost/icu_admission/non_windowed/preop_and_all_waveforms"
     return [
         {"stage": "preflight", "command": [*extensions, "--dry-run"], "env": _environment(args, args.study_root)},
-        {"stage": "legacy_canary", "command": [*common, *canary, "--scheduler", "legacy", "--threads-per-model", "12"], "env": _environment(args, legacy_root)},
-        {"stage": "optimized_canary", "command": [*common, *canary, "--scheduler", "optimized", "--threads-per-model", "4"], "env": _environment(args, args.study_root)},
+        {"stage": "legacy_canary", "command": [*common, *canary, "--scheduler", "legacy", "--admission-policy", "reserved", "--threads-per-model", "12"], "env": _environment(args, legacy_root)},
+        {"stage": "optimized_canary", "command": [*common, *canary, "--scheduler", "optimized", "--admission-policy", "reserved", "--threads-per-model", "4"], "env": _environment(args, args.study_root)},
         {"stage": "equivalence_gate", "command": [sys.executable, "-m", "model_creation.scheduler_canary",
              "--legacy-config", str(config(legacy_root)), "--optimized-config", str(config(args.study_root)),
              "--output", str(args.study_root / "control/canary-agreement.json"), "--bootstrap", "5000", "--bootstrap-seed", "0"],
@@ -159,6 +233,8 @@ def _run(command, *, env, cwd, capture=False):
     finally:
         if process.stdout:
             process.stdout.close()
+    if code == 75:
+        raise DrainedRun("Configuration queue drained with unfinished work")
     if code:
         raise RuntimeError(f"Stage command exited with status {code}")
     return "".join(output)
@@ -176,6 +252,169 @@ def _lock(path):
             yield
         finally:
             fcntl.flock(handle, fcntl.LOCK_UN)
+
+
+def _executing(process):
+    try:
+        return process.is_running() and process.status() != psutil.STATUS_ZOMBIE
+    except psutil.NoSuchProcess:
+        return False
+
+
+def _resource_tracker(command):
+    return (len(command) == 3 and command[1] == "-c"
+            and command[2].startswith("from multiprocessing.resource_tracker import main;main(")
+            and command[2].endswith(")"))
+
+
+def _wait_terminal(process, *, poll_seconds, timeout=None):
+    deadline = None if timeout is None else time.monotonic() + timeout
+    while _executing(process):
+        if deadline is not None and time.monotonic() >= deadline:
+            raise TimeoutError(f"Process {process.pid} did not finish")
+        time.sleep(poll_seconds)
+
+
+def _drain_legacy_queue(queue, *, capture, verify, progress, poll_seconds=1.0):
+    """Suspend admission only; workers remain in their independent sessions."""
+    suspended = False
+    old_term = signal.getsignal(signal.SIGTERM)
+    def interrupted(signum, frame):
+        raise KeyboardInterrupt("Drain helper interrupted; resuming original queue")
+    signal.signal(signal.SIGTERM, interrupted)
+    try:
+        queue.suspend()
+        suspended = True
+        deadline = time.monotonic() + 10
+        while queue.status() != psutil.STATUS_STOPPED:
+            if time.monotonic() >= deadline:
+                raise TimeoutError("Queue did not suspend")
+            time.sleep(poll_seconds)
+        workers = capture(queue)  # Capture AFTER suspension: Popen cannot race us.
+        progress("draining", workers)
+        while any(_executing(worker) for worker, _ in workers):
+            time.sleep(poll_seconds)
+        verified = verify(workers)
+        progress("workers_verified", workers)
+        # Do not stop the supervisor first: its timeout would kill this queue.
+        queue.send_signal(signal.SIGTERM)
+        queue.resume()
+        suspended = False
+        _wait_terminal(queue, poll_seconds=poll_seconds, timeout=30)
+        return verified
+    finally:
+        try:
+            if suspended and _executing(queue):
+                queue.resume()
+        finally:
+            signal.signal(signal.SIGTERM, old_term)
+
+
+def drain_current(args, *, poll_seconds=1.0):
+    """Finish active configurations, then retire the verified study controller."""
+    control = args.study_root / "control"
+    status_file = control / "supervisor_status.json"
+    record_file = control / "drain-status.json"
+    with _lock(control / ".drain-helper.lock"):
+        status = json.loads(status_file.read_text())
+        if status.get("status") != "running" or status.get("stage") != "extensions":
+            raise ValueError("Drain requires a running extensions stage")
+        code = (args.study_root / "code").resolve()
+        supervisor = psutil.Process(status["pid"])
+        started = datetime.fromisoformat(status["started_at"]).timestamp()
+        if (not _executing(supervisor) or Path(supervisor.cwd()).resolve() != code
+                or not any("run-optimized-core.py" in arg for arg in supervisor.cmdline())
+                or not 0 <= started - supervisor.create_time() < 10):
+            raise ValueError("Supervisor process identity does not match this study")
+        queues = [child for child in supervisor.children()
+                  if "run_catch22" in child.cmdline() and "experiments" in child.cmdline()]
+        if len(queues) != 1 or Path(queues[0].cwd()).resolve() != code:
+            raise ValueError("Expected exactly one study-owned experiment queue")
+        queue = queues[0]
+        record = {"status": "validating", "started_at": _now(), "helper_pid": os.getpid(),
+                  "supervisor_pid": supervisor.pid, "supervisor_created": supervisor.create_time(),
+                  "queue_pid": queue.pid, "queue_created": queue.create_time()}
+        pointer = control / "active_scheduler.json"
+        active = json.loads(pointer.read_text()) if pointer.exists() else {}
+        native = active.get("native_drain") and active.get("pid") == queue.pid
+        if native and active.get("create_time") != queue.create_time():
+            raise ValueError("Native drain queue identity changed")
+        if not native:
+            snapshot = json.loads((control / "execution-snapshot.json").read_text())
+            for name, digest in snapshot["source_sha256"].items():
+                if hashlib.sha256((code / name).read_bytes()).hexdigest() != digest:
+                    raise ValueError(f"Legacy drain source differs from frozen snapshot: {name}")
+        _write(record_file, record)
+
+        def capture(parent):
+            workers = []
+            for child in parent.children():
+                try:
+                    command = child.cmdline()
+                except psutil.ZombieProcess:
+                    saved = json.loads((control / "scheduler/scheduler_summary.json").read_text())
+                    previous = next((j for j in saved["configurations"] if j.get("pid") == child.pid), None)
+                    if previous is None:
+                        raise ValueError(f"Unknown completed queue child {child.pid}")
+                    fields = dict(zip(("cohort-scope", "model_type", "outcome", "branch", "feature_set"), previous["key"].split("/")))
+                    command = ["model_creation.step_07_train_evaluate", *[v for k, value in fields.items() for v in ("--" + k, value)]]
+                if _resource_tracker(command):
+                    continue  # Split-cache multiprocessing helper; not a training job.
+                if "model_creation.step_07_train_evaluate" not in command:
+                    raise ValueError(f"Unexpected queue child {child.pid}; refusing drain")
+                workers.append((child, {"pid": child.pid, "created": child.create_time(), "command": command}))
+            return workers
+
+        def progress(phase, workers):
+            record.update(status=phase, updated_at=_now(), workers=[row for _, row in workers])
+            _write(record_file, record)
+            print(json.dumps({"drain": phase, "workers": [p.pid for p, _ in workers]}), flush=True)
+
+        def verify(workers):
+            from model_creation.run_inventory import verify_completed_configuration
+            snapshot = json.loads((control / "execution-snapshot.json").read_text())
+            verified = []
+            for _, row in workers:
+                command = row["command"]
+                fields = {name: command[command.index("--" + name) + 1]
+                          for name in ("cohort-scope", "model_type", "outcome", "branch", "feature_set")}
+                if fields["cohort-scope"] not in SCOPES:
+                    raise ValueError("Drain worker is outside the approved scopes")
+                directory = (args.study_root / "results/catch22/experiments" / fields["cohort-scope"] / "nested_cv/models"
+                             / fields["model_type"] / fields["outcome"] / fields["branch"] / fields["feature_set"])
+                suffix = "_windowed" if fields["branch"] == "windowed" else ""
+                result = verify_completed_configuration(directory, dataset_path=args.baseline_root / "data/processed" / f"aki_features_master_wide{suffix}.csv")
+                if any(result["validation_fingerprint"].get(k) != v for k, v in snapshot["study_identity"].items()):
+                    raise ValueError("Drained worker scientific identity changed")
+                verified.append({"key": result["key"], "fold_count": result["fold_count"], "configuration_dir": str(directory)})
+            return verified
+
+        try:
+            if native:
+                _write(control / "drain-request.json", {"pid": queue.pid, "create_time": queue.create_time(), "requested_at": _now()})
+                record.update(status="draining", method="native")
+                _write(record_file, record)
+                _wait_terminal(queue, poll_seconds=poll_seconds)
+                record["verified_configurations"] = []  # Native completion callbacks verify each job.
+            else:
+                record.update(method="legacy-suspend", profiling_note="Queue process-tree sampling pauses during drain; exclude this gap from continuous utilization estimates")
+                record["verified_configurations"] = _drain_legacy_queue(queue, capture=capture, verify=verify,
+                                                                        progress=progress, poll_seconds=poll_seconds)
+            _wait_terminal(supervisor, poll_seconds=poll_seconds, timeout=120)
+            for name in (".controller.lock", ".supervisor.lock"):
+                path = control / name
+                if path.exists():
+                    with path.open() as handle:
+                        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        fcntl.flock(handle, fcntl.LOCK_UN)
+            record.update(status="drained", finished_at=_now())
+            _write(record_file, record)
+            print(json.dumps({"drain": "drained", "record": str(record_file)}), flush=True)
+            return 0
+        except BaseException as error:
+            record.update(status="failed", error=str(error), finished_at=_now())
+            _write(record_file, record)
+            raise
 
 
 def run_pipeline(args, *, runner=_run):
@@ -200,15 +439,16 @@ def run_pipeline(args, *, runner=_run):
                     continue
                 old_handlers[signum] = signal.signal(signum, interrupted)
             snapshot = _execution_snapshot()
-            snapshot_file = control / "execution-snapshot.json"
-            if snapshot_file.exists():
-                previous_snapshot = json.loads(snapshot_file.read_text())
-                if any(snapshot[key] != previous_snapshot.get(key) for key in (
-                    "study_identity", "source_sha256", "python", "python_executable", "numerical_runtime_versions"
-                )):
-                    raise ValueError("Supervisor source/environment changed since its frozen execution snapshot")
-            else:
-                _write(snapshot_file, snapshot)
+            overlay = _validate_execution_snapshot(control, snapshot)
+            epoch = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+            epoch_file = control / "execution-epochs" / f"{epoch}.json"
+            _write(epoch_file, {**snapshot, "orchestration_overlay": overlay,
+                                "admission_policy": getattr(args, "admission_policy", "adaptive"),
+                                "max_concurrent_configs": getattr(args, "max_concurrent_configs", None) or 12})
+            _write(control / "active_execution_epoch.json", {"path": str(epoch_file), "epoch": epoch})
+            saved_canary = agreement_file.exists()
+            if saved_canary:
+                _verify_saved_canary(args, json.loads(agreement_file.read_text()))
             status.update(stage="baseline_inventory", updated_at=_now())
             _write(status_file, status)
             observed = inventory(baseline)
@@ -218,6 +458,8 @@ def run_pipeline(args, *, runner=_run):
                 raise ValueError("Protected study differs from the previously sealed inventory")
             _write(inventory_file, before)
             for stage in commands(args):
+                if saved_canary and stage["stage"] in {"legacy_canary", "optimized_canary", "equivalence_gate"}:
+                    continue
                 status.update(stage=stage["stage"], updated_at=_now())
                 _write(status_file, status)
                 output = runner(stage["command"], env=stage["env"], cwd=PROJECT_ROOT, capture=stage["stage"] == "preflight")
@@ -266,6 +508,10 @@ def run_pipeline(args, *, runner=_run):
                 raise ValueError("Protected study changed during execution")
             status.update(status="completed", stage="completed", finished_at=_now(), configurations=36, outer_fold_bundles=180)
             _write(status_file, status)
+        except DrainedRun as error:
+            status.update(status="drained", error=str(error), finished_at=_now())
+            _write(status_file, status)
+            return 75
         except BaseException as error:
             status.update(status="interrupted" if isinstance(error, KeyboardInterrupt) else "failed", error=str(error), finished_at=_now())
             _write(status_file, status)
@@ -286,10 +532,17 @@ def main(argv=None):
     parser.add_argument("--study-root", type=Path, default=STUDIES / "manuscript-optimized-v1")
     parser.add_argument("--raw-dir", type=Path, default=Path("/media/volume/catch22/projects/aki_prediction_project/data/raw"))
     parser.add_argument("--cpu-budget", type=int)
+    parser.add_argument("--admission-policy", choices=("adaptive", "reserved"), default="adaptive")
+    parser.add_argument("--max-concurrent-configs", type=int)
+    parser.add_argument("--drain-current", action="store_true", help="Finish active configurations and stop this study's queue")
     parser.add_argument("--print-commands", action="store_true", help="Read-only command inspection; does not create directories")
     args = parser.parse_args(argv)
     for name in ("baseline_root", "study_root", "raw_dir"):
         setattr(args, name, getattr(args, name).expanduser().resolve())
+    if args.drain_current and args.print_commands:
+        parser.error("--drain-current and --print-commands are mutually exclusive")
+    if args.drain_current:
+        return drain_current(args)
     if args.print_commands:
         print(json.dumps([{key: value for key, value in stage.items() if key != "env"} | {
             "paths": {name: stage["env"][name] for name in ("AKI_ARTIFACT_ROOT", "PROCESSED_DIR", "RAW_DIR")}}

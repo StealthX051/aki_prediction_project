@@ -3,10 +3,13 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import json
+import os
 from pathlib import Path
 import sys
 
-from model_creation.config_scheduler import ConfigJob, default_cpu_budget, run_configurations
+import psutil
+
+from model_creation.config_scheduler import ConfigJob, SchedulerDrained, _drain_requested, default_cpu_budget, run_configurations
 from runtime_resources import available_cpu_count
 
 
@@ -173,6 +176,8 @@ def execute(args) -> int:
             "results_dir": str(layout.results_dir), "paper_dir": str(layout.paper_dir),
             "processed_dir": str(layout.processed_dir), "raw_dir": str(layout.raw_dir),
             "scheduler": args.scheduler, "cpu_budget": args.cpu_budget or default_cpu_budget(),
+            "admission_policy": getattr(args, "admission_policy", "adaptive"),
+            "max_concurrent_configs": args.max_concurrent_configs or (12 if args.scheduler == "optimized" and getattr(args, "admission_policy", "adaptive") == "adaptive" else None),
             "max_workers": args.max_workers, "threads_per_model": args.threads_per_model,
             "lr_blas_threads": args.blas_threads or (1 if args.scheduler == "legacy" else 4),
             "reporting": {"bootstrap_replicates": min(args.bootstrap, 100) if args.smoke else args.bootstrap,
@@ -236,6 +241,17 @@ def execute(args) -> int:
         raise ValueError("Reuse source must be a different read-only study")
     with launcher._exclusive_run(control / ".controller.lock"):
         control.mkdir(parents=True, exist_ok=True)
+        epoch = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+        scheduler_dir = control / "scheduler" / epoch
+        scheduler_dir.mkdir(parents=True)
+        drain_file = control / "drain-request.json"
+        if drain_file.exists():
+            drain_file.replace(scheduler_dir / "previous-drain-request.json")
+        launcher._write_manifest(control / "active_scheduler.json", {
+            "epoch": epoch, "summary_path": str(scheduler_dir / "scheduler_summary.json"),
+            "admission_policy": summary["admission_policy"], "native_drain": True,
+            "pid": os.getpid(), "create_time": psutil.Process().create_time(),
+        })
         if args.rerun_completed and any(c["path"].exists() for c in contexts.values()):
             raise ValueError("Explicit reruns require a fresh output root")
         if catalogs:
@@ -344,7 +360,7 @@ def execute(args) -> int:
                                 cli.append(flag)
                         key = configuration_key(config)
                         jobs.append(ConfigJob(key, config["model_type"], [sys.executable, "-m", "model_creation.step_07_train_evaluate", *cli],
-                                              fit_env, launcher.PROJECT_ROOT, control / "logs" / (key.replace("/", "__") + ".log"),
+                                              fit_env, launcher.PROJECT_ROOT, control / "logs" / epoch / (key.replace("/", "__") + ".log"),
                                               resources["cpu_reservation"], priority=(config["branch"] != "windowed", -len(config["feature_set"]))))
                         lookup[key] = (context, config)
                 manifest.setdefault("status", "running")
@@ -372,11 +388,22 @@ def execute(args) -> int:
         def started(record):
             if launcher._study_identity() != identity:
                 raise ValueError("Frozen source/environment changed while scheduling configurations")
+        def drained():
+            for context in contexts.values():
+                context["manifest"]["status"] = "failed" if context["manifest"]["cohort_scope"] in failed_scopes else "drained"
+                launcher._write_manifest(context["path"], context["manifest"])
+            return 1 if failed_scopes else 75
         if jobs:
-            run_configurations(jobs, cpu_budget=summary["cpu_budget"], max_concurrent_configs=args.max_concurrent_configs,
-                               profile=args.profile_resources, output_dir=control / "scheduler", legacy=args.scheduler == "legacy",
-                               on_started=started, on_finished=finished)
+            try:
+                run_configurations(jobs, cpu_budget=summary["cpu_budget"], max_concurrent_configs=args.max_concurrent_configs,
+                                   profile=args.profile_resources, output_dir=scheduler_dir, legacy=args.scheduler == "legacy",
+                                   admission_policy=summary["admission_policy"], drain_file=drain_file,
+                                   on_started=started, on_finished=finished)
+            except SchedulerDrained:
+                return drained()
         for scope, context in contexts.items():
+            if _drain_requested(drain_file):
+                return drained()
             manifest = context["manifest"]
             if scope in failed_scopes:
                 if manifest["status"] != "infeasible":

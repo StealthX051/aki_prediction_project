@@ -154,8 +154,12 @@ External baseline references are validated against their own frozen provenance;
 new checkpoints retain strict current-source matching. Missing or corrupt
 required references fail rather than trigger refitting.
 
-`control/execution_plan.json`, `control/scheduler/scheduler_summary.json`, per-job
+`control/execution_plan.json`, `control/active_scheduler.json`, per-job
 logs/resource samples, and `control/supervisor_status.json` describe execution.
+The active-scheduler file points to the current execution epoch's summary;
+earlier resource logs and the original execution snapshot are preserved.
+Reviewed orchestration overlays record their source commit and exact source
+hashes separately, without changing scientific fingerprints.
 Full per-fold HPO histories are saved under each configuration's
 `artifacts/trials/`. The equivalence gate exports a saved-artifact agreement
 report before the remaining extension jobs are admitted. Mortality DCA records

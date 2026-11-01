@@ -1,9 +1,11 @@
 """Bounded configuration subprocess queue; numerical work stays in the training CLI."""
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass, field
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import signal
@@ -16,6 +18,65 @@ import psutil
 from runtime_resources import available_cpu_count, resource_snapshot
 
 GIB = 1024 ** 3
+
+
+class SchedulerDrained(Exception):
+    """A drain request finished active jobs; reporting must wait for a relaunch."""
+
+    def __init__(self, records: list[dict], pending_keys: list[str]):
+        super().__init__(f"Scheduler drained with {len(pending_keys)} configurations pending")
+        self.records = records
+        self.pending_keys = pending_keys
+
+
+def _drain_requested(path: Path | None) -> bool:
+    """A request targets one controller lifetime, never a later PID reuse."""
+    if path is None:
+        return False
+    try:
+        request = json.loads(Path(path).read_text())
+        return (isinstance(request, dict) and request.get("pid") == os.getpid()
+                and request.get("create_time") == psutil.Process().create_time())
+    except (OSError, ValueError, psutil.Error):
+        return False
+
+
+def _machine_busy_cores() -> float | None:
+    """Include other workloads on allowed CPUs; quotas bound admission, not this signal."""
+    try:
+        percentages = psutil.cpu_percent(interval=None, percpu=True)
+        affinity = os.sched_getaffinity(0) if hasattr(os, "sched_getaffinity") else range(len(percentages))
+        return sum(percentages[index] / 100 for index in affinity)
+    except (OSError, IndexError, psutil.Error):
+        return None
+
+
+class _PressureWindow:
+    """Time-weighted valid intervals; missing samples invalidate the full window."""
+
+    def __init__(self, seconds: float, sample_seconds: float, started: float):
+        self.seconds, self.sample_seconds = seconds, sample_seconds
+        self.previous = started
+        self.intervals = deque()
+
+    def add(self, now: float, busy_cores: float | None) -> None:
+        begin, self.previous = self.previous, now
+        if (busy_cores is None or not math.isfinite(busy_cores) or busy_cores < 0
+                or not 0 < now - begin <= 2.5 * self.sample_seconds):
+            self.intervals.clear()
+            return
+        self.intervals.append((begin, now, busy_cores))
+        while self.intervals and self.intervals[0][1] <= now - self.seconds:
+            self.intervals.popleft()
+
+    def mean(self, now: float) -> float | None:
+        if not self.intervals or now - self.previous > 2.5 * self.sample_seconds:
+            return None
+        cutoff = self.previous - self.seconds
+        if self.intervals[0][0] > cutoff + 1e-9:
+            return None
+        return sum((end - max(begin, cutoff)) * value
+                   for begin, end, value in self.intervals) / self.seconds
 
 
 def default_cpu_budget() -> int:
@@ -106,10 +167,15 @@ def _stop_group(process: subprocess.Popen, *, wait: bool = True) -> None:
         process.wait()
 
 
-def _write_summary(output_dir: Path, records: list[dict], cpu_budget: int, memory_budget: int) -> None:
+def _write_summary(output_dir: Path, records: list[dict], cpu_budget: int, memory_budget: int,
+                   *, admission_policy: str = "reserved", status: str = "running",
+                   admission_settings: dict | None = None) -> None:
     payload = {
         "cpu_budget": cpu_budget,
         "memory_budget_bytes": memory_budget,
+        "admission_policy": admission_policy,
+        "status": status,
+        "admission_settings": admission_settings,
         "profiling_note": "Sampled process-tree CPU/I/O may miss short-lived processes; summed RSS can double-count shared pages.",
         "configurations": records,
     }
@@ -124,6 +190,9 @@ def run_configurations(
     legacy: bool = False, on_started: Callable[[dict], None] | None = None,
     on_finished: Callable[[dict], None] | None = None,
     poll_seconds: float = 0.2, sample_seconds: float = 1.0,
+    admission_policy: str = "adaptive", drain_file: Path | None = None,
+    adaptive_window_seconds: float = 60.0, admission_cooldown_seconds: float = 60.0,
+    pressure_sample_seconds: float = 1.0, pressure_provider: Callable[[], float | None] | None = None,
 ) -> list[dict]:
     """Run independent jobs with backfilling; caller owns study lock and manifests.
 
@@ -131,13 +200,20 @@ def run_configurations(
     continue. Exceptions/signals stop all owned process groups and are re-raised.
     Admission never changes model settings or training seeds. ``priority`` sorts
     within each family; families alternate when more than one can fit.
+    Adaptive mode treats CPU reservations as an initial packing rule, then uses
+    sustained machine headroom for gradual oversubscription. Memory stays bounded.
     """
+    if admission_policy not in {"adaptive", "reserved"}:
+        raise ValueError("Admission policy must be adaptive or reserved")
+    if legacy:
+        admission_policy = "reserved"
     cpu_budget = default_cpu_budget() if cpu_budget is None else cpu_budget
     if not 1 <= cpu_budget <= available_cpu_count():
         raise ValueError("CPU budget must be positive and fit affinity/quota")
     if max_concurrent_configs is not None and max_concurrent_configs < 1:
         raise ValueError("max_concurrent_configs must be positive")
-    if poll_seconds <= 0 or sample_seconds <= 0:
+    if min(poll_seconds, sample_seconds, adaptive_window_seconds,
+           admission_cooldown_seconds, pressure_sample_seconds) <= 0:
         raise ValueError("Polling/sample intervals must be positive")
     if len({job.key for job in jobs}) != len(jobs):
         raise ValueError("Duplicate configuration keys")
@@ -160,10 +236,26 @@ def run_configurations(
     output_dir.mkdir(parents=True, exist_ok=True)
     pending = list(jobs) if legacy else sorted(jobs, key=lambda job: (job.priority, job.key))
     queued = time.monotonic()
+    last_start = last_pressure = queued
+    pressure = _PressureWindow(adaptive_window_seconds, pressure_sample_seconds, queued)
+    if pressure_provider is None:
+        pressure_provider = _machine_busy_cores
+        pressure_provider()  # Prime psutil's nonblocking interval; discard its first reading.
+    pressure_log = (output_dir / "scheduler_pressure.jsonl").open("a")
     records = []
     running: list[_Running] = []
     family_dispatches = {job.family: 0 for job in jobs}
     old_handlers = {}
+    draining = False
+
+    def write_summary(status="running"):
+        _write_summary(output_dir, records, cpu_budget, memory_budget,
+                       admission_policy=admission_policy, status=status,
+                       admission_settings={"window_seconds": adaptive_window_seconds,
+                                           "cooldown_seconds": admission_cooldown_seconds,
+                                           "extra_admission_below_busy_cores": 0.93 * cpu_budget,
+                                           "max_concurrent_configs": 1 if legacy else (
+                                               max_concurrent_configs or (12 if admission_policy == "adaptive" else len(jobs)))})
 
     def interrupted(signum, frame):
         raise KeyboardInterrupt(f"Scheduler received signal {signum}")
@@ -175,6 +267,24 @@ def run_configurations(
             now = time.monotonic()
             snapshot = resource_snapshot(output_dir)
             free_memory = snapshot["memory_available_bytes"]
+            if now - last_pressure >= pressure_sample_seconds:
+                try:
+                    busy_cores = pressure_provider()
+                except (OSError, ValueError, psutil.Error):
+                    busy_cores = None
+                pressure.add(now, busy_cores)
+                last_pressure = now
+                pressure_log.write(json.dumps({
+                    "elapsed_seconds": now - queued, "busy_cores": busy_cores,
+                    "rolling_busy_cores": pressure.mean(now), "cpu_budget": cpu_budget,
+                    "active_configurations": len(running),
+                    "nominal_cpu_reservations": sum(active.job.cpu_reservation for active in running),
+                    "memory_available_bytes": free_memory,
+                }) + "\n")
+                pressure_log.flush()
+            if not draining and _drain_requested(drain_file):
+                draining = True
+                write_summary("draining")
             for active in list(running):
                 if profile and now - active.last_sample >= sample_seconds:
                     active.sample(now, free_memory)
@@ -191,15 +301,28 @@ def run_configurations(
                 running.remove(active)
                 if on_finished:
                     on_finished(active.record)
-                _write_summary(output_dir, records, cpu_budget, memory_budget)
-            limit = 1 if legacy else (max_concurrent_configs or len(jobs))
-            while pending and len(running) < limit and free_memory is not None and free_memory >= memory_floor:
+                write_summary("draining" if draining else "running")
+            if draining and not running:
+                break
+            limit = 1 if legacy else (max_concurrent_configs or (12 if admission_policy == "adaptive" else len(jobs)))
+            while (pending and not draining and len(running) < limit
+                   and free_memory is not None and free_memory >= memory_floor):
+                if _drain_requested(drain_file):
+                    draining = True
+                    write_summary("draining")
+                    break
                 used_cpu = sum(active.job.cpu_reservation for active in running)
                 used_memory = sum(active.job.memory_reservation_bytes for active in running)
+                admission_now = time.monotonic()
+                rolling_busy = pressure.mean(admission_now)
+                adaptive_ready = (admission_policy == "adaptive" and rolling_busy is not None
+                                  and rolling_busy < 0.93 * cpu_budget
+                                  and admission_now - last_start >= admission_cooldown_seconds)
                 candidates = [job for job in pending if (
-                    job.cpu_reservation + used_cpu <= cpu_budget
+                    (job.cpu_reservation + used_cpu <= cpu_budget or adaptive_ready)
                     and job.memory_reservation_bytes + used_memory <= memory_budget
-                    and not (job.family == "ebm" and any(active.job.family == "ebm" for active in running))
+                    and not (admission_policy == "reserved" and job.family == "ebm"
+                             and any(active.job.family == "ebm" for active in running))
                 )]
                 if not candidates:
                     break
@@ -211,6 +334,8 @@ def run_configurations(
                 job.log_path.parent.mkdir(parents=True, exist_ok=True)
                 record = {"key": job.key, "family": job.family, "status": "starting", "queue_wait_seconds": time.monotonic() - queued,
                           "cpu_reservation": job.cpu_reservation, "memory_reservation_bytes": job.memory_reservation_bytes,
+                          "admission_reason": "reserved_capacity" if job.cpu_reservation + used_cpu <= cpu_budget else "sustained_spare_cpu",
+                          "rolling_busy_cores_at_admission": rolling_busy,
                           "log_path": str(job.log_path.resolve())}
                 records.append(record)
                 log = job.log_path.open("a")
@@ -221,9 +346,10 @@ def run_configurations(
                     record.update(status="failed", exit_code=None, error=str(error), elapsed_seconds=0.0)
                     if on_finished:
                         on_finished(record)
-                    _write_summary(output_dir, records, cpu_budget, memory_budget)
+                    write_summary()
                     continue
                 started = time.monotonic()
+                last_start = started
                 active = _Running(job, process, log, started, record, last_sample=started)
                 running.append(active)
                 record.update(status="running", pid=process.pid)
@@ -234,7 +360,7 @@ def run_configurations(
                     active.sample(started, free_memory)
                 if on_started:
                     on_started(record.copy())
-                _write_summary(output_dir, records, cpu_budget, memory_budget)
+                write_summary()
             if pending or running:
                 time.sleep(poll_seconds)
     except BaseException:
@@ -248,10 +374,15 @@ def run_configurations(
             active.record.update(status="interrupted", exit_code=active.process.returncode, elapsed_seconds=time.monotonic() - active.started)
         for job in pending:
             records.append({"key": job.key, "family": job.family, "status": "pending"})
-        _write_summary(output_dir, records, cpu_budget, memory_budget)
+        write_summary("interrupted")
         raise
     finally:
         for signum, handler in old_handlers.items():
             signal.signal(signum, handler)
-    _write_summary(output_dir, records, cpu_budget, memory_budget)
+        pressure_log.close()
+    if draining:
+        records.extend({"key": job.key, "family": job.family, "status": "pending"} for job in pending)
+        write_summary("drained")
+        raise SchedulerDrained(records, [job.key for job in pending])
+    write_summary("complete" if all(record["status"] == "complete" for record in records) else "failed")
     return records
