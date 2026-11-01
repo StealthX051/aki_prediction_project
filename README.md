@@ -147,6 +147,27 @@ reuse main core references. Deliberate repeats require a fresh output root,
 `--rerun-completed --no-resume`, and no imported inventory. Extraction retains
 its independent `AKI_EXTRACTION_WORKERS` budget; this extension reuses features.
 
+## Active main supplementary run
+
+The 144 remaining main configurations were authorized and started in tmux
+session `vitaldb-supplementary`. They reuse the verified 36 main core
+configurations, sealed processed features and the validated adaptive scheduler.
+The completed ICU/mortality study remains separate. Outputs are under
+`/media/volume/catch22/data/aki_prediction_project/studies/manuscript-supplementary-v1`.
+
+```bash
+tmux attach -t vitaldb-supplementary
+# Run status and full log:
+cat /media/volume/catch22/data/aki_prediction_project/studies/manuscript-supplementary-v1/control/launch-status.json
+tail -F /media/volume/catch22/data/aki_prediction_project/studies/manuscript-supplementary-v1/control/launch.log
+```
+
+After an interruption, resume with the same Conda interpreter and
+`<supplementary-study>/control/run.py`; avoid a second controller while active.
+The script pins the full main grid, reuse source, 5/3/5 validation and 5,000
+bootstrap draws. Training, metrics and report generation run without routine
+intervention; failures remain visible in the status and log.
+
 ## Diagnostics and saved-result reporting
 
 Real-data smoke needs a fresh/empty disposable `SMOKE_ROOT`, local source CSVs,

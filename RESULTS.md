@@ -166,6 +166,22 @@ report before the remaining extension jobs are admitted. Mortality DCA records
 its exact 0.1–5% grid and exploratory interpretation. Reports and explanations
 consume saved predictions/bundles only.
 
+Both extension batches completed: 18 ICU and 18 exploratory mortality
+configurations, with 180 verified fold bundles and saved-result reports. The
+protected main study remained unchanged, and the relaunch check selected zero
+fits. Computational validation completeness does not establish admission-level
+outcome adjudication or clinical validation.
+
+The mortality source-label audit confirmed 52 positive operation records in 47
+patients among 5,765 operations/5,543 patients in each branch (42 patients with
+one positive operation and five with two). Six patients have mixed source
+mortality flags; three also have matching reported stay lengths. These are
+unresolved linkage questions, not confirmed same-admission label errors.
+The source flags match the official API and all 18 saved OOF configurations.
+Operation-level results and labels are retained; no first/last-operation
+deduplication or model rerun was performed. See the mortality/admission section
+of `METHODS.md` for interpretation and the evidence register for audit artifacts.
+
 Fold metadata records floating prediction dtypes. Checkpoint reload uses those
 dtypes and round-trip CSV parsing so partial resume preserves native XGBoost
 float32 test predictions and float64 training predictions exactly. Legacy

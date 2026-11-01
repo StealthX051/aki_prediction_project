@@ -7,11 +7,12 @@ their bootstrap/report stages completed successfully on October 31, 2026 at
 frozen modeling revision `fcff7c7c9794e0ea8405814c68176760a2eb9afc`. The pre-run
 code was committed and pushed; local, remote, and frozen revisions were verified
 identical before optimization benchmarking. The optimized scheduler and broader
-ICU/mortality support are implemented and checked. The broader ICU/mortality batch is now authorized and its full-budget
-equivalence canary is running; the new core grid remains gated and supplements
-remain unstarted. The user has now explicitly authorized the gated ICU/mortality core run in
-tmux. The full-budget equivalence canary must pass before the remaining new
-configurations are admitted; main-core refits and supplements remain excluded.
+ICU/mortality extension completed, including the full-budget equivalence gate,
+36 new configurations and 180 verified outer-fold bundles. The user authorized
+the 144 remaining main supplementary configurations on October 31, 2026; the
+batch is running in tmux with the completed 36 main configurations reused.
+Main-core refits remain excluded. Mortality linkage verification continues
+separately without changing labels or running additional mortality models.
 Drive/email/manuscript external writes remain separate. This is the single
 decision/evidence register; definitions belong in METHODS, commands in README,
 and outputs in RESULTS. Earlier diagnostics below retain their stated limits.
@@ -242,12 +243,12 @@ replaces that admission limit; numerical fitting policies remain fixed.
   actual interruption/resume, unchanged saved checkpoint, no live stopped workers,
   and zero fits pending on relaunch. Full suite: 539 passed; subsequent narrow
   compatibility-guard tests: 49 passed.
-- [ ] Validate one new broader ICU XGBoost combined/non-windowed configuration
+- [x] Validate one new broader ICU XGBoost combined/non-windowed configuration
   at full 5/3/5 and 50 trials: legacy 12 threads versus optimized four threads.
   This replaces the earlier per-family replay proposal; no old main fits repeat.
-- [ ] Only after the gate passes, finish 18 broader ICU and 18 broader mortality
+- [x] Only after the gate passes, finish 18 broader ICU and 18 broader mortality
   core configurations (the optimized canary counts toward ICU's 18).
-- [ ] Verify 180 new fold bundles, complete OOF coverage, reports, zero-fit
+- [x] Verify 180 new fold bundles, complete OOF coverage, reports, zero-fit
   repeat planning, and unchanged protected-study integrity inventory.
 
 Protected root: `/media/volume/catch22/data/aki_prediction_project/studies/manuscript-core-v1`.
@@ -377,3 +378,213 @@ admission windows and concurrent production activity; they do not forecast
 production runtime. The diagnostic manifest distinguishes subsequent summary-
 telemetry edits from the executed controller source. Durable evidence is
 `diagnostics/adaptive-admission-20261101-v1/acceptance.json` on the study volume.
+
+## Mortality counting and admission-linkage audit (October 31, 2026 PDT)
+
+Decision: retain operation-level prediction at operation end and the source
+`death_inhosp` flag for each eligible case. Report positive operations and unique
+positive patients separately. Do not select the last operation only for patients
+who died, change earlier positives to negatives, or propagate one patient's
+positive flag across admissions. Operation-weighted metrics and patient-cluster
+uncertainty remain the current analysis. First-eligible-operation-per-admission
+would be a separate, outcome-independent sensitivity design after valid linkage.
+
+The completed extension contains 18 ICU plus 18 exploratory mortality
+configurations/180 fold bundles. Original main artifacts were unchanged and
+zero-fit relaunch passed. This updates computational status; mortality admission
+membership and death timing remain unadjudicated.
+
+Read-only checks used the frozen clinical CSV, both processed branches and all
+18 mortality pooled OOF prediction sets. `caseid` is unique, patient IDs and
+labels match the source, and patients are separated in all 90 outer splits.
+The current official API agrees with the frozen source in `caseid`, `subjectid`,
+`casestart`, `adm`, `dis`, and `death_inhosp`. Source file SHA-256:
+`7d6edb471e5eee3fde75e417084240c97bdbf6eff41cbd61e5dace44f1585ecf`.
+
+| Population | Operations | Patients | Positive operations | Positive patients |
+| --- | ---: | ---: | ---: | ---: |
+| Raw VitalDB snapshot | 6,388 | 6,090 | 57 | 48 |
+| Main shared cohort | 3,571 | 3,432 | 31 | 29 |
+| Broader mortality, either branch | 5,765 | 5,543 | 52 | 47 |
+
+In the broader cohort, 42 patients have one positive operation and five have two.
+Six patients have mixed positive/negative source flags. Three have mixed flags
+within a matching reported stay length: subjects 10 (54 days), 563 (16 days), and
+4561 (3 days). This does not prove a common admission or an erroneous label.
+All 6,388 source `casestart` values are zero and every `dis-adm` is a whole number
+of days. Neither random case IDs nor equal stay lengths provide a validated
+admission key or cross-admission operation order.
+
+Admission-linkage route: provider slides identify `operations.case_id` as the
+VitalDB link; INSPIRE provides `subject_id`, `hadm_id`, and `op_id`. No approved
+operations/schema table was found in the known local project/research roots.
+Its files are credentialed/DUA-controlled. A small authorized mapping/operations
+extract or provider clarification of the flagged records is sufficient as the
+next source check; downloading the full INSPIRE database is not required.
+Validate mapping cardinality/coverage, patient consistency, relative-time units,
+admission chronology and death endpoint before adjudicating any labels. The
+separate dataset's numeric patient IDs or 30-day mortality example are not
+substitutes for those checks.
+
+Evidence is under
+`/media/volume/catch22/data/aki_prediction_project/studies/manuscript-optimized-v1/control/audits/mortality-linkage-20261101/`:
+`audit.py`, `audit.json`, and `mixed-label-records.csv`. These are audit artifacts,
+not new predictors or rewritten study results. No labels, cohorts or completed
+models were changed, and no experiments were launched.
+
+Sources: [VitalDB codebook](https://vitaldb.net/dataset/),
+[official clinical API](https://api.vitaldb.net/cases),
+[SNUH linkage presentation, pp. 33 and 46–47](https://www.ohdsi.org/wp-content/uploads/2025/06/OHDSI-APAC-Scientific-Forum-20250605.pdf),
+[INSPIRE 1.4.2 identifiers and access rules](https://physionet.org/content/inspire/1.4.2/).
+
+## Main supplementary launch (October 31, 2026, 8:37 PM PDT)
+
+The user explicitly authorized starting the 144 supplementary configurations
+while INSPIRE downloads. A fresh study at
+`/media/volume/catch22/data/aki_prediction_project/studies/manuscript-supplementary-v1`
+is isolated from both completed studies. Its independent code copy matches the
+validated extension snapshot plus recorded adaptive scheduler overlay; 155 source
+files were hash-checked. The scientific protocol and environment remain unchanged.
+
+The read-only preview verified 36 protected main configurations/180 bundles for
+reuse and exactly 144 pending main configurations across AKI/ICU, both branches,
+and LR/XGBoost/EBM. No mortality or broader ICU configurations were selected.
+The controller uses adaptive admission, a 60-CPU target, up to 12 concurrent
+configurations, five outer workers, serial HPO and fixed numerical thread
+settings. Validation remains 5/3/5, one repeat, 20 LR or 50 tree-model trials,
+and 5,000 patient-cluster bootstrap draws. No preparation/extraction is requested.
+
+Session: `vitaldb-supplementary` (run and monitor windows). Run-specific
+`control/run.py`, `launch-authorization.json`, `preflight.json`,
+`launch-status.json` and `launch.log` record the exact request, copied source
+hashes, commands and execution status. The controller supplies split-plan
+validation, checkpoint recovery, per-configuration resource logs and saved-
+artifact reporting. Launching does not establish completion; inspect the status
+and run manifest before interpreting results. INSPIRE remains separate raw data
+and is not an input to this supplementary analysis.
+
+## Conversation handoff: supplementary monitoring and INSPIRE admission audit
+
+Current request: continue useful coding and scientific review while the 144 main
+supplementary configurations run. Watch the existing batch and INSPIRE download;
+verify hospital admission/outcome linkage; discuss what INSPIRE could improve in
+outcome derivation; assess whether supplementary feature comparisons are worth
+adding to the broader ICU and mortality populations. Do not start further grids
+or change current labels/cohorts without discussing the scientific change first.
+The user wants short, plain explanations and minimal code/docs/tests.
+
+### First checks in the new conversation
+
+- Work in `/home/exouser/projects/aki_prediction_project`. Read `AGENTS.md`,
+  `README.md`, `METHODS.md` and this handoff section. Conda Python:
+  `/home/exouser/miniforge3/envs/aki_prediction_project/bin/python`.
+- Supplementary root:
+  `/media/volume/catch22/data/aki_prediction_project/studies/manuscript-supplementary-v1`.
+  Tmux session: `vitaldb-supplementary`, with run and monitor windows.
+  `control/launch-status.json` records batch exit; `control/active_scheduler.json`
+  points to the live `scheduler_summary.json`. Inspect configuration states,
+  failures, CPU/memory logs and `control/launch.log`. The last check found nine
+  running configurations and no recorded failures; this is a snapshot, not a
+  completion claim. Recheck current files when resuming. Give meaningful updates
+  while working; do not promise monitoring after a turn ends.
+- The study run manifest is
+  `results/catch22/experiments/main_shared/nested_cv/run_manifest.json`.
+  It must ultimately cover 180 logical main configurations: 36 read-only core
+  references plus 144 newly fitted supplementary configurations (720 new outer
+  bundles), complete OOF predictions and saved-artifact reports.
+- Resume only when the existing controller is no longer active, using the same
+  interpreter with `<supplementary-root>/control/run.py`. The controller locks,
+  validates checkpoints, prepares exact folds, profiles resources and reports
+  failures. Avoid launching duplicate controllers or editing frozen run code.
+- INSPIRE 1.4.2 downloads in tmux session `inspire-download` to
+  `/media/volume/catch22/data/inspire/1.4.2`. The user entered their password
+  directly; do not request, read or store it. The last check found a running
+  wget process and `operations.csv.gz`, `schema.csv`, `SHA256SUMS.txt`, compressed
+  labs/vitals/medications/diagnoses and other files. Their presence does not prove
+  the whole download is complete: check gzip integrity and SHA256SUMS, then
+  verify download exit/completeness. Do not read download terminal scrollback
+  unnecessarily. No INSPIRE data have been joined or fed into models.
+
+### Scientific and execution boundaries
+
+The supplementary launch started October 31, 2026 at 8:37 PM PDT. It reuses the
+sealed processed CSVs in `manuscript-core-v1/data/processed`; no reconstruction
+or extraction is planned. The dry run verified all 36 protected configurations
+and exactly 144 pending. The split-plan barrier passed before training began.
+Its independent frozen code copy matches the completed extension's validated
+source plus adaptive scheduling overlay; source file hashes and the exact
+command are in `control/launch-authorization.json` and `control/preflight.json`.
+The old code revision is `94c087f`; orchestration overlay was reviewed/committed
+at `4be027f`. The modeling digest is
+`926b0f7a5eb8710b3d4de7a88ecab8ddad3a43de52e18a3c574e599ec3d30ce0`.
+
+Settings remain 5 outer / 3 HPO / 5 calibration grouped folds, one repeat,
+20 LR trials and 50 XGBoost/EBM trials, 5,000 unstratified patient-cluster
+bootstrap draws, seed 0. HPO is serial within each fold; training-only
+preprocessing/calibration/threshold selection and grouped EBM bags remain fixed.
+Adaptive scheduling targets 60 CPUs on this 64-CPU/246-GiB VM, up to 12 concurrent
+configurations, five outer workers, LR BLAS 4, XGBoost 4 native threads and EBM
+12 jobs. Keep numerical settings fixed during the run. All outputs remain on
+the mounted volume. Workspace edits do not affect the isolated live code copy.
+
+Completed studies under the same `studies` parent:
+`manuscript-core-v1` contains 36 main AKI/ICU configurations at `fcff7c7`;
+`manuscript-optimized-v1` contains 18 broader ICU plus 18 exploratory mortality
+configurations and 180 verified bundles. The full-budget XGBoost 12-versus-four
+thread equivalence gate passed. Original main integrity and zero-fit relaunch
+checks passed. Do not overwrite results or rerun any completed grids.
+
+### Admission and outcome work
+
+Retain operation-level prediction at operation end, repeat operations, patient-
+grouped validation and patient-cluster uncertainty. Multiple positive operations
+can correspond to a single death. Do not keep only decedents' last operations,
+turn earlier positive operations negative, or propagate patient mortality flags
+across admissions. Report positive operations and positive patients separately.
+
+The broader mortality population has 5,765 operations/5,543 patients, including
+52 positive operations in 47 patients (42 with one positive operation, five with
+two), identical across branches. Main shared mortality has 31 positive operations
+in 29 patients among 3,571 operations/3,432 patients. Fifty-two positive operation
+rows are not 52 independent deaths, and the exploratory models still have few
+positive patients. Assess stability and uncertainty before proposing more fits.
+
+VitalDB's current CSV has random case IDs, patient IDs, case-relative timestamps
+and no admission ID or shared chronological origin. Reported stay lengths are
+integer days in all 6,388 source cases. Matching patient/stay length is not proof
+of a shared admission; case ID order is not chronology. Six selected patients
+have mixed mortality flags, three within matching reported stay lengths; these
+are unresolved, not established source errors. Labels match the official API,
+preprocessed rows and all 18 mortality OOF outputs. All 90 outer train/test
+patient separations were checked. Durable audit code/results:
+`manuscript-optimized-v1/control/audits/mortality-linkage-20261101/`.
+
+INSPIRE creators explicitly describe linkage through the operations table's
+`case_id` to VitalDB cases, with hospital admission identifiers. Start from the
+actual downloaded schema and operations table, checking case mapping coverage,
+cardinality, patient identity and timestamp units. Do not join separate datasets
+on coincident numeric patient IDs. Use admission and death timing to investigate
+repeated-positive/mixed-label cases and verify whether the same admission is
+involved. Public INSPIRE coverage is a subset; quantify unmatched cases and any
+selection differences before using linked outcomes. Its public mortality example
+uses 30-day mortality; our endpoint remains in-hospital mortality. Any proposed
+change needs an explicit definition, ascertainment/coverage audit and impact
+counts before new models. Keep admission/death/postoperative audit fields out
+of predictors. Do not silently change active study data or fingerprints.
+
+Consider and verify whether the actual tables support better admission-specific
+in-hospital mortality, timing-based mortality horizons, ICU transfer timing or
+creatinine surveillance. These are questions, not established benefits. Compare
+source definitions, observation windows, missingness and linkage coverage first.
+Discuss whether additional broader ICU/mortality waveform ablations/windowed
+comparisons answer a worthwhile question given existing core results, rare death
+counts and compute cost. No additional extension supplementary grid is currently
+selected or authorized. Coding/audits and planning can proceed while the main
+supplements run; preserve completed results and label any revised-outcome study
+as a separate analysis.
+
+Primary sources for verification:
+[VitalDB codebook](https://vitaldb.net/dataset/),
+[INSPIRE 1.4.2](https://physionet.org/content/inspire/1.4.2/),
+[creator presentation, pp. 33 and 46–47](https://www.ohdsi.org/wp-content/uploads/2025/06/OHDSI-APAC-Scientific-Forum-20250605.pdf).
+Keep credentialed INSPIRE data and generated model artifacts out of Git.

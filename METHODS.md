@@ -7,10 +7,11 @@ definitions, preprocessing contract, modeling design, and evaluation rules for
 the Catch22 manuscript pipeline.
 
 The manuscript implementation uses Catch24/Catch22 with logistic regression,
-XGBoost, and EBM. The main AKI/ICU core analysis has completed; broader ICU and
-exploratory mortality analyses are specified below but have not been run at
-full budget. Diagnostic outputs verify implementation and are not manuscript
-performance estimates. All full analyses use five patient-grouped outer folds,
+XGBoost, and EBM. The main AKI/ICU core analysis and the broader ICU and exploratory
+mortality core analyses have completed at full budget. Mortality retains the
+source-label limitations described below. Diagnostic outputs verify implementation
+and are not manuscript performance estimates. All full analyses use five
+patient-grouped outer folds,
 three HPO folds, and five training-only calibration folds. Run inventories and
 execution status live in `RESULTS.md` and the evidence register; Aeon remains
 separate and experimental.
@@ -137,6 +138,42 @@ The broader sensitivity analyses evaluate ICU admission in
 `mortality_waveform_sensitivity`. Mortality is not added to the main shared
 cohort's default outcome grid. Severe AKI is implemented but is outside these
 core manuscript comparisons.
+
+### Operation-level mortality and admission linkage
+
+The mortality prediction point is operation end, using preoperative information
+and waveforms restricted to that operation. The intended clinical question is
+remaining in-hospital mortality; the operational label is the source
+`death_inhosp` flag linked to each `caseid`. This is prognosis at each eligible
+operation, not attribution of a death to a particular operation. If several
+operations precede one death, more than one positive operation record can be
+appropriate. Report mortality-positive operations and distinct mortality-positive
+patients separately, without describing operation counts as independent deaths.
+
+All eligible operation rows are retained, including repeat operations. No
+last-operation selection, outcome-dependent deduplication, propagation of a
+patient's positive flag to other operations, or relabeling of earlier operations
+as negative is performed. Point metrics are operation-weighted; patient-grouped
+splits and patient-cluster bootstrap address dependence, not equal patient
+weighting. A one-index-operation analysis would answer a different question and
+would require the same prespecified selection rule for survivors and decedents.
+
+The source-label audit verified case/patient matching, label preservation through
+preprocessing and all mortality OOF outputs, and patient separation. It did not
+independently verify hospitalization membership or death timing. The current
+VitalDB extract has case-relative timestamps but no admission identifier or
+cross-case calendar origin. Equal reported length of stay does not establish a
+shared admission; mixed flags within a patient do not alone establish an error.
+These are ascertainment limitations of the exploratory mortality analysis.
+[VitalDB parameter definitions](https://vitaldb.net/dataset/).
+
+INSPIRE provides a documented link from VitalDB cases to hospital admission
+identifiers. That linkage has not yet been checked against this analysis. Any
+label review requires verified coverage, patient consistency, chronology and
+outcome definitions. A 30-day endpoint must not replace the in-hospital
+label. Admission/death timing and linkage diagnostics remain audit metadata,
+outside predictors. [Provider linkage presentation, pp. 33 and 46–47](https://www.ohdsi.org/wp-content/uploads/2025/06/OHDSI-APAC-Scientific-Forum-20250605.pdf),
+[INSPIRE access and identifier documentation](https://physionet.org/content/inspire/1.4.2/).
 
 ## Clinical data preprocessing
 
