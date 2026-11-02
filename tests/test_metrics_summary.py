@@ -1,11 +1,12 @@
-import sys
 from pathlib import Path
+import os
+import time
 
 import numpy as np
 import pandas as pd
 import pytest
-
-sys.path.append(str(Path(__file__).resolve().parents[1]))
+import psutil
+from joblib import delayed
 
 import results_recreation.metrics_summary as metrics_summary
 from results_recreation.metrics_summary import (
@@ -167,4 +168,78 @@ def test_summarize_tolerates_empty_bootstrap_frames(monkeypatch):
     summary_df, bootstrap_df = summarize([pred_set], n_bootstrap=10, n_jobs=1)
 
     assert len(summary_df) == 1
+    assert summary_df.loc[0, "auroc"] == 1
+    assert summary_df.loc[0, "auprc"] == 1
+    assert summary_df.loc[0, "brier"] == pytest.approx(.16)
+    assert summary_df.loc[0, "auroc_bootstrap_valid"] == 0
+    assert pd.isna(summary_df.loc[0, "auroc_lower"])
     assert bootstrap_df is None
+
+
+def test_native_process_deadline_aborts_workers_without_thread_fallback(tmp_path):
+    # Warm the reusable worker pool so this tests cancellation of running tasks,
+    # rather than a deadline expiring while Python workers are still importing.
+    metrics_summary.Parallel(n_jobs=2, backend="loky")([delayed(abs)(-1), delayed(abs)(-2)])
+    def sleeper():
+        (tmp_path / f"worker-{os.getpid()}").write_text("started")
+        time.sleep(4)
+    started = time.monotonic()
+    try:
+        with pytest.raises(RuntimeError, match="Bootstrapping failed"):
+            metrics_summary._run_bootstrap_jobs(
+                [delayed(sleeper)(), delayed(sleeper)()], n_jobs=2,
+                parallel_backend="processes", timeout=.3, max_retries=1,
+            )
+        assert time.monotonic() - started < 2
+        pids = [int(path.name.removeprefix("worker-")) for path in tmp_path.glob("worker-*")]
+        assert pids and os.getpid() not in pids
+        for pid in pids:
+            try:
+                assert psutil.Process(pid).status() == psutil.STATUS_ZOMBIE
+            except psutil.NoSuchProcess:
+                pass
+    finally:
+        for path in tmp_path.glob("worker-*"):
+            pid = int(path.name.removeprefix("worker-"))
+            if pid == os.getpid():
+                continue
+            try:
+                process = psutil.Process(pid)
+                if process.status() != psutil.STATUS_ZOMBIE:
+                    process.kill()
+                    process.wait(timeout=2)
+            except psutil.NoSuchProcess:
+                pass
+
+
+def test_disabled_deadline_fallback_executes_delayed_tasks_in_original_seed_order(monkeypatch):
+    real_parallel = metrics_summary.Parallel
+    backends = []
+    def parallel(*args, **kwargs):
+        backend = kwargs.get("backend", "sequential")
+        backends.append(backend)
+        if backend != "sequential":
+            def failed(tasks):
+                raise RuntimeError("unavailable test backend")
+            return failed
+        return real_parallel(*args, **kwargs)
+    monkeypatch.setattr(metrics_summary, "Parallel", parallel)
+    seeds = [42, 3, 42]
+    def sample(seed):
+        return float(np.random.default_rng(seed).normal())
+    actual = metrics_summary._run_bootstrap_jobs(
+        [delayed(sample)(seed) for seed in seeds], n_jobs=2,
+        parallel_backend="processes", timeout=0, max_retries=1,
+    )
+    assert backends == ["loky", "threading", "sequential"]
+    assert actual == [sample(seed) for seed in seeds]
+
+
+@pytest.mark.parametrize("backend,jobs", [("threads", 2), ("processes", 1)])
+def test_uncancellable_execution_warns_and_preserves_explicit_worker_choice(backend, jobs, caplog):
+    result = metrics_summary._run_bootstrap_jobs(
+        [delayed(sum)([1, 2])], n_jobs=jobs, parallel_backend=backend,
+        timeout=1, max_retries=1,
+    )
+    assert result == [3]
+    assert "cannot enforce a hard task deadline" in caplog.text

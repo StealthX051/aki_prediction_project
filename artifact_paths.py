@@ -126,8 +126,36 @@ def get_paper_dir(project_root: Path) -> Path:
         return explicit
     results_dir = _path_from_env("RESULTS_DIR")
     if results_dir is not None:
+        if results_dir.name in {"nested_cv", "holdout"} and results_dir.parent.name in {
+            "main_shared", "icu_waveform_sensitivity"
+        }:
+            results_dir = results_dir.parent.parent
         return results_dir.parent / "paper"
     return get_artifact_root() / "results" / "catch22" / "paper"
+
+
+def scope_artifact_dir(base: Path, cohort_scope: str, validation_scheme: str) -> Path:
+    """Add an idempotent cohort/validation namespace above existing artifacts."""
+    from data_preparation.cohort_scopes import COHORT_SCOPES
+
+    if cohort_scope not in COHORT_SCOPES:
+        raise ValueError(f"Unknown cohort scope: {cohort_scope}")
+    if validation_scheme not in {"nested_cv", "holdout"}:
+        raise ValueError(f"Unknown validation scheme: {validation_scheme}")
+    base = _normalize(base)
+    if base.name in {"nested_cv", "holdout"} and base.parent.name in COHORT_SCOPES:
+        if (base.parent.name, base.name) != (cohort_scope, validation_scheme):
+            raise ValueError(f"Artifact root {base} belongs to another cohort or validation scheme")
+        return base
+    return base / cohort_scope / validation_scheme
+
+
+def get_scoped_results_dir(project_root: Path, cohort_scope: str, validation_scheme: str) -> Path:
+    return scope_artifact_dir(get_results_dir(project_root), cohort_scope, validation_scheme)
+
+
+def get_scoped_paper_dir(project_root: Path, cohort_scope: str, validation_scheme: str) -> Path:
+    return scope_artifact_dir(get_paper_dir(project_root), cohort_scope, validation_scheme)
 
 
 def get_smoke_root(project_root: Path) -> Path:
@@ -224,7 +252,9 @@ def enforce_storage_policy(
 def ensure_repo_symlink(link_path: Path | str, target_path: Path | str) -> Path:
     """Create or refresh a repo convenience symlink."""
 
-    link = _normalize(link_path)
+    # Resolve parent directories while preserving the final symlink itself.
+    candidate = Path(link_path).expanduser()
+    link = _normalize(candidate.parent) / candidate.name
     target = _normalize(target_path)
 
     link.parent.mkdir(parents=True, exist_ok=True)

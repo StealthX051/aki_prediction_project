@@ -1,7 +1,7 @@
 import logging
-import math
 import os
 import sys
+from html import escape
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Set, Tuple
@@ -19,7 +19,7 @@ from matplotlib.colors import LinearSegmentedColormap, to_hex
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 import numpy as np
 from joblib import Parallel, delayed
-from sklearn.calibration import calibration_curve
+from runtime_resources import available_cpu_count
 from sklearn.metrics import (
     average_precision_score,
     precision_recall_curve,
@@ -32,44 +32,35 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from reporting.display_dictionary import load_display_dictionary
-from reporting.feature_set_display import FeatureSetDisplay
+from reporting.feature_set_display import FeatureSetDisplay, feature_set_sort_key, order_feature_sets
 from reporting.figure_rendering import (
     feature_set_color,
     report_figure_style_context,
     save_report_figure_bundle,
 )
-from artifact_paths import enforce_storage_policy, get_paper_dir, get_results_dir
+from artifact_paths import enforce_storage_policy, get_scoped_results_dir, get_scoped_paper_dir
 from reporting.manuscript_assets import (
-    export_dataframe_bundle,
     export_table_bundle,
     refresh_paper_bundle,
-    write_docx_sections,
     write_markdown_sections,
-    write_pdf_sections,
 )
 
 # Constants
-EXPERIMENTS_DIR = get_results_dir(PROJECT_ROOT)
-PAPER_DIR = get_paper_dir(PROJECT_ROOT)
+EXPERIMENTS_DIR = get_scoped_results_dir(PROJECT_ROOT, os.getenv("COHORT_SCOPE", "main_shared"), os.getenv("VALIDATION_SCHEME", "nested_cv"))
+PAPER_DIR = get_scoped_paper_dir(PROJECT_ROOT, os.getenv("COHORT_SCOPE", "main_shared"), os.getenv("VALIDATION_SCHEME", "nested_cv"))
 FIGURES_DIR = Path(os.getenv("FIGURES_DIR", PAPER_DIR / "figures"))
 TABLES_DIR = Path(os.getenv("TABLES_DIR", PAPER_DIR / "tables"))
 REPORTS_DIR = Path(os.getenv("REPORTS_DIR", PAPER_DIR / "reports"))
 # Backwards-compatible alias used by imports in reporting.make_report
 RESULTS_DIR = EXPERIMENTS_DIR
 
-# Ensure directories exist
-enforce_storage_policy(
-    {
-        "paper_figures_dir": FIGURES_DIR,
-        "paper_tables_dir": TABLES_DIR,
-        "paper_reports_dir": REPORTS_DIR,
-    }
-)
-FIGURES_DIR.mkdir(parents=True, exist_ok=True)
-TABLES_DIR.mkdir(parents=True, exist_ok=True)
-REPORTS_DIR.mkdir(parents=True, exist_ok=True)
-
 logger = logging.getLogger(__name__)
+
+
+def _prepare_output_directory(path: Path) -> None:
+    """Validate a write destination when exporting, never during imports."""
+    enforce_storage_policy({"paper_output_dir": path, "paper_bundle_dir": PAPER_DIR})
+    path.mkdir(parents=True, exist_ok=True)
 
 # --- Plot configuration helpers ------------------------------------------------
 
@@ -109,7 +100,8 @@ class PlotConfig:
     model_blocklist: Optional[Set[str]] = None
     show_bin_counts: bool = True
     show_prob_hist: bool = True
-    show_xlim_inset: bool = True
+    show_xlim_inset: bool = False
+    curve_mode: str = "pooled"
     max_count_to_annotate: int = 30
     n_jobs: int = -2
     show_class_balance: bool = False
@@ -118,6 +110,7 @@ class PlotConfig:
     def from_env(cls) -> "PlotConfig":
         """Create a PlotConfig using optional environment overrides."""
         return cls(
+            curve_mode=os.getenv("PLOT_CURVE_MODE", cls.curve_mode),
             n_bins=int(os.getenv("CALIBRATION_N_BINS", cls.n_bins)),
             bin_strategy=os.getenv("CALIBRATION_BIN_STRATEGY", cls.bin_strategy),
             prefer_calibrated=_env_bool("PLOT_PREFER_CALIBRATED", cls.prefer_calibrated),
@@ -171,7 +164,7 @@ FEATURE_SET_DISPLAY = FeatureSetDisplay.from_defaults(
 )
 FEATURE_SET_MAPPING = FEATURE_SET_DISPLAY.label_map
 
-NEURIPS_CSS = """
+REPORT_CSS = """
 <style>
     body {
         font-family: 'Times New Roman', Times, serif;
@@ -268,12 +261,14 @@ NEURIPS_CSS = """
 """
 
 METRIC_DISPLAY_MAP = {
-    'auroc': 'AUROC',
     'auprc': 'AUPRC',
+    'auroc': 'AUROC',
     'brier': 'Brier Score',
     'sensitivity': 'Sensitivity',
     'specificity': 'Specificity',
     'f1': 'F1 Score',
+    'precision': 'Precision',
+    'accuracy': 'Accuracy',
 }
 
 
@@ -342,16 +337,16 @@ def _build_report_tables(
     renderer: FeatureSetDisplay,
 ) -> tuple[pd.DataFrame, pd.DataFrame, Optional[pd.DataFrame], List[str], Optional[str]]:
     component_cols, label_col = _report_display_columns(renderer)
-    table_df = group.sort_values("AUROC_val", ascending=False)
+    table_df = order_feature_sets(group)
 
     display_cols: List[str] = []
     display_cols.extend(component_cols)
     if label_col:
         display_cols.append(label_col)
-    display_cols.extend(["AUROC", "AUPRC", "Brier Score", "Sensitivity", "Specificity", "F1 Score"])
+    display_cols.extend([c for c in METRIC_DISPLAY_MAP.values() if c in table_df])
     table_df_display = table_df[display_cols].copy()
 
-    delta_candidates = ["Δ AUROC", "Δ AUPRC", "Δ Brier Score", "Δ Sensitivity", "Δ Specificity", "Δ F1 Score"]
+    delta_candidates = [f"Δ {name}" for name in METRIC_DISPLAY_MAP.values()]
     delta_cols: List[str] = []
     delta_cols.extend(component_cols)
     if label_col:
@@ -363,6 +358,9 @@ def _build_report_tables(
 
 def generate_html_tables(metrics_df: pd.DataFrame, renderer: FeatureSetDisplay = FEATURE_SET_DISPLAY):
     """Generate styled HTML tables and manuscript-ready per-table bundles."""
+    _prepare_output_directory(TABLES_DIR)
+    report_notes = metrics_df.attrs.get("report_notes", [])
+    context_html = "".join(f"<p>{escape(note)}</p>" for note in report_notes)
 
     for (outcome, branch, model_name), group in metrics_df.groupby(["Outcome", "Branch", "Model"]):
         table_df, table_df_display, delta_df, component_cols, _label_col = _build_report_tables(group, renderer)
@@ -454,7 +452,7 @@ def generate_html_tables(metrics_df: pd.DataFrame, renderer: FeatureSetDisplay =
             delta_styler.set_properties(**{"text-align": "center"})
             delta_styler.format(format_cell)
 
-            delta_candidates = ["Δ AUROC", "Δ AUPRC", "Δ Brier Score", "Δ Sensitivity", "Δ Specificity", "Δ F1 Score"]
+            delta_candidates = [f"Δ {name}" for name in METRIC_DISPLAY_MAP.values()]
             display_to_key = {
                 col: f"delta_{col.split('Δ ')[-1].lower().replace(' ', '_')}" for col in delta_candidates
             }
@@ -478,12 +476,13 @@ def generate_html_tables(metrics_df: pd.DataFrame, renderer: FeatureSetDisplay =
         <!DOCTYPE html>
         <html>
         <head>
-            {NEURIPS_CSS}
+            {REPORT_CSS}
             <title>Results: {outcome} ({branch}) - {model_name}</title>
         </head>
         <body>
             <h1>Model Performance Analysis</h1>
             <div class="subtitle">Outcome: {outcome} | Branch: {branch} | Model: {model_name}</div>
+            {context_html}
             {html_table}
             {('<h2>Δ vs Reference</h2>' + delta_html) if delta_html else ''}
             <div class="footer">
@@ -500,7 +499,7 @@ def generate_html_tables(metrics_df: pd.DataFrame, renderer: FeatureSetDisplay =
             title=f"Model Performance Analysis: {outcome} | {branch} | {model_name}",
             main_dataframe=table_df_display,
             delta_dataframe=delta_df,
-            summary_text=f"Outcome: {outcome} | Branch: {branch} | Model: {model_name}",
+            summary_text="\n\n".join([f"Outcome: {outcome} | Branch: {branch} | Model: {model_name}", *report_notes]),
         )
 
     refresh_paper_bundle(PAPER_DIR)
@@ -509,9 +508,12 @@ def generate_html_tables(metrics_df: pd.DataFrame, renderer: FeatureSetDisplay =
 
 def generate_markdown_report(metrics_df: pd.DataFrame, renderer: FeatureSetDisplay = FEATURE_SET_DISPLAY):
     """Generate a consolidated Markdown report with all model tables."""
+    _prepare_output_directory(REPORTS_DIR)
 
     ordered_metrics = _order_metrics_for_reporting(metrics_df)
     sections: List[Dict[str, object]] = []
+    if metrics_df.attrs.get("report_notes"):
+        sections.append({"heading": "Analysis context", "text": "\n\n".join(metrics_df.attrs["report_notes"])})
     for (outcome, branch, model_name), group in ordered_metrics.groupby(["Outcome", "Branch", "Model"], sort=False):
         _table_df, table_df_display, delta_df, _component_cols, _label_col = _build_report_tables(group, renderer)
         heading = f"Outcome: {outcome} | Branch: {branch} | Model: {model_name}"
@@ -564,6 +566,8 @@ def _calibration_bins(
 
     # Ensure edges are strictly increasing to avoid empty duplicates
     edges = np.unique(edges)
+    if len(edges) == 1:
+        return [float(edges[0])], [float(np.mean(y_true_arr))], [len(y_true_arr)]
     mean_pred: List[float] = []
     frac_pos: List[float] = []
     counts: List[int] = []
@@ -670,13 +674,20 @@ def _pooled_curve_stats(model_group: pd.DataFrame, cfg: PlotConfig, curve_kind: 
 
 
 def _curve_stats(model_group: pd.DataFrame, cfg: PlotConfig, curve_kind: str) -> Dict[str, object]:
-    return _foldwise_curve_stats(model_group, cfg, curve_kind) or _pooled_curve_stats(model_group, cfg, curve_kind)
+    if cfg.curve_mode == "fold_variability":
+        return _foldwise_curve_stats(model_group, cfg, curve_kind) or _pooled_curve_stats(model_group, cfg, curve_kind)
+    if cfg.curve_mode != "pooled":
+        raise ValueError("PLOT_CURVE_MODE must be pooled or fold_variability")
+    return _pooled_curve_stats(model_group, cfg, curve_kind)
 
 
 def plot_curves(df: pd.DataFrame, config: Optional[PlotConfig] = None) -> None:
     """Generate ROC, PR, and calibration plots for each model grouping."""
     cfg = config or PlotConfig.from_env()
 
+    for identity in ("cohort_scope", "validation_scheme"):
+        if identity in df and df[identity].nunique(dropna=False) != 1:
+            raise ValueError(f"Cannot mix {identity} in a report")
     df = _filter_plot_groups(df, cfg)
     if df.empty:
         logger.warning("No data left to plot after applying plot filters.")
@@ -686,9 +697,14 @@ def plot_curves(df: pd.DataFrame, config: Optional[PlotConfig] = None) -> None:
     if not tasks:
         logger.warning("No groups found for plotting.")
         return
+    _prepare_output_directory(FIGURES_DIR)
 
     def _plot_group(group_key, group_df):
         outcome, branch, model_name = group_key
+        status = str(group_df["analysis_status"].iloc[0]) if "analysis_status" in group_df else "legacy"
+        status_suffix = f" [{status}]"
+        if cfg.curve_mode == "fold_variability":
+            status_suffix += " [fold mean ± SD; not a confidence interval]"
 
         if group_df['y_true'].nunique() < 2:
             logger.warning(
@@ -738,7 +754,7 @@ def plot_curves(df: pd.DataFrame, config: Optional[PlotConfig] = None) -> None:
             roc_payloads: List[Tuple[str, Dict[str, object]]] = []
             for feature_set, model_group in valid_groups.items():
                 roc_payloads.append((feature_set, _curve_stats(model_group, cfg, "roc")))
-            roc_payloads.sort(key=lambda item: float(item[1]["score"]), reverse=True)
+            roc_payloads.sort(key=lambda item: feature_set_sort_key(item[0]))
 
             for feature_set, payload in roc_payloads:
                 color = feature_set_color(feature_set)
@@ -755,7 +771,7 @@ def plot_curves(df: pd.DataFrame, config: Optional[PlotConfig] = None) -> None:
             ax.plot([0, 1], [0, 1], linestyle="--", color="#7d8793", linewidth=1.1, label="Chance")
             ax.set_xlabel('False Positive Rate')
             ax.set_ylabel('True Positive Rate')
-            ax.set_title(f'ROC Curves - {outcome} ({branch}) - {model_name}')
+            ax.set_title(f'ROC Curves - {outcome} ({branch}) - {model_name}{status_suffix}')
             ax.legend(loc='lower right')
             _style_plot_axes(ax)
         _save_fig(fig, FIGURES_DIR / f'roc_{outcome}_{branch}_{model_name}.png')
@@ -773,7 +789,7 @@ def plot_curves(df: pd.DataFrame, config: Optional[PlotConfig] = None) -> None:
                     neg = int((model_group['y_true'] == 0).sum())
                     class_balance[feature_set] = (pos, neg)
 
-            pr_payloads.sort(key=lambda item: float(item[1]["score"]), reverse=True)
+            pr_payloads.sort(key=lambda item: feature_set_sort_key(item[0]))
 
             prevalence = None
             for _feature_set, model_group in valid_groups.items():
@@ -807,7 +823,7 @@ def plot_curves(df: pd.DataFrame, config: Optional[PlotConfig] = None) -> None:
 
             ax.set_xlabel('Recall')
             ax.set_ylabel('Precision')
-            ax.set_title(f'PR Curves - {outcome} ({branch}) - {model_name}')
+            ax.set_title(f'PR Curves - {outcome} ({branch}) - {model_name}{status_suffix}')
             ax.legend(loc='lower left')
             _style_plot_axes(ax)
         _save_fig(fig, FIGURES_DIR / f'pr_{outcome}_{branch}_{model_name}.png')
@@ -855,23 +871,21 @@ def plot_curves(df: pd.DataFrame, config: Optional[PlotConfig] = None) -> None:
             ax.plot([0, 1], [0, 1], linestyle="--", color="#7d8793", linewidth=1.1)
             ax.set_xlabel('Mean Predicted Probability')
             ax.set_ylabel('Fraction of Positives')
-            ax.set_title(f'Calibration Curves - {outcome} ({branch}) - {model_name}')
+            ax.set_title(f'Calibration Curves - {outcome} ({branch}) - {model_name}{status_suffix}')
             _style_plot_axes(ax)
 
+            ax.set_xlim(0, 1)
+            ax.set_ylim(0, 1)
             if max_prob_seen > 0:
-                auto_xmax = min(1.0, math.ceil((max_prob_seen * 1.05) * 10) / 10.0)
-                auto_xmax = max(auto_xmax, 0.1)
-                auto_xmax = min(auto_xmax, 0.3)
-                ax.set_xlim(0, auto_xmax)
                 if cfg.show_xlim_inset:
                     inset_ax = inset_axes(ax, width="35%", height="35%", loc="upper left", borderpad=1.2)
                     inset_ax.plot([0, 1], [0, 1], linestyle="--", color="#7d8793", linewidth=1.0, alpha=0.6)
-                    inset_ax.set_xlim(0, 1)
+                    inset_ax.set_xlim(0, 0.3)
                     inset_ax.set_ylim(ax.get_ylim())
-                    inset_ax.set_xticks([0, 0.5, 1.0])
+                    inset_ax.set_xticks([0, 0.15, 0.3])
                     inset_ax.set_yticks([])
                     inset_ax.tick_params(axis='both', labelsize=7)
-                    inset_ax.set_title("Full range", fontsize=7)
+                    inset_ax.set_title("Low-risk zoom", fontsize=7)
                     inset_ax.grid(False)
                     _style_plot_axes(inset_ax)
                     for feature_set, model_group in valid_groups.items():
@@ -909,7 +923,12 @@ def plot_curves(df: pd.DataFrame, config: Optional[PlotConfig] = None) -> None:
             ax.legend(loc='best')
         _save_fig(fig, FIGURES_DIR / f'calibration_{outcome}_{branch}_{model_name}.png')
 
-    Parallel(n_jobs=cfg.n_jobs)(delayed(_plot_group)(key, group) for key, group in tasks)
+    available = available_cpu_count()
+    if cfg.n_jobs == 0:
+        raise ValueError("Plot workers must be nonzero")
+    requested = cfg.n_jobs if cfg.n_jobs > 0 else max(1, available + 1 + cfg.n_jobs)
+    workers = min(available, len(tasks), requested)
+    Parallel(n_jobs=workers)(delayed(_plot_group)(key, group) for key, group in tasks)
     refresh_paper_bundle(PAPER_DIR)
 
 def set_cell_background(cell, color_hex):
@@ -943,7 +962,7 @@ def get_style_info(df: pd.DataFrame) -> Dict:
         style_info[idx] = {}
         
     # Process each metric column
-    metrics = ['AUROC', 'AUPRC', 'Brier Score', 'Sensitivity', 'Specificity', 'F1 Score']
+    metrics = list(METRIC_DISPLAY_MAP.values())
     
     for col in metrics:
         val_col = f'{col}_val'
@@ -1021,7 +1040,7 @@ def get_delta_style_info(df: pd.DataFrame, display_to_key: Dict[str, str]) -> Di
 
 
 def _order_metrics_for_reporting(
-    metrics_df: pd.DataFrame, model_priority: Sequence[str] = ("EBM", "XGBoost")
+    metrics_df: pd.DataFrame, model_priority: Sequence[str] = ("Logistic regression", "XGBoost", "EBM")
 ) -> pd.DataFrame:
     """Order metrics so preferred models render first in reports."""
 
@@ -1040,6 +1059,7 @@ def generate_docx_report(metrics_df: pd.DataFrame, renderer: FeatureSetDisplay =
     """
     Generates a DOCX report with all tables.
     """
+    _prepare_output_directory(REPORTS_DIR)
     ordered_metrics = _order_metrics_for_reporting(metrics_df)
     doc = Document()
     # Default to landscape orientation to give tables more horizontal space
@@ -1051,6 +1071,10 @@ def generate_docx_report(metrics_df: pd.DataFrame, renderer: FeatureSetDisplay =
     style.font.size = Pt(11)
     
     doc.add_heading('AKI Prediction Project - Results Report', 0)
+    if "analysis_status" in metrics_df:
+        doc.add_paragraph("Analysis status: " + ", ".join(sorted(metrics_df.analysis_status.unique())))
+    for note in metrics_df.attrs.get("report_notes", []):
+        doc.add_paragraph(note)
     
     component_cols = renderer.component_labels if renderer.show_checkbox else []
     label_source = "Feature Set" if renderer.show_label else None
@@ -1059,12 +1083,12 @@ def generate_docx_report(metrics_df: pd.DataFrame, renderer: FeatureSetDisplay =
         doc.add_heading(f'Outcome: {outcome} | Branch: {branch} | Model: {model_name}', level=1)
         
         # Sort
-        table_df = group.sort_values('AUROC_val', ascending=False)
+        table_df = order_feature_sets(group)
         display_cols: List[str] = []
         display_cols.extend(component_cols)
         if label_source:
             display_cols.append(label_source)
-        display_cols += ['AUROC', 'AUPRC', 'Brier Score', 'Sensitivity', 'Specificity', 'F1 Score']
+        display_cols += [c for c in METRIC_DISPLAY_MAP.values() if c in table_df]
         
         # Get Styles
         styles = get_style_info(table_df)
@@ -1189,19 +1213,29 @@ def generate_pdf_report(metrics_df: pd.DataFrame, renderer: FeatureSetDisplay = 
     """
     Generates an aggregated PDF report using Matplotlib.
     """
+    _prepare_output_directory(REPORTS_DIR)
     ordered_metrics = _order_metrics_for_reporting(metrics_df)
     component_cols = renderer.component_labels if renderer.show_checkbox else []
     label_source = "Feature Set" if renderer.show_label else None
     
     with PdfPages(REPORTS_DIR / 'report.pdf') as pdf:
+        if metrics_df.attrs.get("report_notes"):
+            fig, ax = plt.subplots(figsize=(12, 3.5))
+            ax.axis("off")
+            ax.set_title("Analysis context", fontsize=14, fontweight="bold", pad=18)
+            status = ", ".join(sorted(metrics_df.analysis_status.unique())) if "analysis_status" in metrics_df else "legacy"
+            ax.text(.02, .95, "\n\n".join([f"Analysis status: {status}", *metrics_df.attrs["report_notes"]]),
+                    va="top", ha="left", wrap=True)
+            pdf.savefig(fig, bbox_inches="tight")
+            plt.close(fig)
         for (outcome, branch, model_name), group in ordered_metrics.groupby(['Outcome', 'Branch', 'Model'], sort=False):
             # Sort
-            table_df = group.sort_values('AUROC_val', ascending=False)
+            table_df = order_feature_sets(group)
             display_cols: List[str] = []
             display_cols.extend(component_cols)
             if label_source:
                 display_cols.append(label_source)
-            display_cols += ['AUROC', 'AUPRC', 'Brier Score', 'Sensitivity', 'Specificity', 'F1 Score']
+            display_cols += [c for c in METRIC_DISPLAY_MAP.values() if c in table_df]
             
             # Get Styles
             styles = get_style_info(table_df)
@@ -1342,7 +1376,7 @@ def main():
 
     raise SystemExit(
         "results_analysis now expects precomputed artifacts. "
-        "Run reporting/make_report.py after generating metrics_summary.csv."
+        "Run python -m reporting.make_report after generating metrics_summary.csv."
     )
 
 

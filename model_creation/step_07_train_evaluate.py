@@ -13,14 +13,16 @@ from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import shap
-import xgboost as xgb
 
 # Add project root to path to import utils
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.append(str(PROJECT_ROOT))
 
 from model_creation import utils
+from artifact_paths import get_scoped_results_dir
+from data_preparation.artifact_metadata import file_sha256 as compute_file_hash
+from data_preparation.cohort_scopes import COHORT_SCOPES, selected_case_hash
+from runtime_resources import available_cpu_count
 from model_creation.postprocessing import (
     LogisticRecalibrationModel,
     write_json,
@@ -30,6 +32,7 @@ from model_creation.validation import (
     VALIDATION_PROTOCOL_VERSION,
     build_cv_splits,
     build_validation_fingerprint,
+    describe_cv_split,
     checkpoint_matches_validation_fingerprint,
     fit_final_model,
     generate_cross_fitted_predictions,
@@ -52,20 +55,12 @@ logger = logging.getLogger(__name__)
 PIPELINE_NAME = "step_07_train_evaluate"
 
 
-def compute_file_hash(path: Path) -> str:
-    """Compute the SHA256 hash of a file without loading it into memory."""
-
-    hasher = hashlib.sha256()
-    with path.open("rb") as fp:
-        for chunk in iter(lambda: fp.read(8192), b""):
-            hasher.update(chunk)
-    return hasher.hexdigest()
-
-
 def save_shap_plots(model, X_test, output_dir):
     """
     Calculates and saves SHAP summary plots.
     """
+    import shap
+
     logger.info("Calculating SHAP values...")
     explainer = shap.TreeExplainer(model)
     shap_values = explainer.shap_values(X_test)
@@ -97,11 +92,6 @@ def _json_default(obj):
 
 def _json_safe(data):
     return json.loads(json.dumps(data, default=_json_default))
-
-
-def _safe_logit(probabilities: np.ndarray, eps: float = 1e-15) -> np.ndarray:
-    clipped = np.clip(probabilities, eps, 1 - eps)
-    return np.log(clipped / (1 - clipped))
 
 
 def _safe_filename(name: str) -> str:
@@ -870,13 +860,16 @@ def train_evaluate(
     local_sample_size: int = 100,
     validation_scheme: str = "nested_cv",
     outer_folds: int = 5,
-    inner_folds: int = 5,
+    inner_folds: int = 3,
     repeats: int = 1,
     max_workers: int = 4,
     threads_per_model: int = 8,
     resume: bool = False,
     save_final_refit: bool = False,
-    n_trials: int = 100,
+    n_trials: Optional[int] = None,
+    cohort_scope: str = "main_shared",
+    diagnostic: bool = False,
+    calibration_folds: int = 5,
 ):
     logger.info(
         "Starting Training/Evaluation for Outcome: %s, Branch: %s, Feature Set: %s, Model: %s, Validation: %s",
@@ -890,7 +883,10 @@ def train_evaluate(
     if validation_scheme not in {"nested_cv", "holdout"}:
         raise ValueError(f"Unsupported validation_scheme: {validation_scheme}")
 
-    output_dir = utils.RESULTS_DIR / "models" / model_type / outcome / branch / feature_set
+    n_trials = (20 if model_type == "logistic_regression" else 50) if n_trials is None else n_trials
+    diagnostic = bool(diagnostic or smoke_test)
+    results_root = get_scoped_results_dir(PROJECT_ROOT, cohort_scope, validation_scheme)
+    output_dir = results_root / "models" / model_type / outcome / branch / feature_set
     predictions_dir = output_dir / "predictions"
     artifacts_dir = output_dir / "artifacts"
     folds_dir = artifacts_dir / "folds"
@@ -908,6 +904,7 @@ def train_evaluate(
         outcome,
         feature_set,
         require_holdout_split=(validation_scheme == "holdout"),
+        cohort_scope=cohort_scope,
     )
 
     if smoke_test:
@@ -915,16 +912,17 @@ def train_evaluate(
         n_trials = min(n_trials, 2)
         outer_folds = min(outer_folds, 2)
         inner_folds = min(inner_folds, 2)
+        calibration_folds = min(calibration_folds, 2)
         max_workers = 1
         threads_per_model = min(threads_per_model, 2)
 
-    if repeats > 1:
+    if repeats != 1:
         raise ValueError(
             "Repeated nested CV is not implemented correctly in reporting yet. "
             "Use repeats=1 for the current supported workflow."
         )
 
-    available_cpus = max(1, os.cpu_count() or 1)
+    available_cpus = available_cpu_count()
     if threads_per_model < 1:
         raise ValueError("threads_per_model must be at least 1.")
     if max_workers < 1:
@@ -938,6 +936,18 @@ def train_evaluate(
         threads_per_model = available_cpus
     if validation_scheme == "nested_cv":
         max_feasible_workers = max(1, available_cpus // max(1, threads_per_model))
+        reservation = os.getenv("AKI_CONFIG_CPU_RESERVATION")
+        if reservation:
+            budget = min(available_cpus, int(reservation))
+            if model_type == "ebm":
+                # Concurrent outer fits share this process's joblib bag pool.
+                max_feasible_workers = budget - threads_per_model - 1
+            elif model_type == "logistic_regression":
+                max_feasible_workers = budget // int(os.getenv("OPENBLAS_NUM_THREADS", "1"))
+            else:
+                max_feasible_workers = budget // threads_per_model
+            if max_feasible_workers < 1:
+                raise ValueError("Configuration CPU reservation cannot support its fixed estimator settings")
         if max_workers > max_feasible_workers:
             logger.warning(
                 "Reducing max_workers from %s to %s to avoid oversubscribing %s CPUs "
@@ -949,7 +959,44 @@ def train_evaluate(
             )
             max_workers = max_feasible_workers
 
-    model_label = "XGBoost" if model_type == "xgboost" else "EBM"
+    if groups is None or groups.isna().any():
+        raise ValueError("Patient identifiers are required for manuscript validation.")
+    if calibration_folds < 2:
+        raise ValueError("Calibration cross-fitting requires at least two folds.")
+    if not diagnostic and validation_scheme == "nested_cv" and (
+        outer_folds != 5 or inner_folds != 3 or calibration_folds != 5
+    ):
+        raise ValueError("Definitive validation requires 5 outer, 3 inner HPO, and 5 calibration folds; use --diagnostic for reduced checks.")
+    planned_splits = None
+    if validation_scheme == "nested_cv":
+        planned_splits, actual_outer = build_cv_splits(X, y, groups, outer_folds, base_random_state)
+        if not diagnostic:
+            if actual_outer != outer_folds:
+                raise ValueError("Definitive validation cannot reduce the requested outer-fold count.")
+            for outer_fold_id, (train_idx, test_idx) in enumerate(planned_splits):
+                for purpose, requested in (("inner", inner_folds), ("calibration", calibration_folds)):
+                    inner_splits, actual = build_cv_splits(
+                        X.iloc[train_idx], y.iloc[train_idx], groups.iloc[train_idx], requested,
+                        base_random_state + outer_fold_id,
+                    )
+                    if actual != requested:
+                        raise ValueError(f"Definitive validation cannot reduce the requested {purpose}-fold count.")
+                    for inner_train, inner_val in inner_splits:
+                        if y.iloc[train_idx].iloc[inner_train].nunique() != 2 or y.iloc[train_idx].iloc[inner_val].nunique() != 2:
+                            raise ValueError(f"Each definitive {purpose} partition must contain both classes.")
+                if y.iloc[train_idx].nunique() != 2 or y.iloc[test_idx].nunique() != 2:
+                    raise ValueError("Each definitive outer partition must contain both classes.")
+        fold_roster = [
+            {"train": caseids.iloc[train_idx].tolist(), "test": caseids.iloc[test_idx].tolist()}
+            for train_idx, test_idx in planned_splits
+        ]
+    else:
+        fold_roster = working_df[["caseid", "split_group"]].to_dict("records")
+    fold_assignment_hash = hashlib.sha256(json.dumps(fold_roster, sort_keys=True).encode()).hexdigest()
+    expected_fold_hash = os.getenv("AKI_EXPECTED_FOLD_HASH")
+    if expected_fold_hash and expected_fold_hash != fold_assignment_hash:
+        raise ValueError("Training partitions differ from the frozen preflight split plan")
+    model_label = {"xgboost": "XGBoost", "ebm": "EBM", "logistic_regression": "Logistic regression"}[model_type]
     pipeline_name = f"{PIPELINE_NAME}_{validation_scheme}"
     validation_fingerprint = build_validation_fingerprint(
         dataset_hash=dataset_hash,
@@ -960,11 +1007,16 @@ def train_evaluate(
         feature_set=feature_set,
         outer_folds=outer_folds,
         inner_folds=inner_folds,
+        calibration_folds=calibration_folds,
         repeats=repeats,
         n_trials=n_trials,
         threads_per_model=threads_per_model,
         preserve_nan=preserve_nan,
         base_random_state=base_random_state,
+        cohort_scope=cohort_scope,
+        selected_case_hash=selected_case_hash(working_df),
+        fold_assignment_hash=fold_assignment_hash,
+        diagnostic=diagnostic,
     )
 
     def _save_root_artifacts(
@@ -978,6 +1030,19 @@ def train_evaluate(
         test_allow_duplicate_caseids: bool = False,
         allow_varying_thresholds: bool = False,
     ) -> None:
+        for predictions in (train_predictions, test_predictions):
+            predictions["cohort_scope"] = cohort_scope
+            predictions["model_type"] = model_type
+            predictions["diagnostic"] = diagnostic
+            predictions["compute_profile"] = validation_fingerprint["compute_profile"]
+            predictions["selected_case_hash"] = validation_fingerprint["selected_case_hash"]
+        metadata_payload.update({
+            "cohort_scope": cohort_scope, "diagnostic": diagnostic,
+            "validation_fingerprint": validation_fingerprint,
+            "compute_profile": validation_fingerprint["compute_profile"],
+            "outer_split": describe_cv_split(y, groups, outer_folds, base_random_state)
+            if validation_scheme == "nested_cv" else {"strategy": "persisted_patient_grouped_holdout"},
+        })
         write_prediction_files(
             predictions_dir,
             train_predictions,
@@ -1007,6 +1072,8 @@ def train_evaluate(
         }
         metadata_payload = {
             **result.metadata_payload,
+            "inner_folds": inner_folds,
+            "calibration_folds": calibration_folds,
             "dataset_hash": dataset_hash,
             "validation_protocol_version": VALIDATION_PROTOCOL_VERSION,
             "model_type": model_type,
@@ -1066,6 +1133,7 @@ def train_evaluate(
             random_state=base_random_state,
             preserve_nan=preserve_nan,
             threads_per_model=threads_per_model,
+            diagnostic=diagnostic,
         )
         oof_predictions, fold_indices, actual_calibration = generate_cross_fitted_predictions(
             X,
@@ -1073,17 +1141,18 @@ def train_evaluate(
             groups,
             model_type=model_type,
             best_params=best_params,
-            requested_splits=inner_folds,
+            requested_splits=calibration_folds,
             random_state=base_random_state,
             preserve_nan=preserve_nan,
             threads_per_model=threads_per_model,
+            diagnostic=diagnostic,
         )
         from model_creation.postprocessing import apply_logistic_recalibration, fit_logistic_recalibration, find_youden_j_threshold
 
         recalibration_model = fit_logistic_recalibration(y.values, oof_predictions)
         calibrated_oof = apply_logistic_recalibration(oof_predictions, recalibration_model)
         threshold, youden_j, sensitivity, specificity = find_youden_j_threshold(y.values, calibrated_oof)
-        effective_refit_params = get_effective_refit_params(model_type, best_params)
+        effective_refit_params = get_effective_refit_params(model_type, best_params, diagnostic)
         final_preprocessor, final_model, _ = fit_final_model(
             X,
             y,
@@ -1092,6 +1161,8 @@ def train_evaluate(
             random_state=base_random_state,
             preserve_nan=preserve_nan,
             threads_per_model=threads_per_model,
+            groups=groups,
+            diagnostic=diagnostic,
         )
         model_path = save_model_bundle(
             final_refit_dir,
@@ -1115,6 +1186,10 @@ def train_evaluate(
                 "model_name": model_label,
                 "pipeline": f"{pipeline_name}_final_refit",
                 "validation_scheme": "final_refit",
+                "cohort_scope": cohort_scope,
+                "model_type": model_type,
+                "diagnostic": diagnostic,
+                "compute_profile": validation_fingerprint["compute_profile"],
                 "outer_fold_id": -1,
                 "repeat_id": 0,
             }
@@ -1145,11 +1220,19 @@ def train_evaluate(
                 "dataset_hash": dataset_hash,
                 "validation_protocol_version": VALIDATION_PROTOCOL_VERSION,
                 "source_validation_fingerprint": validation_fingerprint,
+                "cohort_scope": cohort_scope,
+                "model_type": model_type,
+                "diagnostic": diagnostic,
                 "best_score": best_score,
+                "compute_profile": validation_fingerprint["compute_profile"],
                 "best_params": best_params,
                 "effective_refit_params": effective_refit_params,
-                "refit_param_overrides": get_refit_param_overrides(model_type, best_params),
+                "refit_param_overrides": get_refit_param_overrides(model_type, best_params, diagnostic),
                 "actual_inner_folds": actual_inner,
+                "inner_folds": inner_folds,
+                "calibration_folds": calibration_folds,
+                "requested_inner_folds": inner_folds,
+                "requested_calibration_folds": calibration_folds,
                 "actual_calibration_folds": actual_calibration,
                 "model_path": str(model_path.name),
             },
@@ -1177,14 +1260,17 @@ def train_evaluate(
             validation_scheme=validation_scheme,
             n_trials=n_trials,
             inner_folds=inner_folds,
+            calibration_folds=calibration_folds,
             random_state=base_random_state,
             preserve_nan=preserve_nan,
             threads_per_model=threads_per_model,
             repeat_id=0,
             outer_fold_id=0,
             return_fitted_model=True,
+            cohort_scope=cohort_scope,
+            diagnostic=diagnostic,
         )
-        params_dir = utils.RESULTS_DIR / "params" / model_type / outcome / branch
+        params_dir = results_root / "params" / model_type / outcome / branch
         params_dir.mkdir(parents=True, exist_ok=True)
         with (params_dir / f"{feature_set}.json").open("w") as fp:
             json.dump(result.best_params, fp, indent=4)
@@ -1200,6 +1286,7 @@ def train_evaluate(
             summary_metadata={
                 "outer_folds": 1,
                 "inner_folds": int(result.metadata_payload["actual_inner_folds"]),
+                "calibration_folds": calibration_folds,
                 "repeats": 1,
                 "threads_per_model": threads_per_model,
                 "n_trials": n_trials,
@@ -1216,13 +1303,8 @@ def train_evaluate(
 
     for repeat_id in range(repeats):
         repeat_seed = base_random_state + repeat_id
-        split_list, resolved_outer_folds = build_cv_splits(
-            X,
-            y,
-            groups,
-            outer_folds,
-            repeat_seed,
-        )
+        split_list = planned_splits
+        resolved_outer_folds = len(split_list)
         actual_outer_folds = max(actual_outer_folds, resolved_outer_folds)
         for outer_fold_id, (train_idx, test_idx) in enumerate(split_list):
             fold_dir = folds_dir / f"repeat_{repeat_id:02d}" / f"outer_{outer_fold_id:02d}"
@@ -1291,11 +1373,15 @@ def train_evaluate(
                     validation_scheme=validation_scheme,
                     n_trials=n_trials,
                     inner_folds=inner_folds,
+                    calibration_folds=calibration_folds,
                     random_state=meta["random_state"],
                     preserve_nan=preserve_nan,
                     threads_per_model=threads_per_model,
                     repeat_id=key[0],
                     outer_fold_id=key[1],
+                    return_fitted_model=True,
+                    cohort_scope=cohort_scope,
+                    diagnostic=diagnostic,
                 ): (key, meta)
                 for key, meta in pending
             }
@@ -1307,6 +1393,12 @@ def train_evaluate(
                     result,
                     validation_fingerprint=validation_fingerprint,
                 )
+                # Only predictions/metadata are needed for aggregation. Models
+                # and transformed features are available in their fold bundles.
+                result.final_model = None
+                result.final_preprocessor = None
+                result.transformed_test_features = None
+                result.raw_test_logits = None
                 results_by_key[key] = result
                 manifest_entries.append(
                     {
@@ -1351,6 +1443,7 @@ def train_evaluate(
             "seed": base_random_state,
             "outer_folds": actual_outer_folds,
             "inner_folds": inner_folds,
+            "calibration_folds": calibration_folds,
             "repeats": repeats,
             "dataset_hash": dataset_hash,
             "validation_protocol_version": VALIDATION_PROTOCOL_VERSION,
@@ -1385,6 +1478,7 @@ def train_evaluate(
         summary_metadata={
             "outer_folds": actual_outer_folds,
             "inner_folds": inner_folds,
+            "calibration_folds": calibration_folds,
             "repeats": repeats,
             "threads_per_model": threads_per_model,
             "max_workers": max_workers,
@@ -1407,7 +1501,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--model_type",
         type=str,
-        choices=["xgboost", "ebm"],
+        choices=["xgboost", "ebm", "logistic_regression"],
         default="xgboost",
         help="Model type to train and evaluate",
     )
@@ -1435,7 +1529,8 @@ if __name__ == "__main__":
         help="Validation scheme to run (default: nested_cv).",
     )
     parser.add_argument("--outer-folds", type=int, default=5, help="Number of outer folds for nested CV.")
-    parser.add_argument("--inner-folds", type=int, default=5, help="Number of inner folds for HPO/calibration.")
+    parser.add_argument("--inner-folds", type=int, default=3, help="Number of inner folds for HPO.")
+    parser.add_argument("--calibration-folds", type=int, default=5, help="Training-only folds for calibration predictions.")
     parser.add_argument(
         "--repeats",
         type=int,
@@ -1450,9 +1545,13 @@ if __name__ == "__main__":
         action="store_true",
         help="After validation, tune/refit on all available data and save the final artifact bundle.",
     )
-    parser.add_argument("--n-trials", type=int, default=100, help="Optuna trials per tuning run.")
+    parser.add_argument("--n-trials", type=int, default=None, help="Optuna trials (default: LR 20, other families 50).")
+    parser.add_argument("--cohort-scope", choices=COHORT_SCOPES, default="main_shared")
+    parser.add_argument("--diagnostic", action="store_true", help="Allow reduced validation; outputs are labeled diagnostic.")
 
     args = parser.parse_args()
+    os.environ.setdefault("AKI_SPLIT_CACHE_DIR", str(
+        get_scoped_results_dir(PROJECT_ROOT, args.cohort_scope, args.validation_scheme) / "metadata" / "split_cache"))
 
     train_evaluate(
         args.outcome,
@@ -1472,4 +1571,7 @@ if __name__ == "__main__":
         args.resume,
         args.save_final_refit,
         args.n_trials,
+        args.cohort_scope,
+        args.diagnostic,
+        calibration_folds=args.calibration_folds,
     )

@@ -18,9 +18,9 @@ from data_preparation.outcome_registry import (
     ALL_SPLIT_COLUMNS,
     LEGACY_SPLIT_ALIAS,
     TRAINABLE_OUTCOME_SPECS,
-    TRAINABLE_OUTCOME_NAMES,
     get_trainable_outcome_spec,
 )
+from model_creation.preprocessing import CONTINUOUS_PREOP_COLUMNS, RAW_CATEGORICAL_PREOP_COLUMNS
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -75,12 +75,17 @@ def prepare_working_dataset_for_outcome(
     outcome_name: str,
     *,
     require_holdout_split: bool = False,
+    cohort_scope: Optional[str] = None,
 ) -> Tuple[pd.DataFrame, object]:
     spec = get_trainable_outcome_spec(outcome_name)
     if spec.target_col not in df.columns:
         raise ValueError(f"Target column {spec.target_col} not found in dataframe.")
 
-    working_df = df.copy()
+    if cohort_scope is not None:
+        from data_preparation.cohort_scopes import select_cohort
+        working_df = select_cohort(df, cohort_scope, outcome=outcome_name)
+    else:
+        working_df = df.copy()
 
     if spec.eligibility_col not in working_df.columns:
         raise ValueError(
@@ -120,16 +125,20 @@ def load_data(branch: str) -> pd.DataFrame:
         raise FileNotFoundError(f"Data file not found: {file_path}")
 
     logger.info(f"Loading data from {file_path}...")
-    try:
-        df, metadata = read_versioned_csv(
-            file_path,
-            artifact_role=STEP_05_MERGED_ARTIFACT,
-            required_columns=MERGED_REQUIRED_COLUMNS,
-        )
-    except (ArtifactCompatibilityError, FileNotFoundError):
-        raise
+    df, metadata = read_versioned_csv(
+        file_path,
+        artifact_role=STEP_05_MERGED_ARTIFACT,
+        required_columns=MERGED_REQUIRED_COLUMNS,
+    )
 
     df.attrs["artifact_metadata"] = metadata
+    approved_preop = set(CONTINUOUS_PREOP_COLUMNS) | set(RAW_CATEGORICAL_PREOP_COLUMNS) | {"inpatient_preop"}
+    unexpected = sorted(set(get_feature_sets(df)["preop_only"]) - approved_preop)
+    if unexpected:
+        raise ArtifactCompatibilityError(
+            f"Unapproved preoperative predictor columns in {file_path}: {unexpected}. "
+            "Register their clinical timing and predictor role before model development."
+        )
     logger.info(f"Data loaded. Shape: {df.shape}")
     return df
 
@@ -154,6 +163,9 @@ def get_feature_sets(df: pd.DataFrame) -> Dict[str, List[str]]:
     excluded_cols.update(ALL_OUTCOME_COLUMNS)
     excluded_cols.update(ALL_ELIGIBILITY_COLUMNS)
     excluded_cols.update(ALL_SPLIT_COLUMNS)
+    # Postoperative ascertainment and identity fields must never become preop predictors.
+    excluded_cols.update(c for c in all_cols if c.startswith(("aki_has_", "aki_baseline_", "cohort_", "postop_")))
+    excluded_cols.update({"aki_stage", "validation_scheme", "selected_case_hash", "diagnostic"})
     
     # Preop cols = All cols - Waveform cols - Excluded cols
     preop_cols = [c for c in all_cols if c not in waveform_cols and c not in excluded_cols]
@@ -291,6 +303,13 @@ def require_persisted_holdout_split(
                 f"Persisted split column '{split_col}' leaks patients across train/test via '{group_col}': {overlap[:5]}"
             )
 
+    if df.loc[train_mask, spec.target_col].nunique() < 2 or df.loc[test_mask, spec.target_col].nunique() < 2:
+        raise ValueError(
+            f"Persisted split column '{split_col}' requires both classes in train and test for outcome "
+            f"'{outcome_name}'. Rebuild Step 03 and Step 05 on a cohort with adequate class support."
+        )
+
+
     working_df = df.copy()
     working_df[LEGACY_SPLIT_ALIAS] = split_series.astype("object")
     return working_df
@@ -335,6 +354,8 @@ def select_patient_level_holdout_positions(
 
     dummy = np.zeros(len(y), dtype=int)
     for train_idx, test_idx in splitter.split(dummy, y.to_numpy(), groups.to_numpy()):
+        if y.iloc[train_idx].nunique() < 2 or y.iloc[test_idx].nunique() < 2:
+            continue
         gap = abs(len(test_idx) - target_test_rows)
         if best_gap is None or gap < best_gap:
             best_gap = gap
@@ -342,7 +363,7 @@ def select_patient_level_holdout_positions(
             best_test = test_idx
 
     if best_train is None or best_test is None:
-        raise ValueError("Failed to construct a patient-level holdout split.")
+        raise ValueError("Failed to construct a patient-level holdout split with both classes in train and test.")
 
     train_groups = set(groups.iloc[best_train])
     test_groups = set(groups.iloc[best_test])
@@ -441,8 +462,8 @@ def compute_quantile_cuts_per_feature(X: np.ndarray, max_bins: int = 256) -> Lis
     feature_types = []
     for j in range(n_features):
         col = X[:, j].astype(np.float64, copy=False)
-        # Drop NaNs before computing quantiles
-        col = col[~np.isnan(col)]
+        # Invalid numeric values cannot define finite continuous cutpoints.
+        col = col[np.isfinite(col)]
         
         if col.size == 0:
             feature_types.append("continuous")  # nothing to cut on

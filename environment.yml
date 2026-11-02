@@ -1,56 +1,16 @@
-# This file defines the canonical Conda environment for the AKI prediction project.
-# To create the environment, run: conda env create -f environment.yml
-# To sync an existing environment after dependency changes, run:
-#   conda env update -f environment.yml --prune
-# To activate the environment, run: conda activate aki_prediction_project
-
+# Primary Catch22 CPU environment, Linux x86_64; run from the repository root.
+# Exact binary replay: scripts/cpu/rebuild-from-locks.sh (see locks/README.md).
 name: aki_prediction_project
-
 channels:
-  - pytorch
-  - nvidia
-  - defaults
-
+  - conda-forge
+  - nodefaults
 dependencies:
-  # Core Python version
-  - python=3.9 # probably want to migrate to 3.10+ at some point
-
-  # Core deep learning libraries from specified channels
-  - pytorch
-  - torchvision
-  - torchaudio
-  - pytorch-cuda=11.8 # As specified in the project plan
-
-  # Pip for installing remaining packages
-  - pip
-  - graphviz
-
-  # Python packages to be installed with pip
+  - python=3.12.16
+  - pip=26.2.2
+  - setuptools=84.2.1
+  - wheel=0.48.0
+  - packaging=26.3
+  - libgomp=16.2.0
+  - ripgrep=15.2.0
   - pip:
-      - "autogluon.multimodal"
-      - setuptools
-      - wheel
-      - autogluon
-      - vitaldb==1.0.0
-      - pandas
-      - numpy
-      - scipy
-      - matplotlib==3.8.4
-      - scikit-learn
-      - python-docx
-      - xgboost
-      - kaleido
-      - interpret
-      - pycatch22
-      - optuna
-      - shap
-      - nvitop
-      - numba
-      - ipykernel
-      - tensorboard
-      - psutil
-      - ipywidgets
-      - rich
-      - grad-cam
-      - aeon # 1.1.0 for python 3.9, current 1.3.0 for python 3.10+. 1.3.0 supports GPU acceleration
-      - tsfresh
+      - -r requirements-cpu.txt

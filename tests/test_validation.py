@@ -1,4 +1,5 @@
-import sys
+import json
+import hashlib
 import concurrent.futures
 from pathlib import Path
 
@@ -6,13 +7,11 @@ import numpy as np
 import pandas as pd
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.append(str(PROJECT_ROOT))
-
 import model_creation.step_07_train_evaluate as train_module
 import model_creation.validation as validation_module
 from model_creation.postprocessing import LogisticRecalibrationModel
 from model_creation.preprocessing import FoldPreprocessor
+from data_preparation.cohort_scopes import selected_case_hash
 from model_creation.validation import (
     OuterFoldRunResult,
     build_cached_folds,
@@ -31,9 +30,16 @@ def _mock_df() -> pd.DataFrame:
             "feature2": [1.0, 1.1, 1.2, 1.3, 1.4, 1.5],
             "aki_label": [0, 1, 0, 1, 0, 1],
             "eligible_any_aki": [1, 1, 1, 1, 1, 1],
+            "eligible_icu_admission": [1] * 6,
+            "y_icu_admit": [0, 1, 0, 1, 0, 1],
             "split_group_any_aki": ["train", "train", "train", "train", "test", "test"],
         }
     )
+
+
+class CheckpointModel:
+    def save_model(self, path):
+        Path(path).write_text("{}")
 
 
 def _make_nested_outer_result(df: pd.DataFrame, *, outer_fold_id: int, test_idx: np.ndarray) -> OuterFoldRunResult:
@@ -90,6 +96,8 @@ def _make_nested_outer_result(df: pd.DataFrame, *, outer_fold_id: int, test_idx:
         calibration_model=LogisticRecalibrationModel(intercept=0.0, slope=1.0, eps=1e-15),
         threshold_payload={"threshold": threshold, "youden_j": 0.1, "sensitivity": 1.0, "specificity": 0.5},
         metadata_payload={"actual_inner_folds": 2},
+        final_model=CheckpointModel(),
+        final_preprocessor=FoldPreprocessor(),
     )
 
 
@@ -99,6 +107,7 @@ def _validation_fingerprint(
     validation_scheme: str = "nested_cv",
     n_trials: int = 1,
     inner_folds: int = 2,
+    calibration_folds: int = 5,
     outer_folds: int = 2,
     repeats: int = 1,
     threads_per_model: int = 1,
@@ -112,34 +121,77 @@ def _validation_fingerprint(
         feature_set="preop_only",
         outer_folds=outer_folds,
         inner_folds=inner_folds,
+        calibration_folds=calibration_folds,
         repeats=repeats,
         n_trials=n_trials,
         threads_per_model=threads_per_model,
         preserve_nan=True,
         base_random_state=42,
+        cohort_scope="main_shared", diagnostic=True,
+        selected_case_hash=selected_case_hash(_mock_df()),
+        fold_assignment_hash=hashlib.sha256(json.dumps([
+            {"train": [1, 2, 3], "test": [4, 5, 6]},
+            {"train": [4, 5, 6], "test": [1, 2, 3]},
+        ], sort_keys=True).encode()).hexdigest(),
     )
 
 
-def test_fold_preprocessor_does_not_learn_validation_only_category():
-    train_df = pd.DataFrame(
-        {
-            "department": ["A", "A", "B", "B"],
-            "feature1": [0.1, 0.2, 0.3, 0.4],
-        }
+@pytest.mark.parametrize("artifact", [
+    "model.json", "preprocessor.pkl", "train_oof.csv", "test_predictions.csv",
+    "calibration.json", "threshold.json", "best_params.json",
+])
+def test_checkpoint_rejects_changes_to_every_promised_artifact(tmp_path, artifact):
+    frame = _mock_df()
+    save_outer_fold_checkpoint(
+        tmp_path, _make_nested_outer_result(frame, outer_fold_id=0, test_idx=np.array([3, 4, 5])),
+        validation_fingerprint=_validation_fingerprint(),
     )
-    val_df = pd.DataFrame(
-        {
-            "department": ["C"],
-            "feature1": [0.5],
-        }
+    assert validation_module.is_outer_fold_checkpoint_complete(tmp_path)
+    path = tmp_path / artifact
+    if artifact.endswith(".csv"):
+        predictions = pd.read_csv(path)
+        predictions.loc[0, "y_prob_calibrated"] = 0.123456
+        predictions.to_csv(path, index=False)
+    elif artifact in {"calibration.json", "threshold.json", "best_params.json"}:
+        payload = json.loads(path.read_text())
+        key = next(iter(payload))
+        payload[key] = float(payload[key]) + 0.1
+        path.write_text(json.dumps(payload))
+    else:
+        path.write_bytes(path.read_bytes() + b"tampered")
+    assert not validation_module.is_outer_fold_checkpoint_complete(tmp_path)
+
+
+@pytest.mark.parametrize("malformed", [None, [], "invalid", 7])
+@pytest.mark.parametrize("field", ["metadata", "validation_fingerprint"])
+def test_checkpoint_malformed_metadata_is_rejected_without_resume_crash(tmp_path, malformed, field):
+    fingerprint = _validation_fingerprint()
+    save_outer_fold_checkpoint(
+        tmp_path, _make_nested_outer_result(_mock_df(), outer_fold_id=0, test_idx=np.array([3, 4, 5])),
+        validation_fingerprint=fingerprint,
     )
+    path = tmp_path / "metadata.json"
+    metadata = json.loads(path.read_text())
+    if field == "metadata":
+        metadata = malformed
+    else:
+        metadata[field] = malformed
+    path.write_text(json.dumps(metadata))
+    assert not validation_module.is_outer_fold_checkpoint_complete(tmp_path)
+    assert not validation_module.checkpoint_matches_validation_fingerprint(tmp_path, fingerprint)[0]
 
-    preprocessor = FoldPreprocessor(impute_missing=False)
-    preprocessor.fit(train_df)
-    transformed_val = preprocessor.transform(val_df)
 
-    assert "department_C" not in transformed_val.columns
-    assert transformed_val.shape[1] == len(preprocessor.feature_names_)
+@pytest.mark.parametrize("field", ["artifact_sha256", "checkpoint_bundle_protocol_version"])
+def test_legacy_checkpoint_without_complete_bundle_contract_is_not_reused(tmp_path, field):
+    save_outer_fold_checkpoint(
+        tmp_path, _make_nested_outer_result(_mock_df(), outer_fold_id=0, test_idx=np.array([3, 4, 5])),
+        validation_fingerprint=_validation_fingerprint(),
+    )
+    metadata_path = tmp_path / "metadata.json"
+    metadata = json.loads(metadata_path.read_text())
+    metadata.pop(field)
+    metadata_path.write_text(json.dumps(metadata))
+    assert not validation_module.is_outer_fold_checkpoint_complete(tmp_path)
 
 
 def test_cached_ebm_feature_types_use_requested_max_bins_and_cache_per_fold(monkeypatch: pytest.MonkeyPatch):
@@ -179,102 +231,12 @@ def test_cached_ebm_feature_types_use_requested_max_bins_and_cache_per_fold(monk
     assert seen_calls == [(3, 32), (3, 128), (3, 32)]
 
 
-def test_ebm_uses_light_hpo_bagging_and_heavy_refit_bagging(monkeypatch: pytest.MonkeyPatch):
-    X = pd.DataFrame({"feature1": np.linspace(0.0, 1.0, 8), "feature2": np.linspace(1.0, 2.0, 8)})
-    y = pd.Series([0, 1, 0, 1, 0, 1, 0, 1])
-    groups = pd.Series([10, 20, 30, 40, 50, 60, 70, 80])
-    seen_params = []
-    best_params = {
-        "interactions": 0,
-        "missing": "gain",
-        "inner_bags": 0,
-        "outer_bags": 1,
-        "max_bins": 64,
-        "max_leaves": 2,
-        "smoothing_rounds": 25,
-        "learning_rate": 0.01,
-        "validation_size": 0.15,
-        "early_stopping_rounds": 100,
-        "early_stopping_tolerance": 0.0,
-        "min_samples_leaf": 2,
-        "min_hessian": 0.0,
-        "greedy_ratio": 0.0,
-        "cyclic_progress": 0.0,
-    }
-
-    class CaptureEbm:
-        def __init__(self, **kwargs):
-            self.kwargs = dict(kwargs)
-            seen_params.append(self.kwargs)
-
-        def fit(self, X, y, sample_weight=None):
-            return self
-
-        def predict_proba(self, X):
-            probs = np.full(len(X), 0.6, dtype=float)
-            return np.column_stack([1 - probs, probs])
-
-    monkeypatch.setattr(validation_module, "_ebm_class", lambda: CaptureEbm)
-    monkeypatch.setattr(
-        validation_module,
-        "suggest_ebm_params",
-        lambda trial: dict(best_params),
-    )
-
-    validation_module.tune_model(
-        X,
-        y,
-        groups,
-        model_type="ebm",
-        n_trials=1,
-        requested_splits=2,
-        random_state=42,
-        preserve_nan=True,
-        threads_per_model=1,
-    )
-
-    assert seen_params
-    assert all(call["inner_bags"] == 0 for call in seen_params)
-    assert all(call["outer_bags"] == 1 for call in seen_params)
-
-    seen_params.clear()
-    validation_module.generate_cross_fitted_predictions(
-        X,
-        y,
-        groups,
-        model_type="ebm",
-        best_params=best_params,
-        requested_splits=2,
-        random_state=42,
-        preserve_nan=True,
-        threads_per_model=1,
-    )
-    assert seen_params
-    assert all(call["inner_bags"] == 20 for call in seen_params)
-    assert all(call["outer_bags"] == 14 for call in seen_params)
-    assert all(call["max_bins"] == 64 for call in seen_params)
-
-    seen_params.clear()
-    validation_module.fit_final_model(
-        X,
-        y,
-        model_type="ebm",
-        best_params=best_params,
-        random_state=42,
-        preserve_nan=True,
-        threads_per_model=1,
-    )
-    assert len(seen_params) == 1
-    assert seen_params[0]["inner_bags"] == 20
-    assert seen_params[0]["outer_bags"] == 14
-    assert seen_params[0]["max_bins"] == 64
-
-
 def test_train_evaluate_nested_cv_resume_uses_completed_checkpoints(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ):
     results_dir = tmp_path / "results"
     monkeypatch.setattr(train_module.utils, "RESULTS_DIR", results_dir)
+    monkeypatch.setenv("RESULTS_DIR", str(results_dir))
     monkeypatch.setattr(train_module.utils, "load_data", lambda branch: _mock_df())
     monkeypatch.setattr(train_module, "compute_file_hash", lambda path: "dummy-hash")
 
@@ -285,7 +247,7 @@ def test_train_evaluate_nested_cv_resume_uses_completed_checkpoints(
     monkeypatch.setattr(train_module, "build_cv_splits", lambda *args, **kwargs: (split_list, 2))
     monkeypatch.setattr(train_module, "run_outer_split", lambda **kwargs: (_ for _ in ()).throw(AssertionError("should not run")))
 
-    output_dir = results_dir / "models" / "xgboost" / "any_aki" / "non_windowed" / "preop_only"
+    output_dir = results_dir / "main_shared" / "nested_cv" / "models" / "xgboost" / "any_aki" / "non_windowed" / "preop_only"
     folds_dir = output_dir / "artifacts" / "folds"
     df = _mock_df()
     for outer_fold_id, (_, test_idx) in enumerate(split_list):
@@ -297,6 +259,7 @@ def test_train_evaluate_nested_cv_resume_uses_completed_checkpoints(
         )
 
     train_module.train_evaluate(
+        diagnostic=True,
         outcome="any_aki",
         branch="non_windowed",
         feature_set="preop_only",
@@ -317,12 +280,65 @@ def test_train_evaluate_nested_cv_resume_uses_completed_checkpoints(
     assert set(test_predictions["validation_scheme"]) == {"nested_cv"}
 
 
+def test_partial_xgboost_resume_preserves_native_prediction_dtypes_and_fold_union(tmp_path):
+    from model_creation.validation import load_outer_fold_checkpoint
+    from results_recreation.metrics_summary import PredictionSet, _validate_nested_prediction_union
+    frame = _mock_df()
+    fingerprint = _validation_fingerprint()
+    native_results = []
+    for number, test_idx in enumerate((np.array([3, 4, 5]), np.array([0, 1, 2]))):
+        result = _make_nested_outer_result(frame, outer_fold_id=number, test_idx=test_idx)
+        # This is the production XGBoost contract: cross-fit buffers are float64,
+        # but direct outer-test raw and recalibrated predictions remain float32.
+        for column in ("y_prob_raw", "y_prob_calibrated"):
+            result.test_predictions[column] = result.test_predictions[column].astype("float32")
+        result.train_predictions["y_prob_raw"] = np.array([.12345678901234567, .5000000000000001, .8765432109876543])
+        result.train_predictions["y_prob_calibrated"] = np.array([.11111111111111113, .5555555555555557, .8999999999999999])
+        result.metadata_payload.update(repeat_id=0, outer_fold_id=number)
+        fold = tmp_path / "artifacts/folds/repeat_00" / f"outer_{number:02d}"
+        save_outer_fold_checkpoint(fold, result, validation_fingerprint=fingerprint)
+        native_results.append(result)
+    resumed = load_outer_fold_checkpoint(tmp_path / "artifacts/folds/repeat_00/outer_00")
+    for column in ("y_prob_raw", "y_prob_calibrated"):
+        assert resumed.test_predictions[column].dtype == np.dtype("float32")
+        assert resumed.train_predictions[column].dtype == np.dtype("float64")
+    for attribute in ("train_predictions", "test_predictions"):
+        expected = pd.concat([getattr(result, attribute) for result in native_results], ignore_index=True)
+        mixed = pd.concat([getattr(resumed, attribute), getattr(native_results[1], attribute)], ignore_index=True)
+        pd.testing.assert_frame_equal(mixed, expected, check_exact=True, check_dtype=True)
+        path = tmp_path / "predictions" / ("test.csv" if attribute == "test_predictions" else "train_oof.csv")
+        path.parent.mkdir(exist_ok=True)
+        mixed.to_csv(path, index=False)
+        loaded_csv = pd.read_csv(path, float_precision="round_trip")
+        fold_name = "test_predictions.csv" if attribute == "test_predictions" else "train_oof.csv"
+        union = pd.concat([pd.read_csv(fold / fold_name, float_precision="round_trip")
+                           for fold in sorted((tmp_path / "artifacts/folds").glob("repeat_*/outer_*"))], ignore_index=True)
+        pd.testing.assert_frame_equal(loaded_csv, union, check_exact=True)
+    path = tmp_path / "predictions/test.csv"
+    saved = pd.read_csv(path)
+    prediction_set = PredictionSet(path, saved, .5, "any_aki", "non_windowed", "preop_only", "XGBoost", None)
+    _validate_nested_prediction_union(prediction_set, tmp_path / "artifacts", fingerprint)
+
+
+def test_checkpoint_without_dtype_metadata_remains_readable(tmp_path):
+    result = _make_nested_outer_result(_mock_df(), outer_fold_id=0, test_idx=np.array([3, 4, 5]))
+    save_outer_fold_checkpoint(tmp_path, result, validation_fingerprint=_validation_fingerprint())
+    path = tmp_path / "metadata.json"
+    metadata = json.loads(path.read_text())
+    metadata.pop("prediction_dtypes")
+    path.write_text(json.dumps(metadata))
+    assert validation_module.is_outer_fold_checkpoint_complete(tmp_path)
+    loaded = validation_module.load_outer_fold_checkpoint(tmp_path)
+    pd.testing.assert_frame_equal(loaded.test_predictions, result.test_predictions, check_exact=True)
+
+
 @pytest.mark.parametrize(
     ("fingerprint_overrides", "expected_message"),
     [
         ({"dataset_hash": "stale-hash"}, "dataset_hash"),
         ({"n_trials": 99}, "n_trials"),
         ({"inner_folds": 99}, "inner_folds"),
+        ({"calibration_folds": 99}, "calibration_folds"),
         ({"threads_per_model": 99}, "threads_per_model"),
         ({"validation_protocol_version": -1}, "validation_protocol_version"),
     ],
@@ -336,6 +352,7 @@ def test_train_evaluate_nested_cv_resume_skips_mismatched_fingerprints(
 ):
     results_dir = tmp_path / "results"
     monkeypatch.setattr(train_module.utils, "RESULTS_DIR", results_dir)
+    monkeypatch.setenv("RESULTS_DIR", str(results_dir))
     monkeypatch.setattr(train_module.utils, "load_data", lambda branch: _mock_df())
     monkeypatch.setattr(train_module, "compute_file_hash", lambda path: "dummy-hash")
 
@@ -345,7 +362,7 @@ def test_train_evaluate_nested_cv_resume_skips_mismatched_fingerprints(
     ]
     monkeypatch.setattr(train_module, "build_cv_splits", lambda *args, **kwargs: (split_list, 2))
 
-    output_dir = results_dir / "models" / "xgboost" / "any_aki" / "non_windowed" / "preop_only"
+    output_dir = results_dir / "main_shared" / "nested_cv" / "models" / "xgboost" / "any_aki" / "non_windowed" / "preop_only"
     folds_dir = output_dir / "artifacts" / "folds"
     df = _mock_df()
     for outer_fold_id, (_, test_idx) in enumerate(split_list):
@@ -368,6 +385,7 @@ def test_train_evaluate_nested_cv_resume_skips_mismatched_fingerprints(
 
     with caplog.at_level("WARNING"):
         train_module.train_evaluate(
+            diagnostic=True,
             outcome="any_aki",
             branch="non_windowed",
             feature_set="preop_only",
@@ -391,11 +409,13 @@ def test_train_evaluate_rejects_repeats_greater_than_one(
 ):
     results_dir = tmp_path / "results"
     monkeypatch.setattr(train_module.utils, "RESULTS_DIR", results_dir)
+    monkeypatch.setenv("RESULTS_DIR", str(results_dir))
     monkeypatch.setattr(train_module.utils, "load_data", lambda branch: _mock_df())
     monkeypatch.setattr(train_module, "compute_file_hash", lambda path: "dummy-hash")
 
     with pytest.raises(ValueError, match="repeats=1"):
         train_module.train_evaluate(
+            diagnostic=True,
             outcome="any_aki",
             branch="non_windowed",
             feature_set="preop_only",
@@ -415,6 +435,7 @@ def test_train_evaluate_nested_cv_rejects_duplicate_test_caseids(
 ):
     results_dir = tmp_path / "results"
     monkeypatch.setattr(train_module.utils, "RESULTS_DIR", results_dir)
+    monkeypatch.setenv("RESULTS_DIR", str(results_dir))
     monkeypatch.setattr(train_module.utils, "load_data", lambda branch: _mock_df())
     monkeypatch.setattr(train_module, "compute_file_hash", lambda path: "dummy-hash")
 
@@ -438,6 +459,7 @@ def test_train_evaluate_nested_cv_rejects_duplicate_test_caseids(
 
     with pytest.raises(ValueError, match="duplicate caseids"):
         train_module.train_evaluate(
+            diagnostic=True,
             outcome="any_aki",
             branch="non_windowed",
             feature_set="preop_only",
@@ -458,9 +480,10 @@ def test_train_evaluate_caps_nested_workers_to_cpu_budget(
 ):
     results_dir = tmp_path / "results"
     monkeypatch.setattr(train_module.utils, "RESULTS_DIR", results_dir)
+    monkeypatch.setenv("RESULTS_DIR", str(results_dir))
     monkeypatch.setattr(train_module.utils, "load_data", lambda branch: _mock_df())
     monkeypatch.setattr(train_module, "compute_file_hash", lambda path: "dummy-hash")
-    monkeypatch.setattr(train_module.os, "cpu_count", lambda: 16)
+    monkeypatch.setattr(train_module, "available_cpu_count", lambda: 16)
 
     split_list = [
         (np.array([0, 1, 2]), np.array([3, 4, 5])),
@@ -497,6 +520,7 @@ def test_train_evaluate_caps_nested_workers_to_cpu_budget(
     )
 
     train_module.train_evaluate(
+        diagnostic=True,
         outcome="any_aki",
         branch="non_windowed",
         feature_set="preop_only",

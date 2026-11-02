@@ -1,13 +1,9 @@
-import json
-import sys
 from pathlib import Path
 
 import numpy as np
 import pytest
 from sklearn.datasets import make_classification
 from sklearn.linear_model import LogisticRegression
-
-sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from model_creation.postprocessing import (
     LogisticRecalibrationModel,
@@ -20,7 +16,7 @@ from model_creation.postprocessing import (
 )
 
 
-def test_generate_stratified_oof_predictions_validations_and_output(tmp_path):
+def test_generate_stratified_oof_predictions_validations_and_output():
     X, y = make_classification(
         n_samples=100,
         n_features=5,
@@ -48,7 +44,22 @@ def test_generate_stratified_oof_predictions_respects_groups():
         random_state=0,
     )
     groups = np.repeat(np.arange(12), 2)
-    model = LogisticRegression(max_iter=100)
+    fit_patients = []
+
+    class RecordingLogisticRegression(LogisticRegression):
+        def fit(self, X, y, **kwargs):
+            # A unique operation marker makes the fitting boundary inspectable.
+            self.fit_operations_ = set(X[:, 0])
+            fit_patients.append(set((X[:, 0] // 2).astype(int)))
+            return super().fit(X, y, **kwargs)
+
+        def predict_proba(self, X):
+            assert not self.fit_operations_ & set(X[:, 0])
+            assert not set((X[:, 0] // 2).astype(int)) & fit_patients[-1]
+            return super().predict_proba(X)
+
+    X[:, 0] = np.arange(len(X))
+    model = RecordingLogisticRegression(max_iter=1000)
 
     preds, folds = generate_stratified_oof_predictions(
         model,
@@ -61,6 +72,9 @@ def test_generate_stratified_oof_predictions_respects_groups():
 
     assert preds.shape[0] == y.shape[0]
     assert set(folds) == {0, 1, 2, 3}
+    assert len(fit_patients) == 4
+    assert not hasattr(model, "coef_")  # Each fold fits a clone, never the caller's estimator.
+    assert np.isfinite(preds).all()
 
     for group_value in np.unique(groups):
         group_folds = set(folds[groups == group_value])
@@ -93,16 +107,25 @@ def test_logistic_recalibration_and_application():
         fit_logistic_recalibration(np.ones_like(y_true), pred_probs)
 
 
-def test_youden_j_threshold():
+def test_recalibration_matches_hand_calculated_odds_and_clips_boundary_probabilities():
+    model = LogisticRecalibrationModel(intercept=np.log(2), slope=2, eps=1e-3)
+    # Calibrated odds are 2 * original_odds**2.
+    np.testing.assert_allclose(apply_logistic_recalibration([.2, .5, .8], model), [1 / 9, 2 / 3, 32 / 33])
+    np.testing.assert_allclose(apply_logistic_recalibration([0., 1.], model),
+                               apply_logistic_recalibration([model.eps, 1 - model.eps], model))
+
+
+@pytest.mark.parametrize("probabilities,expected", [
+    ([.1, .4, .6, .9], (.6, 1., 1., 1.)),
+    ([.1, .7, .6, .9], (.6, .5, 1., .5)),
+])
+def test_youden_j_threshold_matches_hand_calculated_confusion_counts(probabilities, expected):
     y_true = np.array([0, 0, 1, 1])
-    pred_probs = np.array([0.1, 0.4, 0.6, 0.9])
+    pred_probs = np.asarray(probabilities)
 
     threshold, j_stat, sensitivity, specificity = find_youden_j_threshold(y_true, pred_probs)
 
-    assert 0 <= threshold <= 1
-    assert j_stat >= 0
-    assert 0 <= sensitivity <= 1
-    assert 0 <= specificity <= 1
+    assert (threshold, j_stat, sensitivity, specificity) == pytest.approx(expected)
 
     with pytest.raises(ValueError):
         find_youden_j_threshold(y_true, np.array([0.1, 1.2, 0.3, 0.4]))
@@ -116,4 +139,4 @@ def test_json_helpers(tmp_path: Path):
     assert path.exists()
 
     loaded = read_json(path)
-    assert loaded == json.loads(json.dumps(data))
+    assert loaded == data

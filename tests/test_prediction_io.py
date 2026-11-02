@@ -1,10 +1,7 @@
-import sys
 from pathlib import Path
 
 import pandas as pd
 import pytest
-
-sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from model_creation.prediction_io import (
     REQUIRED_PREDICTION_COLUMNS,
@@ -33,18 +30,11 @@ def _base_predictions(threshold: float = 0.5) -> pd.DataFrame:
     )
 
 
-def test_validate_prediction_dataframe_happy_path(tmp_path: Path):
-    df = _base_predictions()
-    threshold = validate_prediction_dataframe(df, tmp_path / "train_oof.csv")
-
-    assert threshold == pytest.approx(0.5)
-
-
 def test_validate_prediction_dataframe_catches_duplicates(tmp_path: Path):
     df = _base_predictions()
     df.loc[2, "caseid"] = 1
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="duplicate caseids"):
         validate_prediction_dataframe(df, tmp_path / "train_oof.csv")
 
 
@@ -52,7 +42,7 @@ def test_write_prediction_files_enforces_shared_threshold(tmp_path: Path):
     train_df = _base_predictions(threshold=0.5)
     test_df = _base_predictions(threshold=0.6)
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="Train/test thresholds differ"):
         write_prediction_files(tmp_path, train_df, test_df)
 
     # Ensure files are not created on failure
@@ -60,23 +50,21 @@ def test_write_prediction_files_enforces_shared_threshold(tmp_path: Path):
     assert not (tmp_path / "test.csv").exists()
 
 
-def test_write_prediction_files_succeeds(tmp_path: Path):
+@pytest.mark.parametrize("include_patients", [False, True])
+def test_write_prediction_files_roundtrips_train_and_test_values(tmp_path: Path, include_patients):
     train_df = _base_predictions(threshold=0.7)
     test_df = _base_predictions(threshold=0.7)
+    if include_patients:
+        train_df["subjectid"] = test_df["subjectid"] = [10, 20, 30]
+    test_df["is_oof"] = False
 
     write_prediction_files(tmp_path, train_df, test_df)
 
-    written_train = pd.read_csv(tmp_path / "train_oof.csv")
-    assert set(written_train.columns) == REQUIRED_PREDICTION_COLUMNS
-
-
-def test_validate_prediction_dataframe_accepts_optional_subjectid(tmp_path: Path):
-    df = _base_predictions()
-    df["subjectid"] = [10, 20, 30]
-
-    threshold = validate_prediction_dataframe(df, tmp_path / "test.csv")
-
-    assert threshold == pytest.approx(0.5)
+    for filename, expected in (("train_oof.csv", train_df), ("test.csv", test_df)):
+        written = pd.read_csv(tmp_path / filename)
+        pd.testing.assert_frame_equal(written, expected)
+        assert REQUIRED_PREDICTION_COLUMNS <= set(written)
+        assert validate_prediction_dataframe(written, tmp_path / filename) == pytest.approx(.7)
 
 
 def test_validate_prediction_dataframe_rejects_null_optional_subjectid(tmp_path: Path):
@@ -149,14 +137,7 @@ def test_write_prediction_files_allows_duplicate_train_caseids_but_not_test_case
             train_allow_duplicate_caseids=True,
             test_allow_duplicate_caseids=False,
         )
-
-
-def test_write_prediction_files_supports_duplicate_train_caseids_for_nested_train_oof(tmp_path: Path):
-    train_df = pd.concat([_base_predictions(), _base_predictions()], ignore_index=True)
-    train_df["outer_fold_id"] = [0, 0, 0, 1, 1, 1]
-    train_df["repeat_id"] = [0] * len(train_df)
-    train_df["threshold"] = [0.5] * len(train_df)
-    train_df["y_pred_label"] = (train_df["y_prob_calibrated"] >= train_df["threshold"]).astype(int)
+    assert not list(tmp_path.glob("*.csv"))
     test_df = _base_predictions()
 
     write_prediction_files(
@@ -167,5 +148,5 @@ def test_write_prediction_files_supports_duplicate_train_caseids_for_nested_trai
         test_allow_duplicate_caseids=False,
     )
 
-    assert (tmp_path / "train_oof.csv").is_file()
-    assert (tmp_path / "test.csv").is_file()
+    pd.testing.assert_frame_equal(pd.read_csv(tmp_path / "train_oof.csv"), train_df)
+    pd.testing.assert_frame_equal(pd.read_csv(tmp_path / "test.csv"), test_df)

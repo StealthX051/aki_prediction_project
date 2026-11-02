@@ -1,4 +1,8 @@
-"""Generate report-time XGBoost SHAP figures from saved model bundles."""
+"""Generate legacy holdout XGBoost SHAP plots from root-level saved bundles.
+
+For manuscript nested-CV bundles, use `reporting.fold_explanations` or
+`reporting.make_report --explain-folds` to explain each outer fold's test cases.
+"""
 
 from __future__ import annotations
 

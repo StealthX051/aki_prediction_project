@@ -1,4 +1,5 @@
 import argparse
+import json
 import sys
 from pathlib import Path
 from typing import Optional
@@ -10,11 +11,17 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.append(str(PROJECT_ROOT))
 
 from data_preparation.artifact_metadata import (
+    ARTIFACT_SCHEMA_VERSIONS,
     STEP_03_PREOP_ARTIFACT,
     STEP_05_MERGED_ARTIFACT,
     ArtifactCompatibilityError,
     read_versioned_csv,
     write_artifact_metadata,
+    file_sha256,
+    metadata_path_for,
+)
+from data_preparation.cohort_scopes import (
+    COHORT_SCOPES, build_cohort_manifest, cohort_counts, select_cohort, selected_case_hash,
 )
 from data_preparation.inputs import (
     PREOP_PROCESSED_FILE,
@@ -29,6 +36,7 @@ from data_preparation.outcome_registry import (
     ALL_OUTCOME_COLUMNS,
     ALL_SPLIT_COLUMNS,
 )
+from data_preparation.step_02_catch_22 import EXTRACTION_PROTOCOL_VERSION
 
 PREOP_REQUIRED_COLUMNS = [
     "caseid",
@@ -39,6 +47,34 @@ PREOP_REQUIRED_COLUMNS = [
 ]
 
 
+def write_branch_roster_manifest(branch_files: dict[str, Path], output_path: Path) -> None:
+    """Record branch-specific rosters and the intersection for branch contrasts."""
+    branches = {
+        name: read_versioned_csv(
+            path, artifact_role=STEP_05_MERGED_ARTIFACT,
+            required_columns=["caseid", "subjectid", "eligible_any_aki", "aki_label",
+                              "eligible_icu_admission", "y_icu_admit"],
+        )[0]
+        for name, path in branch_files.items()
+    }
+    intersections = {}
+    for scope in COHORT_SCOPES:
+        selected = {name: select_cohort(frame, scope) for name, frame in branches.items()}
+        common_caseids = set.intersection(*(set(frame["caseid"]) for frame in selected.values()))
+        common = next(iter(selected.values())).loc[lambda frame: frame["caseid"].isin(common_caseids)]
+        # A shared operation must retain the same patient identity in every branch.
+        for frame in selected.values():
+            matched = frame.loc[frame["caseid"].isin(common_caseids)]
+            if selected_case_hash(matched) != selected_case_hash(common):
+                raise ValueError("Patient identity differs between waveform-processing branches.")
+        intersections[scope] = {
+            "branches": {name: build_cohort_manifest(frame, scope, name) for name, frame in selected.items()},
+            "intersection": {**cohort_counts(common), "selected_case_hash": selected_case_hash(common),
+                             "caseids": sorted(common_caseids)},
+        }
+    output_path.write_text(json.dumps(intersections, indent=2, sort_keys=True))
+
+
 def merge_and_save(
     preop_df,
     intraop_path,
@@ -47,6 +83,7 @@ def merge_and_save(
     impute_missing: bool,
     *,
     preop_metadata: Optional[dict] = None,
+    require_intraop_metadata: bool = False,
 ):
     print(f"\n--- Merging {mode_name} Data ---")
     print(f"Intraop Input: {intraop_path}")
@@ -63,12 +100,24 @@ def merge_and_save(
         print(f"Error loading {intraop_path}: {e}")
         return
 
+    intraop_metadata = {}
+    if require_intraop_metadata:
+        meta_path = metadata_path_for(intraop_path)
+        if not meta_path.exists():
+            raise ArtifactCompatibilityError(f"Intraoperative artifact {intraop_path} lacks extraction provenance.")
+        intraop_metadata = json.loads(meta_path.read_text())
+        if intraop_metadata.get("assembly_protocol_version") != 1:
+            raise ArtifactCompatibilityError(f"Unsupported waveform assembly protocol for {intraop_path}.")
+        if intraop_metadata.get("data_sha256") != file_sha256(intraop_path):
+            raise ArtifactCompatibilityError(f"Waveform artifact hash mismatch for {intraop_path}.")
+        fingerprint = intraop_metadata.get("extraction_fingerprint")
+        if not isinstance(fingerprint, dict) or fingerprint.get("extraction_protocol_version") != EXTRACTION_PROTOCOL_VERSION:
+            raise ArtifactCompatibilityError(f"Stale waveform extraction protocol for {intraop_path}.")
+
     # 2. Merge
     print("Merging with preoperative data...")
-    # Use a left merge to ensure we keep all patients from the intraop cohort
-    # (or intersection? The original script used left merge on waveform data)
-    # Original: master_df = pd.merge(waveform_wide_df, preop_final_df, on=..., how='left')
-    # This implies we prioritize the waveform cohort.
+    # Retain the branch's waveform-qualified operations and require one
+    # matching clinical record for each operation.
     
     master_df = pd.merge(
         intraop_df,
@@ -85,16 +134,21 @@ def merge_and_save(
             f"Merge failed for {unmatched_rows} rows in {mode_name}; missing preop metadata for some caseids."
         )
     master_df = master_df.drop(columns=["_merge"])
+    branch = "windowed" if "windowed" in mode_name.lower() else "non_windowed"
+    cohort_manifests = {}
+    # Small programmatic utility tests may supply only a subset of outcome/ID
+    # columns; production main() always requires the full versioned schema.
+    if {"subjectid", "eligible_any_aki", "aki_label", "eligible_icu_admission", "y_icu_admit"}.issubset(master_df):
+        cohort_manifests = {
+            scope: build_cohort_manifest(master_df, scope, branch) for scope in COHORT_SCOPES
+        }
     
     # 3. Check for Merge Issues
     merge_nan_count = master_df.isnull().sum().sum()
     if merge_nan_count > 0:
-        print(f"WARNING: Merge introduced {merge_nan_count} NaN values.")
-        if impute_missing:
-            print("Imputing these with -99 (assuming they are missing preop features)...")
-            master_df.fillna(-99, inplace=True)
-        else:
-            print("Leaving NaNs in merged output (imputation disabled).")
+        print(f"Merged output contains {merge_nan_count} NaN values; preserving missing outcomes and features.")
+    if impute_missing:
+        print("NOTE: --impute-missing is retained for CLI compatibility only and does not modify Step 05 outputs.")
 
     print(f"Final merged shape: {master_df.shape}")
 
@@ -109,7 +163,18 @@ def merge_and_save(
             "mode_name": mode_name,
             "split_status": dict((preop_metadata or {}).get("split_status") or {}),
             "upstream_artifact": str(PREOP_PROCESSED_FILE),
-            "upstream_schema_version": 1,
+            "upstream_schema_version": (preop_metadata or {}).get(
+                "schema_version", ARTIFACT_SCHEMA_VERSIONS[STEP_03_PREOP_ARTIFACT]
+            ),
+            "source_hashes": (preop_metadata or {}).get("source_hashes", {}),
+            "outer_flow_counts": (preop_metadata or {}).get("outer_flow_counts", {}),
+            "diagnostic_trim": (preop_metadata or {}).get("diagnostic_trim"),
+            "data_sha256": file_sha256(output_path),
+            "branch": branch,
+            "cohort_scopes": cohort_manifests,
+            "source_cohort_scopes": (preop_metadata or {}).get("cohort_scopes", {}),
+            "extraction_fingerprint": intraop_metadata.get("extraction_fingerprint"),
+            "extraction_diagnostics": intraop_metadata.get("extraction_diagnostics", {}),
         },
     )
     print(f"Done with {mode_name}.")
@@ -121,16 +186,13 @@ def main(impute_missing: Optional[bool] = None):
         action="store_true",
         default=IMPUTE_MISSING,
         help=(
-            "Fill merged NaNs with -99 (previous behavior). Default preserves NaNs"
-            " introduced during merging."
+            "Deprecated compatibility option; missing outcomes and features remain NaN."
         ),
     )
 
     if impute_missing is None:
         args = parser.parse_args()
         impute_missing = args.impute_missing
-    else:
-        _ = parser.parse_args([])
 
     print("--- Step 05: Data Merge ---")
     
@@ -165,6 +227,13 @@ def main(impute_missing: Optional[bool] = None):
             name,
             impute_missing,
             preop_metadata=preop_metadata,
+            require_intraop_metadata=True,
+        )
+
+    if WIDE_FEATURES_FILE.exists() and WIDE_FEATURES_WINDOWED_FILE.exists():
+        manifest_path = WIDE_FEATURES_FILE.parent / "cohort_rosters.json"
+        write_branch_roster_manifest(
+            {"non_windowed": WIDE_FEATURES_FILE, "windowed": WIDE_FEATURES_WINDOWED_FILE}, manifest_path
         )
 
 if __name__ == "__main__":

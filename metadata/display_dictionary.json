@@ -1,6 +1,14 @@
 {
   "schema_version": 1,
   "outcomes": {
+    "mortality": {
+      "label": "In-hospital mortality",
+      "short_label": "Mortality"
+    },
+    "icu_admission": {
+      "label": "ICU admission",
+      "short_label": "ICU"
+    },
     "any_aki": {
       "label": "Any AKI",
       "short_label": "AKI"
@@ -44,6 +52,10 @@
     "autogluon": {
       "label": "AutoGluon Tabular",
       "short_label": "AutoGluon"
+    },
+    "logistic_regression": {
+      "label": "L2-regularized logistic regression",
+      "short_label": "Logistic regression"
     }
   },
   "feature_sets": {
@@ -129,7 +141,7 @@
     "Primus/AWP": {
       "label": "Airway pressure",
       "short_label": "AWP",
-      "unit": "cmH₂O"
+      "unit": "hPa"
     }
   },
   "catch22_statistics": {
@@ -276,7 +288,7 @@
       "short_label": "Anesthesia"
     },
     "preop_ecg": {
-      "label": "Preoperative ECG performed",
+      "label": "Preoperative ECG findings",
       "short_label": "Preop ECG"
     },
     "preop_pft": {
@@ -296,7 +308,7 @@
     "preop_pt": {
       "label": "Prothrombin time",
       "short_label": "PT",
-      "unit": "seconds"
+      "unit": "%"
     },
     "preop_aptt": {
       "label": "Activated partial thromboplastin time",
@@ -367,7 +379,7 @@
     "preop_crp": {
       "label": "C-reactive protein",
       "short_label": "CRP",
-      "unit": "mg/L"
+      "unit": "mg/dL"
     },
     "preop_lac": {
       "label": "Lactate",

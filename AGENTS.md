@@ -6,7 +6,7 @@ This repository generates reproducible results for postoperative acute kidney
 injury prediction from VitalDB intraoperative waveforms plus preoperative
 clinical data.
 
-- Primary path: Catch24/Catch22 feature extraction, XGBoost/EBM training, and
+- Primary path: Catch24/Catch22 feature extraction, LR/XGBoost/EBM training, and
   paper-facing reporting
 - Experimental path: Aeon models under `model_creation_aeon/`
 
@@ -39,11 +39,23 @@ Open the smallest relevant document first.
 ## Environment and execution
 
 - Use the Conda environment in `environment.yml`.
+- The supported default is Linux x86_64 / Python 3.12 CPU. The old GPU profile
+  in `environments/legacy-gpu.yml` is retained only as a reference.
 - Activate `aki_prediction_project` before running project commands.
-- Sync dependency changes with `conda env update -f environment.yml --prune`.
+- Preserve validated environments when changing dependencies. Create a separate
+  candidate; use `conda env update -f environment.yml --prune` only for disposable
+  candidates. Follow the lock-refresh and fresh-rebuild procedure in `locks/README.md`.
 - Install pinned test extras with
   `python -m pip install -r requirements-test.txt` when needed.
+- Keep runtime pins in `requirements-cpu.txt` and exact replay locks in `locks/`.
+  Use `xgboost-cpu`, never both `xgboost` distributions in one environment.
+- Use `bash scripts/cpu/verify-offline.sh` for environment checks without research
+  data. See `locks/README.md` for a fresh binary rebuild.
 - Do not introduce a parallel `venv` workflow unless explicitly asked.
+- Keep environment maintenance simple: pinned manifests, Conda recreation and
+  local checks. Do not add CI or binary-backup infrastructure unless requested.
+- Use the configured Git author identity. Never substitute a Codex identity;
+  resolve missing identity from the user's confirmed repository identity first.
 
 ## Repository map
 
@@ -87,6 +99,7 @@ Open the smallest relevant document first.
 
 ## Task-specific docs
 
+- `.agent/workflows/manuscript-reorientation.md`
 - `.agent/workflows/run-catch22-pipeline.md`
 - `.agent/workflows/check-catch22-leakage.md`
 - `.agent/workflows/summarize-catch22-change.md`

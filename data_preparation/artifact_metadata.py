@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -11,14 +12,25 @@ STEP_03_PREOP_ARTIFACT = "step_03_preop"
 STEP_05_MERGED_ARTIFACT = "step_05_merged"
 
 ARTIFACT_SCHEMA_VERSIONS = {
-    STEP_01_COHORT_ARTIFACT: 1,
-    STEP_03_PREOP_ARTIFACT: 1,
-    STEP_05_MERGED_ARTIFACT: 1,
+    # Version 4 preserves unknown derived inputs and rejects invalid ICU duration.
+    STEP_01_COHORT_ARTIFACT: 4,
+    STEP_03_PREOP_ARTIFACT: 4,
+    # Version 5 invalidates merged features from before anti-alias resampling.
+    STEP_05_MERGED_ARTIFACT: 5,
 }
 
 
 class ArtifactCompatibilityError(RuntimeError):
     """Raised when a processed artifact is stale or missing required metadata."""
+
+
+def file_sha256(path: Path) -> str:
+    """Hash large source/artifact files without loading them into memory."""
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
 
 
 def metadata_path_for(data_path: Path) -> Path:

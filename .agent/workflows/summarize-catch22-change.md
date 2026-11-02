@@ -8,4 +8,6 @@ description: Summarize Recent Changes to Catch22 Project
   - what changed and why,
   - which pipeline stages are affected,
   - any impact on reproducibility or interpretation.
-- Draft a concise note suitable for adding to the README under a "Changelog" or "Experiments" section.
+- Record material decisions and verification in the existing manuscript
+  evidence register; keep README focused on current commands rather than a
+  second chronological changelog.
