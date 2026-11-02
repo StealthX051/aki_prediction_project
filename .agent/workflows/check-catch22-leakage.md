@@ -16,6 +16,10 @@ Inspect the touched files plus the usual leakage hotspots:
 
 Verify all of the following:
 
+- Step 02 uses the documented integer-truncated native-grid operative slice before
+  interpolation, filtering and resampling. Filter/resampler boundary handling
+  uses only that segment. Forward-backward filtering and whole-operation
+  aggregation support operation-end prediction, not earlier or streaming claims.
 - The grouped holdout split is created once in Step 03 and propagated via the
   outcome-specific split columns (`split_group_any_aki`,
   `split_group_icu_admission`, and related fields).

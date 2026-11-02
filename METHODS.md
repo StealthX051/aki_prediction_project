@@ -168,9 +168,13 @@ These are ascertainment limitations of the exploratory mortality analysis.
 [VitalDB parameter definitions](https://vitaldb.net/dataset/).
 
 INSPIRE provides a documented link from VitalDB cases to hospital admission
-identifiers. That linkage has not yet been checked against this analysis. Any
-label review requires verified coverage, patient consistency, chronology and
-outcome definitions. A 30-day endpoint must not replace the in-hospital
+identifiers. An audit of release 1.4.2 linked 2,336/5,765 broader mortality
+operations, with a consistent patient crosswalk. Four linked source-negative
+operations had a recorded death after surgery within the admission; ten of
+twenty linked source-positive operations lacked a recorded death time. These
+discordances remain unresolved and no study labels were changed. Any label
+revision requires source clarification, chronology and ascertainment checks.
+A 30-day endpoint must not replace the in-hospital
 label. Admission/death timing and linkage diagnostics remain audit metadata,
 outside predictors. [Provider linkage presentation, pp. 33 and 46–47](https://www.ohdsi.org/wp-content/uploads/2025/06/OHDSI-APAC-Scientific-Forum-20250605.pdf),
 [INSPIRE access and identifier documentation](https://physionet.org/content/inspire/1.4.2/).
@@ -227,16 +231,32 @@ are described in [RESULTS.md](RESULTS.md).
 ## Waveform processing
 
 Waveform handling is implemented in `data_preparation/waveform_processing.py`
-and `data_preparation/step_02_catch_22.py`.
+and `data_preparation/step_02_catch_22.py`; channel settings are `WAVEFORM_SPECS`,
+and production window/full-case settings are in `data_preparation/inputs.py`.
 
 ### Signal extraction and quality handling
 
-Waveforms are restricted to `[opstart, opend)` before interpolation, filtering,
-resampling, or feature extraction. Features summarize the complete operation;
-the prediction time is operation end. This workflow does not evaluate
-predictions made earlier during surgery.
+The processing order for each operation/channel is: load the waveform on its
+configured native-rate grid, crop the operative interval, handle missing samples,
+filter the complete operative segment, resample to the channel target rate, then
+extract whole-case or windowed features. Filtering is not repeated separately
+inside each window.
 
-- segments are cut between `opstart` and `opend`
+The loader uses `vitaldb.load_case(..., interval=1/native_sr)`. ECG II is attempted
+first; V5 is tried only if loading fails or returns an empty/missing signal.
+A loaded II signal that later fails quality checks does not trigger a V5 retry.
+Feature rows retain the requested `SNUADC/ECG_II` channel key even when V5 was
+loaded, so that key alone does not identify the actual ECG lead.
+
+The intended interval is `[opstart, opend)`; its native-grid slice is
+`int(opstart*native_sr):int(opend*native_sr)`. Indices truncate fractional
+samples, so bounds need not coincide exactly with continuous-time operation
+timestamps. Cropping precedes interpolation, filtering, resampling and feature
+extraction. Features summarize the complete operation;
+the prediction time is operation end. Forward-backward filters use later samples
+within that segment, so this workflow does not evaluate earlier intraoperative
+or streaming predictions.
+
 - whole-operation segments with more than 5% unusable samples (NaN or infinity)
   are rejected; exactly 5% is allowed
 - remaining gaps are linearly interpolated before filtering and windowing;
@@ -246,27 +266,23 @@ predictions made earlier during surgery.
 
 ### Channel-specific filtering and resampling
 
-Channels use Butterworth filters with design order `N=4`, implemented as
-second-order sections with forward-backward filtering. The design order is
-reported explicitly because bandpass transformation and forward-backward
-application affect the resulting filter order/response.
+Channels use `scipy.signal.butter(N=4, ..., output="sos")` at the configured
+native rate, then `scipy.signal.sosfiltfilt` with its default edge handling on
+the operative segment. This is forward-backward, zero-phase filtering. The
+design order is reported explicitly because bandpass transformation and
+forward-backward application affect the resulting filter order/response.
 
-- PPG:
-  - source: `SNUADC/PLETH`
-  - bandpass 0.1-10 Hz; resampled from 500 Hz to 100 Hz
-- ECG:
-  - source: `SNUADC/ECG_II` or fallback `SNUADC/ECG_V5`
-  - bandpass 0.5-40 Hz; resampled from 500 Hz to 100 Hz
-- CO2:
-  - source: `Primus/CO2`
-  - low-pass 8 Hz; retained at 62.5 Hz
-- Airway pressure:
-  - source: `Primus/AWP`
-  - low-pass 12 Hz; retained at 62.5 Hz
+| Channel | VitalDB source | Native grid (Hz) | Butterworth design | Windowed rate (Hz) | Whole-case rate (Hz) |
+| --- | --- | ---: | --- | ---: | ---: |
+| PPG | `SNUADC/PLETH` | 500 | Bandpass 0.1–10 Hz | 100 | 10 |
+| ECG | `SNUADC/ECG_II`, loading fallback `SNUADC/ECG_V5` | 500 | Bandpass 0.5–40 Hz | 100 | 10 |
+| CO2 | `Primus/CO2` | 62.5 | Low-pass 8 Hz | 62.5 | 10 |
+| Airway pressure | `Primus/AWP` | 62.5 | Low-pass 12 Hz | 62.5 | 10 |
 
-For full-case feature extraction, filtered signals are downsampled to 10 Hz for
-computational efficiency. Windowed extraction uses the filtered signal at the
-channel-specific target rate before window aggregation.
+For full-case feature extraction, signals at the channel target rate undergo
+an additional resampling step to 10 Hz for computational efficiency. Windowed
+extraction instead uses that channel target rate directly. The same filtered
+operative segment supplies both enabled branches.
 All rate changes use SciPy polyphase resampling with a centered low-pass FIR
 filter (Kaiser window, beta 5.0), including 500→100 Hz and 100/62.5→10 Hz.
 Exact rational rate ratios preserve fractional sampling rates. Linear endpoint
@@ -274,9 +290,13 @@ extension uses only the operative segment; filter delay is compensated. The
 output grid starts at the first input sample and advances by `1 / target_sr`,
 with `ceil(n * target_sr / source_sr)` samples covering the half-open input
 duration. The final grid point can require endpoint extension beyond the last
-observed sample; no neighboring recording data are read. Same-rate resampling calls add no resampling FIR;
-channel-specific Butterworth filtering still applies. Full-series features describe this 10 Hz, band-limited
-representation; preservation of higher-frequency ECG morphology is not claimed.
+observed sample; extension never reads outside the cropped array. Linear extension here
+describes the resampler, separately from the Butterworth filter's edge handling.
+Same-rate resampling calls add no resampling FIR; channel-specific Butterworth
+filtering still applies. Full-series features describe this 10 Hz, band-limited
+representation, not native-resolution ECG morphology. Resampling has a defined
+constant-extension policy for singleton inputs; the preceding filter may reject
+signals too short for its required padding.
 The existing quality rules do not implement a separate spike/saturation detector
 or a blanket amplitude-based exclusion.
 
@@ -298,15 +318,15 @@ at least `1e-6` at its channel-specific target rate.
 
 The `windowed` branch uses:
 
-- 10-second windows
+- 10-second windows anchored at the first sample of the processed operative segment
 - nominal 5-second stride (approximately 50% overlap)
 - per-feature aggregation by mean, standard deviation, minimum, and maximum
 
-The stride uses integer sample counts: 500 samples at 100 Hz and 312 samples
-(4.992 seconds) at 62.5 Hz. Only complete windows are used; a terminal partial
-window is discarded. Windows
-with population standard deviation below `1e-6` are excluded. A channel with no
-valid windows fails extraction. PPG/ECG windows retain 100 Hz, and CO2/airway
+Window lengths are 1,000 samples at 100 Hz and 625 samples at 62.5 Hz. The stride
+uses integer sample counts: 500 samples at 100 Hz and 312 samples (4.992 seconds)
+at 62.5 Hz. Only complete windows are used; a terminal partial window is discarded.
+Windows with population standard deviation below `1e-6` are excluded. A channel
+with no valid windows fails extraction. PPG/ECG windows retain 100 Hz, and CO2/airway
 pressure windows retain 62.5 Hz. Whole-case versus windowed comparisons
 therefore change temporal resolution as well as windowing and aggregation;
 they are not an isolated test of windowing at a common sampling rate.
@@ -315,6 +335,39 @@ Aggregation uses float64 and sample standard deviation (`ddof=1`). A single
 valid window has missing standard deviation. Undefined descriptors in any
 included window propagate to that descriptor's aggregates; no available-window
 averaging or feature imputation is performed during extraction.
+Finite library outputs, including ordinary zeros and implementation-defined
+finite fallbacks, remain unchanged in production extraction. The duration
+pilot's separate fallback qualification mask is not part of this pathway.
+
+### Window-duration rationale and retrospective sensitivity analysis
+
+The windowed branch retains 10-second windows with a nominal five-second stride
+for this manuscript. Related VitalDB ECG and capnography research used identical
+segmentation for signal-quality assessment; this is implementation precedent,
+not validation of our Catch24 estimates or an optimal duration
+([Idrobo-Ávila et al., 2024](https://pmc.ncbi.nlm.nih.gov/articles/PMC11100950/)).
+
+The main AKI models preceded an exploratory, outcome-blinded duration pilot in
+120 patients from the main-shared AKI outer-fold-0 training partition. It compared
+10/20/40/80/160/320/640 seconds at four grid origins, without fitting models or
+using outcome values. Every duration met the pilot's numerical-availability gate;
+none met its complete grid-origin stability rule, and all 2,000 patient-bootstrap
+draws selected no candidate. Forty seconds was the shortest tested length at
+which all 24 descriptors individually achieved 95% coverage in every channel.
+The improvement concerned an embedding-distance descriptor in respiratory
+channels; it does not establish joint feature completeness or better prediction.
+
+The pilot cutoffs were engineering conventions, not validated clinical standards.
+Its qualification view masked verified implementation-defined finite fallbacks;
+production features and raw pilot values were preserved. Such fallbacks are not
+waveform errors by definition. Grid shifts, covered edges and window counts vary
+with duration; extrema can respond to real brief events, and zero between-patient
+IQR makes the normalized statistic unevaluable rather than proving unreliability.
+The retained duration is therefore a fixed engineering choice, not a pilot-selected
+optimum. No further duration ablation or threshold revision is planned for this
+manuscript. AKI predictive performance across durations remains untested. Exact
+methods, findings and limitations are in the
+[completed pilot record](.agent/workflows/window-duration-pilot.md).
 
 ### Wide-table assembly
 

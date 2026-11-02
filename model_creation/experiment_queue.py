@@ -50,7 +50,8 @@ def _assert_protected_paths(contexts: dict, catalogs: list[dict]) -> None:
 def _copy_verified_split_caches(catalogs: list[dict], destination: Path) -> None:
     import hashlib
     for catalog in catalogs:
-        source = Path(catalog["source_results_dir"]) / "metadata/split_cache"
+        source = Path(catalog.get("source_split_cache_dir") or
+                      Path(catalog["source_results_dir"]) / "metadata/split_cache")
         for path in source.glob("*.json"):
             envelope = json.loads(path.read_text())
             payload = envelope["payload"]
@@ -58,6 +59,8 @@ def _copy_verified_split_caches(catalogs: list[dict], destination: Path) -> None
             if envelope["sha256"] != hashlib.sha256(encoded).hexdigest() or payload["key"] != path.stem:
                 raise ValueError(f"Protected split cache failed integrity validation: {path}")
             target = destination / path.name
+            if target.exists() and target.read_bytes() != path.read_bytes():
+                raise ValueError(f"Protected split caches disagree: {path.name}")
             if not target.exists():
                 destination.mkdir(parents=True, exist_ok=True)
                 temporary = target.with_suffix(".json.tmp")
@@ -126,6 +129,18 @@ def _completed_reference(args, config: dict, context: dict, saved: dict | None =
     return record
 
 
+def _verify_reused_fold_plan(plan: dict, configurations: list[dict]) -> None:
+    """New feature comparisons must share the protected core's outer folds."""
+    hashes = plan["fold_assignment_hashes"]
+    for config in configurations:
+        reference = config.get("reuse_reference")
+        if reference:
+            fp = reference["validation_fingerprint"]
+            key = "/".join(fp[field] for field in ("cohort_scope", "outcome", "branch"))
+            if key in hashes and hashes[key] != fp["fold_assignment_hash"]:
+                raise ValueError("Supplementary fold assignments differ from the protected core")
+
+
 def _verify_holdout(directory: Path, identity: dict) -> dict:
     import pandas as pd
     from data_preparation.artifact_metadata import file_sha256
@@ -147,7 +162,10 @@ def _verify_holdout(directory: Path, identity: dict) -> dict:
 
 def execute(args) -> int:
     import run_catch22 as launcher
-    from model_creation.run_inventory import configuration_key, import_legacy_inventory, validate_reviewed_extension
+    from model_creation.run_inventory import (
+        configuration_key, import_completed_inventory, validate_completed_reference_request,
+        validate_reviewed_extension,
+    )
     from model_creation.split_plan import prepare_split_plan
 
     if args.smoke:
@@ -189,8 +207,10 @@ def execute(args) -> int:
                            "path": layout.results_dir / "run_manifest.json"}
         configurations.extend(configs)
 
-    catalogs = [import_legacy_inventory(Path(source), processed_dir=next(iter(contexts.values()))["layout"].processed_dir)
-                for source in args.reuse_from]
+    catalogs = [catalog for source in args.reuse_from
+                for catalog in import_completed_inventory(
+                    Path(source), processed_dir=next(iter(contexts.values()))["layout"].processed_dir,
+                    scopes=scopes)]
     imported = {key: value for catalog in catalogs for key, value in catalog["configurations"].items()}
     if len(imported) != sum(len(c["configurations"]) for c in catalogs):
         raise ValueError("Duplicate protected configurations in reuse inventories")
@@ -214,8 +234,19 @@ def execute(args) -> int:
                 raise ValueError("Protected HPO budget differs from requested configuration")
             config.update(artifact_path=reference["configuration_dir"], reuse_reference=reference)
     for context in contexts.values():
-        if catalogs:
-            context["manifest"]["compatibility_attestation"] = dict(catalogs[0]["compatibility_attestation"])
+        prefix = context["manifest"]["cohort_scope"] + "/"
+        # A subset request may retain imported core configurations from an
+        # earlier manifest. Preserve their scope's attestation on resume too.
+        matching = [catalog for catalog in catalogs
+                    if any(key.startswith(prefix) for key in catalog["configurations"])]
+        if len(matching) > 1:
+            raise ValueError("One scope cannot combine different protected source studies")
+        if matching:
+            attestation = dict(matching[0]["compatibility_attestation"])
+            context["manifest"]["compatibility_attestation"] = attestation
+            for config in context["manifest"]["configurations"]:
+                if "reuse_reference" in config:
+                    validate_completed_reference_request(config, attestation)
     if args.dry_run and not args.rerun_completed:
         for config in configurations:
             if "reuse_reference" not in config:
@@ -260,7 +291,7 @@ def execute(args) -> int:
         launcher._write_manifest(control / "execution_plan.json", summary)
         identity = reuse_target_identity or launcher._study_identity()
         for context in contexts.values():
-            if catalogs:
+            if "compatibility_attestation" in context["manifest"]:
                 context["manifest"]["compatibility_attestation"]["target_study_identity"] = identity
         jobs, lookup, failed_scopes = [], {}, set()
         for scope, context in contexts.items():
@@ -331,6 +362,7 @@ def execute(args) -> int:
                                 layout.processed_dir, pending, control / "split_cache", outer_folds=args.outer_folds,
                                 inner_folds=args.inner_folds, calibration_folds=args.calibration_folds,
                                 workers=min(8, summary["cpu_budget"]))
+                            _verify_reused_fold_plan(plan, manifest["configurations"])
                             plan["fold_assignment_hashes"] = {**old_hashes, **plan.get("fold_assignment_hashes", {})}
                             manifest["split_plan"] = plan
                     except ValueError as exc:

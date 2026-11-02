@@ -353,8 +353,8 @@ def _validate_run_manifest(prediction_sets: List[PredictionSet], path: Path, *, 
         config = config_by_key.get(key, {})
         if config.get("reuse_reference"):
             try:
-                from model_creation.run_inventory import verify_legacy_reference
-                reference = verify_legacy_reference(config, manifest.get("compatibility_attestation", {}), expected_protocol)
+                from model_creation.run_inventory import verify_completed_reference
+                reference = verify_completed_reference(config, manifest.get("compatibility_attestation", {}), expected_protocol)
             except (ValueError, OSError, KeyError) as exc:
                 raise ValidationError(f"Invalid protected reference: {metadata_path}: {exc}") from exc
             if ps.path.resolve() != Path(reference["prediction_path"]):

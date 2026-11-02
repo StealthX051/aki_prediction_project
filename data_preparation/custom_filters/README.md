@@ -1,17 +1,18 @@
-# Custom cohort filters
+# Historical cohort helpers
 
-Functions in this folder are imported by `data_preparation/inputs.py` and
-applied inside `step_01_cohort_construction.py`. Each helper should take a
-`pd.DataFrame` and return a new `pd.DataFrame`, leaving index alignment intact.
-Current filters include:
+These modules are retained for historical reference. Current `inputs.py` and
+Step 01 do not import them. They are not the production waveform-filtering path;
+signal filters and resampling are implemented in
+[`waveform_processing.py`](../waveform_processing.py) and described in
+[METHODS.md](../../METHODS.md#waveform-processing).
 
-- `add_aki_label`: Derives `aki_label` from postoperative creatinine trends.
-- `filter_preop_cr`: Drops AKI-ineligible cases with baseline creatinine above
-  the `4.0 mg/dL` threshold after the earlier mandatory-field completeness check.
-- `filter_postop_cr`: Removes cases lacking postoperative creatinine needed for
-  adjudication.
-- `ensure_sample_independence`: Enforces sampling independence before the
-  train/test split.
+In particular, the historical `filter_postop_cr` uses a seven-day lab window,
+and `ensure_sample_independence` selects one operation per patient. Neither
+defines the current analysis. The production pipeline retains repeat operations,
+groups them by patient during validation, and applies outcome-specific
+eligibility with the documented 72-hour AKI ascertainment horizon.
 
-Add new filters as separate modules in this directory and import them in
-`inputs.py` to include them in the cohort pipeline.
+Active cohort/outcome handling is in
+[`step_01_cohort_construction.py`](../step_01_cohort_construction.py) and
+[`aki_cohort.py`](../aki_cohort.py). Follow [METHODS.md](../../METHODS.md) for
+scientific definitions rather than enabling these legacy helpers.

@@ -35,6 +35,9 @@ SOURCE_NAMES = {
     "windowed": "aki_features_master_wide_windowed.csv",
 }
 TARGETS = {"any_aki": "aki_label", "icu_admission": "y_icu_admit", "mortality": "y_inhosp_mortality"}
+EXTENSION_OUTCOMES = {"icu_waveform_sensitivity": "icu_admission",
+                      "mortality_waveform_sensitivity": "mortality"}
+EXTENSION_ADAPTER = "reviewed-extension-core-supplement-v1"
 
 
 def configuration_key(config: dict, scope: str | None = None) -> str:
@@ -321,3 +324,162 @@ def import_legacy_inventory(source: Path, *, processed_dir: Path | None = None) 
             "does_not_authorize": ["checkpoint fingerprint relaxation", "cross-cohort fitted-model reuse"],
         },
     }
+
+
+def _validate_extension_fingerprint(fp: dict, identity: dict) -> None:
+    """Keep reviewed extension budgets, preprocessing and numerical settings fixed."""
+    validate_reviewed_extension(identity)
+    scope, family = fp.get("cohort_scope"), fp.get("model_type")
+    if scope not in EXTENSION_OUTCOMES or family not in {"logistic_regression", "xgboost", "ebm"}:
+        raise ValueError("Unsupported completed extension scope or model family")
+    native, blas = (4 if family == "xgboost" else 12), (4 if family == "logistic_regression" else 1)
+    required = {
+        **identity, "outcome": EXTENSION_OUTCOMES[scope],
+        "validation_scheme": "nested_cv", "diagnostic": False,
+        "outer_folds": 5, "inner_folds": 3, "calibration_folds": 5, "repeats": 1,
+        "checkpoint_bundle_protocol_version": 2, "base_random_state": 42,
+        "n_trials": 20 if family == "logistic_regression" else 50,
+        "preserve_nan": True, "legacy_imputation": False, "compute_profile": "manuscript",
+        "threads_per_model": native,
+        "thread_environment": {"OMP_NUM_THREADS": str(native), "NUMBA_NUM_THREADS": str(native),
+                               "OPENBLAS_NUM_THREADS": str(blas), "MKL_NUM_THREADS": str(blas)},
+    }
+    if not identity.get("code_revision"):
+        raise ValueError("Completed extension is missing its original source revision")
+    for field, value in required.items():
+        if fp.get(field) != value:
+            raise ValueError(f"Unapproved completed extension setting: {field}")
+
+
+def _verify_extension_config(config: dict, identity: dict) -> None:
+    reference = config.get("reuse_reference") or config.get("completed_reference", {})
+    fp = reference.get("validation_fingerprint", {})
+    _validate_extension_fingerprint(fp, identity)
+    if reference.get("key") != configuration_key(config) or configuration_key(fp) != configuration_key(config):
+        raise ValueError("Completed extension reference logical identity differs from configuration")
+    if config.get("n_trials") != fp["n_trials"]:
+        raise ValueError("Completed extension HPO budget differs from requested configuration")
+    resources = config.get("resources", {})
+    if (resources.get("threads_per_model") != fp["threads_per_model"]
+            or str(resources.get("blas_threads")) != fp["thread_environment"]["OPENBLAS_NUM_THREADS"]):
+        raise ValueError("Completed extension numerical resources differ from requested configuration")
+
+
+def validate_completed_reference_request(config: dict, attestation: dict) -> None:
+    """Reject incompatible modern reuse requests before queue writes or new fits."""
+    if attestation.get("adapter") == EXTENSION_ADAPTER:
+        _verify_extension_config(config, attestation.get("source_study_identity", {}))
+
+
+def _import_extension_inventory(results: Path, processed_dir: Path | None) -> dict:
+    manifest_path = results / "run_manifest.json"
+    manifest_hash = file_sha256(manifest_path)
+    manifest = _read_json(manifest_path)
+    scope = manifest.get("cohort_scope")
+    if scope not in EXTENSION_OUTCOMES:
+        raise ValueError("Only reviewed broader ICU/mortality core scopes can be imported")
+    if manifest.get("status") != "validated" or manifest.get("failures"):
+        raise ValueError("Completed extension is not a validated complete study")
+    for field, value in {"validation_scheme": "nested_cv", "diagnostic": False,
+                         "outer_folds": 5, "inner_folds": 3, "calibration_folds": 5, "repeats": 1}.items():
+        if manifest.get(field) != value:
+            raise ValueError(f"Completed extension manifest has unapproved {field}")
+    identity = manifest.get("study_identity", {})
+    validate_reviewed_extension(identity)
+    expected = set(itertools.product(
+        (scope,), ("logistic_regression", "xgboost", "ebm"), (EXTENSION_OUTCOMES[scope],),
+        ("non_windowed", "windowed"), ("preop_only", "all_waveforms", "preop_and_all_waveforms")))
+    configs = manifest.get("configurations", [])
+    if len(configs) != 18 or {tuple(c.get(field) for field in IDENTITY_FIELDS) for c in configs} != expected:
+        raise ValueError("Completed extension must contain exactly the approved 18 core configurations")
+    plan = manifest.get("split_plan", {})
+    if plan.get("status") != "validated":
+        raise ValueError("Completed extension is missing a validated frozen split plan")
+    processed = Path(processed_dir or manifest["processed_dir"]).resolve()
+    datasets = {branch: pd.read_csv(processed / name) for branch, name in SOURCE_NAMES.items()}
+    inventory = {}
+    for config in configs:
+        _verify_extension_config(config, identity)
+        reference = config["completed_reference"]
+        directory = results.joinpath("models", *(config[field] for field in IDENTITY_FIELDS[1:])).resolve()
+        if reference.get("configuration_dir") != str(directory):
+            raise ValueError("Completed extension reference points outside its source configuration")
+        record = verify_completed_configuration(
+            directory, expected_fingerprint=reference["validation_fingerprint"],
+            dataset_path=processed / SOURCE_NAMES[config["branch"]], dataset=datasets[config["branch"]])
+        if record != reference:
+            raise ValueError("Completed extension reference changed since source validation")
+        fp = record["validation_fingerprint"]
+        roster = manifest.get("branch_rosters", {}).get(config["branch"], {})
+        if (roster.get("dataset_sha256") != fp["dataset_hash"]
+                or roster.get("selected_case_hash") != fp["selected_case_hash"]):
+            raise ValueError("Completed extension branch roster differs from model input")
+        split_key = "/".join(config[field] for field in ("cohort_scope", "outcome", "branch"))
+        if plan.get("fold_assignment_hashes", {}).get(split_key) != fp["fold_assignment_hash"]:
+            raise ValueError("Completed extension models differ from frozen outcome/branch folds")
+        inventory[record["key"]] = record
+    if file_sha256(manifest_path) != manifest_hash:
+        raise ValueError("Completed extension manifest changed during import")
+    return {
+        "inventory_version": 1, "cohort_scope": scope, "source_results_dir": str(results),
+        "source_manifest_sha256": manifest_hash,
+        "source_split_cache_dir": plan.get("cache_dir"), "configurations": inventory,
+        "compatibility_attestation": {
+            "adapter": EXTENSION_ADAPTER, "source_study_identity": identity,
+            "source_preserved_read_only": True,
+            "validation": "original fingerprints and bundle hashes, source truth/rosters, patient separation and frozen fold assignment",
+            "allowed_changes": ["configuration scheduling", "resource admission", "additional feature comparisons"],
+            "does_not_authorize": ["checkpoint fingerprint relaxation", "cross-cohort fitted-model reuse"],
+        },
+    }
+
+
+def import_completed_inventory(source: Path, *, processed_dir: Path | None = None,
+                               scopes: list[str] | None = None) -> list[dict]:
+    """Import scoped completed cores read-only; preserve the legacy main adapter."""
+    source = Path(source).resolve()
+    if (source / "run_manifest.json").is_file():
+        manifest = _read_json(source / "run_manifest.json")
+        if manifest.get("study_identity", {}).get("code_hash") == LEGACY_CODE_HASH:
+            return [import_legacy_inventory(source, processed_dir=processed_dir)]
+        if scopes is not None and manifest.get("cohort_scope") not in scopes:
+            raise ValueError("Completed source scope is not among requested scopes")
+        return [_import_extension_inventory(source, processed_dir)]
+    base = source / "results/catch22/experiments"
+    main = base / "main_shared/nested_cv"
+    extension = [base / scope / "nested_cv" for scope in EXTENSION_OUTCOMES
+                 if (base / scope / "nested_cv/run_manifest.json").is_file()]
+    if (main / "run_manifest.json").is_file():
+        if extension:
+            raise ValueError("Mixed main/extension source roots must be imported separately")
+        # Legacy protection remains checked even if this request fits only new scopes.
+        return [import_legacy_inventory(source, processed_dir=processed_dir)]
+    selected = [path for path in extension if scopes is None or path.parent.name in scopes]
+    if not selected:
+        raise ValueError("No completed source manifests for the requested scopes")
+    return [_import_extension_inventory(path, processed_dir) for path in selected]
+
+
+def verify_completed_reference(config: dict, attestation: dict, target_identity: dict) -> dict:
+    """Dispatch source-specific reuse without rewriting original fingerprints."""
+    if attestation.get("adapter") != EXTENSION_ADAPTER:
+        return verify_legacy_reference(config, attestation, target_identity)
+    if attestation.get("target_study_identity") != target_identity:
+        raise ValueError("Missing approved source-to-target compatibility attestation")
+    identity = attestation.get("source_study_identity", {})
+    validate_reviewed_extension(identity)
+    validate_reviewed_extension(target_identity)
+    validate_completed_reference_request(config, attestation)
+    reference = config["reuse_reference"]
+    directory = Path(config["artifact_path"]).resolve()
+    if str(directory) != reference.get("configuration_dir"):
+        raise ValueError("External reference directory differs from imported inventory")
+    inputs = [Path(path) for path in reference.get("artifact_sha256", {})
+              if Path(path).name == SOURCE_NAMES.get(config["branch"])]
+    if len(inputs) != 1:
+        raise ValueError("External reference is missing its verified modeling input")
+    record = verify_completed_configuration(
+        directory, expected_fingerprint=reference["validation_fingerprint"], dataset_path=inputs[0])
+    if record != reference:
+        raise ValueError("External reference changed since inventory import")
+    return record

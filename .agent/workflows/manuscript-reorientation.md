@@ -10,7 +10,12 @@ identical before optimization benchmarking. The optimized scheduler and broader
 ICU/mortality extension completed, including the full-budget equivalence gate,
 36 new configurations and 180 verified outer-fold bundles. The user authorized
 the 144 remaining main supplementary configurations on October 31, 2026; the
-batch is running in tmux with the completed 36 main configurations reused.
+batch ran in tmux with the completed 36 main configurations reused.
+The main supplementary batch completed successfully on November 1 at 02:02 PST
+(144 new configurations plus 36 reused cores). The broader ICU supplementary
+batch also completed on November 1; its separate record is below. The duration
+search is closed for this manuscript: retain 10/5 seconds and document the
+completed outcome-blinded pilot without claiming optimality.
 Main-core refits remain excluded. Mortality linkage verification continues
 separately without changing labels or running additional mortality models.
 Drive/email/manuscript external writes remain separate. This is the single
@@ -41,6 +46,13 @@ use interpolation/endpoint filling. There is no contiguous-gap cap or complete
 spike/saturation detector. A 72-hour creatinine result does not guarantee 48-hour coverage.
 These prespecified limitations remain explicit rather than being silently changed.
 The 10 Hz representation does not preserve higher-frequency ECG morphology.
+The [production processing contract](../../METHODS.md#waveform-processing)
+records native-grid loading, ECG loading-only substitution, integer-truncated
+operative cropping, interpolation, operation-wide forward-backward filtering,
+anti-alias resampling and the separate branch rates. Windowing occurs after
+operation-wide filtering. Finite library outputs remain unchanged in production;
+the pilot's qualification masks are diagnostic only. Historical helpers under
+`custom_filters/` do not define the active signal or cohort pathway.
 Additional model families, longer windows, Aeon expansion, and post-hoc
 monotonicity are outside the definitive pathway.
 
@@ -578,13 +590,190 @@ creatinine surveillance. These are questions, not established benefits. Compare
 source definitions, observation windows, missingness and linkage coverage first.
 Discuss whether additional broader ICU/mortality waveform ablations/windowed
 comparisons answer a worthwhile question given existing core results, rare death
-counts and compute cost. No additional extension supplementary grid is currently
-selected or authorized. Coding/audits and planning can proceed while the main
-supplements run; preserve completed results and label any revised-outcome study
-as a separate analysis.
+counts and compute cost. At this handoff no extension supplementary grid had
+been authorized; the later completed ICU supplement is recorded below. Mortality
+supplements remain unstarted. Preserve completed results and label any
+revised-outcome study as a separate analysis.
 
 Primary sources for verification:
 [VitalDB codebook](https://vitaldb.net/dataset/),
 [INSPIRE 1.4.2](https://physionet.org/content/inspire/1.4.2/),
 [creator presentation, pp. 33 and 46–47](https://www.ohdsi.org/wp-content/uploads/2025/06/OHDSI-APAC-Scientific-Forum-20250605.pdf).
 Keep credentialed INSPIRE data and generated model artifacts out of Git.
+
+### Linkage audit follow-up (October 31, 2026, PDT)
+
+Workspace utility: `scripts/audit_inspire_linkage.py`; five focused synthetic
+tests pass. Aggregate evidence is in
+`outputs/audits/inspire-linkage-20261101.json` (ignored by Git). Explicit inputs,
+release checksums and before/after input hashes are checked; the utility does
+not import pipeline configuration, derive replacement labels or export records.
+
+- INSPIRE links 2,595/6,388 source operations, 1,437/3,571 main operations and
+  2,336/5,765 broader ICU/mortality operations. Linked patient crosswalks are
+  one-to-one; within linked admissions, admission/discharge times are consistent.
+- Broader mortality: four source-negative operations have a recorded death
+  after operation end within the admission; ten of twenty linked source-positive
+  operations have no recorded death time. Treat these as unresolved discordances.
+  Only one of six mixed-flag patients is fully linked, with separate admissions;
+  none of five repeat-positive patients has all positive operations linked.
+- Linked/unmatched broader mortality prevalence is 20/2,336 versus 32/3,429;
+  ICU prevalence is 407/2,336 versus 636/3,429. Both groups have median age 59
+  among numeric ages; seven unmatched ages are censored/nonnumeric. These checks
+  do not establish representative linkage. Patients can occur in both groups.
+- INSPIRE times are patient-relative minutes, unlike VitalDB case-relative
+  seconds. Median absolute operation-duration disagreement is five minutes.
+  ICU timing is documented for transfers within 24 hours, and some actual times
+  fall outside that horizon or the linked admission. Do not substitute it for
+  the current ICU LOS endpoint. Death times also require admission checks.
+- Among 2,594 source-linked operations with valid stay chronology, 1,780 have
+  postoperative creatinine within 48 hours, 1,800 within 72 hours and 1,818 within
+  seven days, ending follow-up at discharge. Values are binned/clipped; counts
+  describe observed surveillance, not complete ascertainment or new AKI labels.
+- Saved mortality core results have 9-10 positive patients per outer test fold;
+  all six combined-minus-preop AP and AUROC intervals cross zero. Prioritize
+  ascertainment over additional mortality fits. A limited broader ICU sensor
+  comparison could answer a specific exploratory question after discussion;
+  neither a new outcome study nor any extra grid is authorized.
+
+The live frozen source copy passed all 155 launch-authorized file hashes.
+At 8:51 PM PDT the supplementary scheduler had two configurations complete,
+eight running and no recorded failures. Eleven of twelve INSPIRE manifest files
+passed checksums; completed gzip files passed integrity checks. Ward vitals was
+still growing and wget remained active. Recheck these snapshots before acting;
+do not assume a completed download or promise monitoring after the turn ends.
+
+### Completed INSPIRE preparation (October 31, 2026, PDT)
+
+The user authorized extraction/preparation and a linkage recheck. All twelve
+release checksums pass. `scripts/prepare_inspire.py` extracts six byte-preserved
+CSV tables with gzip integrity, row counts and hashes into
+`/media/volume/catch22/data/inspire/prepared-1.4.2-v1/tables`. Compressed originals
+remain in `inspire/1.4.2`. The preparation root contains a README, readiness
+record, `linkage/audit.json` and a private 6,388-row case/admission crosswalk;
+these remain outside Git and the study's predictors/labels. Audit reruns use
+original gzip inputs; extracted tables use `preparation_manifest.json` hashes.
+
+Coverage remains 2,595 source cases and 2,336 broader study operations. Sex
+agrees for all 2,595 links, ASA for 2,519/2,537 comparable records, and age
+differences fit INSPIRE's five-year bins. INSPIRE is a larger 2011-2020 hospital
+extract with exclusions and a public 50% patient sample, not a complete copy of
+the original VitalDB release. These facts do not fully explain the exact shortfall.
+Its 21,099 nonmissing case IDs include 7,261 negatives and span -32,763 to 32,767;
+18,504 IDs are outside the original VitalDB IDs. Their meaning remains unresolved;
+do not infer an expanded public release or apply arithmetic remapping. The
+[official-repository question](https://github.com/vitaldb/inspire/issues/3)
+has no maintainer clarification at this check. No labels or grids were changed.
+
+### Optional broader supplementary code prepared
+
+The user requested runnable code for possible broader ICU and mortality
+supplements, without authorizing fits. The existing full grid now supports
+verified read-only import of the optimized study's 18 completed cores per scope
+into a fresh output root. Original fingerprints, labels and folds are preserved;
+reporting validates each scope's source references. New fits must use the same
+outer folds as imported cores. README contains the dry-run command for either
+scope or both. Actual preflight resolved 180 configurations: 36 reused and 144
+pending (72 per scope); the proposed output root remained absent. Strict saved
+prediction reporting validation passed all 36 imported cores without fitting or
+bootstrap. No additional grid was launched.
+
+### Completed duration pilot: retain 10/5 seconds
+
+The duration search is closed for this manuscript. Retain 10-second windows with
+nominal five-second stride; do not add durations, retune gates, drop reducers or
+launch another duration grid. Forty seconds remains an exploratory alternative,
+not a selected or optimal replacement. Whole-case core contrasts remain primary;
+the windowed branch remains supplementary.
+
+The main AKI models preceded this exploratory pilot. No AKI outcomes, model
+scores or predictive fits informed its duration comparisons. The screen used
+120 distinct patients, one operation each, from the main-shared AKI/windowed
+outer-fold-0 training partition, and seven lengths through 640 seconds. It
+cannot retrospectively serve as the original window-selection procedure or
+select a replacement independent of all five existing outer-test partitions.
+
+The pilot completed November 1 at 01:16 PDT: 480 channel tasks, 475 frozen
+10-second baseline matches, five channels rejected by the existing >5%
+nonfinite-sample rule, and 120 paired synthetic traces. Every duration passed
+its availability gate. Forty seconds first achieved 95% numerical coverage for
+all 24 descriptors in every channel; the improvement concerned the respiratory
+embedding-distance descriptor. No duration passed the complete grid-origin rule;
+all 2,000 patient-bootstrap draws selected no candidate. Raw finite-only and
+matched-count diagnostics also selected none. These engineering thresholds
+have not been validated as clinical or prognostic acceptance criteria.
+
+This supports retaining a fixed representation without claiming optimality.
+Grid displacement, coverage and window counts change with duration; extrema
+can capture real events, and synthetic checks are not physiological validation.
+Implementation-defined finite fallbacks are not waveform errors by definition.
+Raw canonical values and the original failed selection rule remain preserved.
+An exact 10/5-second VitalDB segmentation precedent supports engineering
+plausibility, not Catch24-to-AKI validity. The complete methods, evidence and
+manuscript wording are in [the completed pilot record](window-duration-pilot.md).
+
+Artifact root:
+`/media/volume/catch22/data/aki_prediction_project/pilots/window-duration-v2`.
+Preserve its frozen `REPORT.md`, manifest, code and outputs. The partial v1 is
+also preserved; v2 reused 12 verified filtered signals. The adaptive scheduling
+handoff preserved 14 complete channel outputs and unchanged numerical functions;
+provenance is under `control/resource-adjustments/20261101T052748Z/`. Its 24
+focused tests passed and all 155 main supplementary source hashes matched.
+Resource files contain final snapshots, not complete pilot utilization histories.
+
+Pending follow-up, not yet performed: audit the embedding-distance descriptor
+in saved windowed AKI models across outer folds/families, including CO2/AWP
+mean/SD/min/max variants and associated missingness indicators where present.
+Use verified saved models and family-appropriate explanations without refitting
+or comparing importance magnitudes across families. Low importance reduces
+concern but does not prove harmlessness; high importance motivates checking the
+values' provenance, not automatic feature removal or a new model grid.
+
+### Completed broader ICU supplements
+
+The user explicitly authorized broader ICU supplements on November 1.
+Study: `/media/volume/catch22/data/aki_prediction_project/studies/manuscript-icu-supplementary-v1`;
+tmux: `vitaldb-icu-supplementary` (run/monitor), started 05:20 PST and
+completed successfully at 09:15 PST on November 1.
+Scope is only `icu_waveform_sensitivity/icu_admission`: 72 new configurations
+and 18 verified core references from `manuscript-optimized-v1`, both branches
+and all three model families. The separate frozen snapshot retains the reviewed
+modeling digest, original labels/rosters/folds, 5/3/5 validation, 20/50 HPO budgets,
+fixed estimator threads and 5,000 unstratified patient-cluster resamples.
+Adaptive budget 60 CPUs, maximum 12 simultaneous configurations. All 72 new
+configurations and reporting completed; the manifest validates all 90 logical
+configurations including reused cores. Preflight and 70 targeted runner/inventory
+tests passed. Status and provenance:
+`control/launch-status.json`, `active_scheduler.json`, `preflight.json`,
+`launch-authorization.json`, `launch.log`. Whole-machine CPU/memory history
+was recorded every ten seconds in `control/machine-usage.jsonl`.
+Additional mortality supplements remain unstarted.
+
+Historical main fitting telemetry (6h06m, excluding subsequent reporting) shows
+whole-machine CPU use averaging 87.3% of 64 CPUs; 91.0% excluding its first 15
+and last 30 minutes, and 53.7% in the last 30 minutes. This includes concurrent
+pilot work, not only model processes. Pilot-overlap estimates average 92.3%
+during adaptive extraction and 90.4% during synthetic work; overlap alignment
+uses approximate UTC anchoring of the elapsed-time log. Reproducible calculations
+and source hashes are saved under the new ICU study's `control/` as
+`window-duration-cpu-history.py` and `window-duration-cpu-history-20261101.json`.
+Do not treat final overwritten pilot telemetry as a full utilization history.
+
+
+## Final repository review before merge
+
+On November 1, 2026 (Pacific time), the final offline verification passed native
+library checks and all **629 tests** (71.40 seconds; no failures or skips), with
+no broken package requirements. Evidence: `/tmp/aki-cpu-offline.PXdPVBxO/`.
+Documentation links/anchors and whitespace checks passed. Independent reviews
+covered protected supplementary reuse, INSPIRE utilities and duration-pilot
+numerics/resume behavior.
+
+The review fixed missing audit statistics to serialize as strict JSON null and
+added checkpoint operation/channel identity checks plus exact assembled-array
+validation before pilot summaries. A read-only audit of the completed pilot
+verified all 480 channel checkpoints and every raw/audited/matched/phase slice;
+all 535 checked frozen source/control/pilot files and five frozen pilot inputs
+retained their hashes. No study results were recomputed or altered. These source
+hardening changes apply to future execution; historical snapshots remain frozen.
+The saved-model descriptor interpretation audit remains pending.

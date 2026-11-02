@@ -10,8 +10,9 @@ from data_preparation.artifact_metadata import file_sha256
 from data_preparation.cohort_scopes import selected_case_hash
 from model_creation.run_inventory import (
     LEGACY_CODE_HASH, LEGACY_ENVIRONMENT, LEGACY_REVISION, REVIEWED_EXTENSION_CODE_HASH,
-    configuration_key, import_legacy_inventory, verify_completed_configuration,
-    verify_legacy_reference,
+    configuration_key, import_completed_inventory, import_legacy_inventory,
+    validate_completed_reference_request, verify_completed_configuration,
+    verify_completed_reference, verify_legacy_reference,
 )
 
 
@@ -212,7 +213,7 @@ def test_main_reuse_rejects_unreviewed_modeling_before_writes_or_fits(tmp_path, 
     key = "main_shared/xgboost/any_aki/non_windowed/preop_only"
     catalog = {"source_results_dir": str(tmp_path / "protected/results/catch22/experiments/main_shared/nested_cv"),
                "configurations": {key: {"validation_fingerprint": {"n_trials": 50}}}}
-    monkeypatch.setattr(inventory, "import_legacy_inventory", lambda *a, **kw: catalog)
+    monkeypatch.setattr(inventory, "import_completed_inventory", lambda *a, **kw: [catalog])
     identities = []
     def unreviewed_identity():
         identities.append(True)
@@ -326,3 +327,143 @@ def test_current_skip_rejects_valid_completed_run_on_input_replaced_after_freeze
                "path": results / "manifest.json", "manifest": {"diagnostic": True}}
     with pytest.raises(ValueError, match="differs from frozen study manifest"):
         _completed_reference(args, config, context, saved)
+
+
+@pytest.fixture
+def extension_inventory(tmp_path, monkeypatch):
+    """Synthetic manifests exercise adapters; bundle integrity has real tests above."""
+    import copy
+    import itertools
+    import model_creation.run_inventory as inventory
+    root = tmp_path / "completed"
+    processed = tmp_path / "processed"
+    processed.mkdir()
+    data = pd.DataFrame({"caseid": [1, 2], "subjectid": [10, 20]})
+    for filename in inventory.SOURCE_NAMES.values():
+        data.to_csv(processed / filename, index=False)
+    identity = {"code_hash": REVIEWED_EXTENSION_CODE_HASH, "code_revision": "original-revision",
+                "environment": LEGACY_ENVIRONMENT, "validation_protocol_version": 4,
+                "preprocessing_protocol": "fold-local-v4-finite-numeric-schema"}
+    records, paths = {}, {}
+    for scope, outcome in inventory.EXTENSION_OUTCOMES.items():
+        results = root / "results/catch22/experiments" / scope / "nested_cv"
+        results.mkdir(parents=True)
+        configs, rosters, hashes = [], {}, {}
+        for family, branch, features in itertools.product(
+                ["logistic_regression", "xgboost", "ebm"], ["non_windowed", "windowed"],
+                ["preop_only", "all_waveforms", "preop_and_all_waveforms"]):
+            native, blas = (4 if family == "xgboost" else 12), (4 if family == "logistic_regression" else 1)
+            dataset = processed / inventory.SOURCE_NAMES[branch]
+            config = dict(cohort_scope=scope, outcome=outcome, model_type=family,
+                          branch=branch, feature_set=features, n_trials=20 if family == "logistic_regression" else 50,
+                          resources={"threads_per_model": native, "blas_threads": blas, "max_workers": 5})
+            fp = {**identity, **{k: config[k] for k in inventory.IDENTITY_FIELDS},
+                  "validation_scheme": "nested_cv", "outer_folds": 5, "inner_folds": 3,
+                  "calibration_folds": 5, "repeats": 1, "diagnostic": False,
+                  "checkpoint_bundle_protocol_version": 2, "base_random_state": 42,
+                  "n_trials": config["n_trials"], "threads_per_model": native,
+                  "preserve_nan": True, "legacy_imputation": False, "compute_profile": "manuscript",
+                  "thread_environment": {"OMP_NUM_THREADS": str(native), "NUMBA_NUM_THREADS": str(native),
+                                         "OPENBLAS_NUM_THREADS": str(blas), "MKL_NUM_THREADS": str(blas)},
+                  "dataset_hash": file_sha256(dataset), "selected_case_hash": selected_case_hash(data),
+                  "fold_assignment_hash": f"{scope}-{branch}-frozen-folds"}
+            directory = results / "models" / family / outcome / branch / features
+            record = {"key": configuration_key(config), "configuration_dir": str(directory),
+                      "validation_fingerprint": fp, "status": "verified_completed",
+                      "artifact_sha256": {str(dataset): fp["dataset_hash"]}}
+            records[str(directory)] = copy.deepcopy(record)
+            config["completed_reference"] = record
+            configs.append(config)
+            rosters[branch] = {"dataset_sha256": fp["dataset_hash"], "selected_case_hash": fp["selected_case_hash"]}
+            hashes[f"{scope}/{outcome}/{branch}"] = fp["fold_assignment_hash"]
+        manifest = {**{k: fp[k] for k in ["validation_scheme", "outer_folds", "inner_folds", "calibration_folds", "repeats", "diagnostic"]},
+                    "cohort_scope": scope, "status": "validated", "study_identity": identity,
+                    "processed_dir": str(processed), "branch_rosters": rosters, "configurations": configs,
+                    "split_plan": {"status": "validated", "cache_dir": str(root / "control/split_cache"),
+                                   "fold_assignment_hashes": hashes}}
+        paths[scope] = results / "run_manifest.json"
+        _write_json(paths[scope], manifest)
+    def verify(directory, *, expected_fingerprint=None, dataset_path=None, dataset=None, **kwargs):
+        record = copy.deepcopy(records[str(directory)])
+        assert expected_fingerprint == record["validation_fingerprint"]
+        assert file_sha256(dataset_path) == record["validation_fingerprint"]["dataset_hash"]
+        return record
+    monkeypatch.setattr(inventory, "verify_completed_configuration", verify)
+    return root, paths, records, identity
+
+
+def test_extension_import_preserves_scopes_originals_and_source_revisions(extension_inventory):
+    root, paths, records, _ = extension_inventory
+    before = {path: path.read_bytes() for path in root.rglob("*") if path.is_file()}
+    catalogs = import_completed_inventory(root)
+    assert [len(c["configurations"]) for c in catalogs] == [18, 18]
+    assert {k: v for c in catalogs for k, v in c["configurations"].items()} == {v["key"]: v for v in records.values()}
+    assert all(c["source_split_cache_dir"] == str(root / "control/split_cache") for c in catalogs)
+    assert before == {path: path.read_bytes() for path in before}
+    scope = "mortality_waveform_sensitivity"
+    assert len(import_completed_inventory(root, scopes=[scope])) == 1
+    assert import_completed_inventory(paths[scope].parent, scopes=[scope])[0]["cohort_scope"] == scope
+
+
+@pytest.mark.parametrize("change, message", [
+    ("status", "validated complete"), ("diagnostic", "unapproved diagnostic"),
+    ("code_hash", "reviewed modeling code hash"), ("missing_config", "18 core"),
+    ("roster", "branch roster"), ("split", "frozen outcome/branch folds"),
+    ("budget", "HPO budget"), ("resources", "numerical resources"),
+    ("scope", "18 core"), ("source_revision", "setting: code_revision"),
+])
+def test_extension_import_rejects_changed_science_or_manifest(extension_inventory, change, message):
+    root, paths, _, _ = extension_inventory
+    path = paths["icu_waveform_sensitivity"]
+    manifest = json.loads(path.read_text())
+    first = manifest["configurations"][0]
+    if change == "status": manifest["status"] = "running"
+    elif change == "diagnostic": manifest["diagnostic"] = True
+    elif change == "code_hash": manifest["study_identity"]["code_hash"] = "unreviewed"
+    elif change == "missing_config": manifest["configurations"].pop()
+    elif change == "roster": manifest["branch_rosters"]["non_windowed"]["selected_case_hash"] = "changed"
+    elif change == "split": manifest["split_plan"]["fold_assignment_hashes"] = {}
+    elif change == "budget": first["n_trials"] = 1
+    elif change == "resources": first["resources"]["blas_threads"] = 1
+    elif change == "scope": first["cohort_scope"] = "main_shared"
+    elif change == "source_revision": manifest["study_identity"]["code_revision"] = "changed"
+    _write_json(path, manifest)
+    with pytest.raises(ValueError, match=message):
+        import_completed_inventory(root, scopes=["icu_waveform_sensitivity"])
+
+
+def test_extension_reference_requires_scoped_identity_and_unchanged_hashes(extension_inventory, monkeypatch):
+    import copy
+    import model_creation.run_inventory as inventory
+    root, paths, _, identity = extension_inventory
+    catalog = import_completed_inventory(root, scopes=["icu_waveform_sensitivity"])[0]
+    config = copy.deepcopy(json.loads(paths["icu_waveform_sensitivity"].read_text())["configurations"][0])
+    config["reuse_reference"] = config.pop("completed_reference")
+    config["artifact_path"] = config["reuse_reference"]["configuration_dir"]
+    target = {**identity, "code_revision": "new-consumer-revision"}
+    attestation = {**catalog["compatibility_attestation"], "target_study_identity": target}
+    validate_completed_reference_request(config, attestation)
+    with pytest.raises(ValueError, match="numerical resources"):
+        validate_completed_reference_request({**config, "resources": {**config["resources"], "blas_threads": 1}}, attestation)
+    assert verify_completed_reference(config, attestation, target) == config["reuse_reference"]
+    assert config["reuse_reference"]["validation_fingerprint"]["code_revision"] == "original-revision"
+    with pytest.raises(ValueError, match="source-to-target"):
+        verify_completed_reference(config, attestation, {**target, "code_revision": "another"})
+    with pytest.raises(ValueError, match="logical identity"):
+        verify_completed_reference({**config, "cohort_scope": "mortality_waveform_sensitivity"}, attestation, target)
+    changed = copy.deepcopy(config["reuse_reference"])
+    changed["artifact_sha256"]["a-saved-model"] = "changed"
+    monkeypatch.setattr(inventory, "verify_completed_configuration", lambda *a, **kw: changed)
+    with pytest.raises(ValueError, match="changed since inventory"):
+        verify_completed_reference(config, attestation, target)
+
+
+def test_legacy_dispatch_remains_available_for_new_scopes(tmp_path, monkeypatch):
+    import model_creation.run_inventory as inventory
+    main = tmp_path / "results/catch22/experiments/main_shared/nested_cv"
+    main.mkdir(parents=True)
+    _write_json(main / "run_manifest.json", {"study_identity": {"code_hash": LEGACY_CODE_HASH}})
+    monkeypatch.setattr(inventory, "import_legacy_inventory", lambda *a, **kw: {"legacy": True})
+    assert import_completed_inventory(tmp_path, scopes=["mortality_waveform_sensitivity"]) == [{"legacy": True}]
+    monkeypatch.setattr(inventory, "verify_legacy_reference", lambda *a: {"legacy": True})
+    assert verify_completed_reference({}, {"adapter": "reviewed-fcff7c7-scheduler-scope-extension-v1"}, {}) == {"legacy": True}

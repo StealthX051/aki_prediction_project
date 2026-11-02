@@ -5,9 +5,11 @@ Scientific definitions and inference limits are in [METHODS.md](METHODS.md);
 execution and root selection are in [README.md](README.md).
 
 The 36-configuration main core study is complete at frozen revision `fcff7c7`.
-Broader ICU and exploratory mortality runs are held at readiness; their
-full-budget equivalence canary has not started. Historical and diagnostic
-outputs remain separate, explicitly labeled evidence.
+The numerical equivalence gate and broader ICU/exploratory mortality core studies
+completed, followed by 144 new main supplementary configurations and 72 new
+broader ICU supplementary configurations. Completed cores are reused as verified
+references. Additional mortality supplements remain unstarted. Historical and
+diagnostic outputs remain separate, explicitly labeled evidence.
 
 ## Layout and integrity
 
@@ -56,6 +58,14 @@ waveform extraction protocol version 3. Old waveform/merged artifacts require
 fresh extraction; changing a statistics-only protocol requires regenerating
 statistics, not fitting models again. Historical artifacts are never relabeled
 or upgraded in place.
+
+Step 02's per-branch extraction sidecars record cohort IDs/operative bounds via
+a roster hash, extraction source hashes, channel/filter specifications, rates,
+substitutions, library versions, anti-alias resampling and missing-value policies.
+They identify the original signal-processing contract in
+[METHODS.md](METHODS.md#waveform-processing). Production finite descriptors are
+preserved; the duration pilot's fallback-masked aggregates are separate diagnostic
+artifacts and must not replace the frozen modeling inputs.
 
 ## Regenerate from saved artifacts
 
@@ -143,6 +153,38 @@ Explanations describe fitted associations rather than causal mechanisms;
 logistic recalibration remains separate. Legacy single-model SHAP/EBM HTML
 exports are opt-in. Smoke outputs live only under their disposable `SMOKE_ROOT`.
 Aeon and archived outputs are outside the manuscript pathway.
+
+## Window-duration pilot and feature audit
+
+The manuscript retains the original 10/5-second windowed representation.
+The subsequent outcome-blinded duration pilot is a supplementary technical
+sensitivity analysis, not an AKI predictive ablation or prospective justification
+of the original choice. Its independent artifact root is
+`/media/volume/catch22/data/aki_prediction_project/pilots/window-duration-v2`:
+
+- `REPORT.md`: completed feature audit and 120 paired synthetic challenges.
+- `control/manifest.json` and `code/`: frozen sample, inputs, methods and software.
+- `channels/`, `grid_diagnostics.json`, `pilot.npz`: channel checkpoints, numerical
+  diagnostics and raw/audited aggregates. Five of 480 channels were rejected by
+  the existing missing-sample rule; 475 matched the frozen 10-second baseline.
+- `summary/{primary,finite_only,matched,first,middle,final}/`: recorded summaries,
+  descriptor metrics and availability. No primary candidate was selected in any
+  of 2,000 patient-bootstrap draws. All lengths passed the availability gate;
+  40 seconds first achieved 95% coverage for all 24 descriptors in every channel.
+
+Preserve this frozen report and its original rule. The current interpretation
+and decision are in [METHODS.md](METHODS.md#window-duration-rationale-and-retrospective-sensitivity-analysis)
+and the [completed pilot record](.agent/workflows/window-duration-pilot.md).
+No further duration experiments or gate revisions are planned for this manuscript.
+
+Pending follow-up: inspect `CO_Embed2_Dist_tau_d_expfit_meandiff` in the saved
+windowed AKI models, including all mean/SD/min/max variants for CO2/AWP and
+associated missingness indicators where present. Use verified saved outer-fold
+bundles and family-appropriate explanations across folds; do not refit, compare
+importance scales across families, or remove features on this basis. Low
+importance does not establish harmlessness; high importance motivates checking
+the values' provenance and interpretation. Implementation-defined fallback zeros
+are not automatically waveform errors. This audit has not yet been performed.
 
 ## Optimized extension and protected references
 

@@ -467,6 +467,64 @@ def test_mortality_scope_dry_run_has_exploratory_role_and_no_aki_requirement(tmp
     assert not root.exists()
 
 
+@pytest.mark.parametrize("scopes", [
+    ["icu_waveform_sensitivity"], ["mortality_waveform_sensitivity"],
+    ["icu_waveform_sensitivity", "mortality_waveform_sensitivity"],
+])
+@pytest.mark.parametrize("features", [[], ["--feature-sets", "preop_and_ecg"]], ids=["full", "subset"])
+def test_broader_full_supplements_reuse_core_without_fitting(scopes, features, tmp_path, monkeypatch, capsys):
+    import itertools
+    import json
+    from model_creation import experiment_queue, run_inventory
+    root = tmp_path / "future-supplements"
+    monkeypatch.setenv("AKI_ARTIFACT_ROOT", str(root))
+    for variable in ("RESULTS_DIR", "PAPER_DIR", "LOG_FILE"):
+        monkeypatch.delenv(variable, raising=False)
+    identity = {"code_hash": run_inventory.REVIEWED_EXTENSION_CODE_HASH,
+                "code_revision": "future-source", "environment": run_inventory.LEGACY_ENVIRONMENT,
+                "validation_protocol_version": 4,
+                "preprocessing_protocol": "fold-local-v4-finite-numeric-schema"}
+    monkeypatch.setattr(run_catch22, "_study_identity", lambda: identity)
+    catalogs = []
+    for scope in reversed(scopes):
+        outcome = "mortality" if scope.startswith("mortality") else "icu_admission"
+        source = tmp_path / "protected/results/catch22/experiments" / scope / "nested_cv"
+        records = {}
+        for family, branch, feature in itertools.product(
+            ["logistic_regression", "xgboost", "ebm"], ["non_windowed", "windowed"],
+            ["preop_only", "all_waveforms", "preop_and_all_waveforms"],
+        ):
+            config = dict(cohort_scope=scope, outcome=outcome, model_type=family,
+                          branch=branch, feature_set=feature)
+            records[run_inventory.configuration_key(config)] = {
+                "configuration_dir": str(source / "models" / family / outcome / branch / feature),
+                "validation_fingerprint": {"n_trials": 20 if family == "logistic_regression" else 50},
+            }
+        catalogs.append({"source_results_dir": str(source), "configurations": records,
+                         "compatibility_attestation": {"adapter": "reviewed-extension-core-supplement-v1",
+                            "source_study_identity": {**identity, "code_revision": scope}}})
+    monkeypatch.setattr(run_inventory, "import_completed_inventory", lambda *a, **k: catalogs)
+    checked = []
+    def validate_request(config, attestation):
+        assert config["cohort_scope"] == attestation["source_study_identity"]["code_revision"]
+        checked.append(config)
+    monkeypatch.setattr(run_inventory, "validate_completed_reference_request", validate_request)
+    monkeypatch.setattr(run_catch22, "run_module", lambda *a, **k: pytest.fail("Dry run executed work"))
+    monkeypatch.setattr(experiment_queue, "run_configurations", lambda *a, **k: pytest.fail("Dry run queued fits"))
+    assert run_catch22.main(["experiments", "--preset", "full", "--cohort-scopes", *scopes,
+                            "--prep", "skip", "--reuse-from", str(tmp_path / "protected"), *features, "--dry-run"]) == 0
+    plan = json.loads(capsys.readouterr().out)
+    assert len(plan["configurations"]) == (6 if features else 90) * len(scopes)
+    assert plan["requested_reused_configurations"] == (0 if features else 18) * len(scopes)
+    assert plan["pending_configurations"] == (6 if features else 72) * len(scopes)
+    assert len(checked) == plan["requested_reused_configurations"]
+    assert plan["compatibility_attestation"]["source_study_identity"]["code_revision"] == scopes[0]
+    for config in plan["configurations"]:
+        assert ("reuse_reference" in config) == (config["feature_set"] in run_catch22.CORE_FEATURE_SETS)
+        assert config["outcome"] == ("mortality" if config["cohort_scope"].startswith("mortality") else "icu_admission")
+    assert not root.exists() and not (tmp_path / "protected").exists()
+
+
 @pytest.mark.parametrize("arguments", [
     ["--cpu-budget", "0"], ["--max-concurrent-configs", "0"],
     ["--blas-threads", "0"], ["--rerun-completed"],
@@ -477,6 +535,17 @@ def test_queue_rejects_invalid_controls_before_writes(arguments, tmp_path, monke
     monkeypatch.setenv("AKI_ARTIFACT_ROOT", str(root))
     assert run_catch22.main(["experiments", "--dry-run", *arguments]) == 1
     assert not root.exists()
+
+
+def test_supplementary_fold_plan_must_match_reused_core():
+    from model_creation.experiment_queue import _verify_reused_fold_plan
+    reference = {"reuse_reference": {"validation_fingerprint": {
+        "cohort_scope": "mortality_waveform_sensitivity", "outcome": "mortality",
+        "branch": "non_windowed", "fold_assignment_hash": "frozen-patient-folds"}}}
+    key = "mortality_waveform_sensitivity/mortality/non_windowed"
+    _verify_reused_fold_plan({"fold_assignment_hashes": {key: "frozen-patient-folds"}}, [reference])
+    with pytest.raises(ValueError, match="fold assignments differ"):
+        _verify_reused_fold_plan({"fold_assignment_hashes": {key: "different-patient-folds"}}, [reference])
 
 
 @pytest.mark.parametrize("exit_code", [0, None], ids=["missing-bundles", "spawn-failure"])

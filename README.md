@@ -4,15 +4,17 @@ Postoperative AKI and ICU-admission prediction from VitalDB intraoperative
 Catch24 waveform features and preoperative clinical data. The manuscript path
 uses logistic regression, XGBoost, and EBM. Aeon remains experimental.
 
-The main core study has completed (36 configurations at frozen revision
-`fcff7c7`). The optimized scheduler and broader ICU/mortality extension use a
-fresh study root and a full-budget numerical equivalence gate. Existing main
-artifacts remain read-only. See the [evidence register](.agent/workflows/manuscript-reorientation.md).
+The main core study completed (36 configurations at frozen revision `fcff7c7`),
+followed by the numerical equivalence gate, broader ICU/mortality cores, main
+supplements and broader ICU supplements. Frozen artifacts remain read-only.
+See the [evidence register](.agent/workflows/manuscript-reorientation.md).
 
 - [METHODS.md](METHODS.md): scientific definitions and analysis protocol
 - [RESULTS.md](RESULTS.md): saved artifacts and paper-output regeneration
 - [AGENTS.md](AGENTS.md): repository working rules
 - [Preprocessing stages](data_preparation/README.md)
+- [Original waveform processing](METHODS.md#waveform-processing): loading,
+  operative cropping, quality handling, filters, anti-alias resampling and branch rates
 - [Experimental Aeon workflow](experimental/aeon/README.md)
 
 ## Environment and offline checks
@@ -147,11 +149,12 @@ reuse main core references. Deliberate repeats require a fresh output root,
 `--rerun-completed --no-resume`, and no imported inventory. Extraction retains
 its independent `AKI_EXTRACTION_WORKERS` budget; this extension reuses features.
 
-## Active main supplementary run
+## Completed main supplementary run
 
 The 144 remaining main configurations were authorized and started in tmux
 session `vitaldb-supplementary`. They reuse the verified 36 main core
 configurations, sealed processed features and the validated adaptive scheduler.
+All 144 new configurations and reporting completed successfully November 1.
 The completed ICU/mortality study remains separate. Outputs are under
 `/media/volume/catch22/data/aki_prediction_project/studies/manuscript-supplementary-v1`.
 
@@ -167,6 +170,53 @@ After an interruption, resume with the same Conda interpreter and
 The script pins the full main grid, reuse source, 5/3/5 validation and 5,000
 bootstrap draws. Training, metrics and report generation run without routine
 intervention; failures remain visible in the status and log.
+
+## Optional broader ICU and mortality supplements
+
+The broader ICU supplement completed successfully November 1, after launch in tmux
+`vitaldb-icu-supplementary`: 72 new configurations plus 18 verified core references.
+Study root: `/media/volume/catch22/data/aki_prediction_project/studies/manuscript-icu-supplementary-v1`.
+Check `control/launch-status.json` and `control/launch.log`; whole-machine CPU
+history is `control/machine-usage.jsonl`. It retains the existing scientific
+settings and runs reporting automatically. Resume only its frozen
+`control/run.py` after confirming no active controller. Mortality supplements
+remain optional and unstarted.
+
+The full feature grid is available for both broader cohorts. This read-only
+preview verifies the completed core studies and plans separate supplementary
+outputs in a fresh root; it does not authorize or start another grid. It is a
+planning example, not a request to repeat the completed ICU supplement.
+
+```bash
+unset DATA_DIR RESULTS_DIR PAPER_DIR LOG_FILE N_TRIALS THREADS_PER_MODEL
+export RAW_DIR=/media/volume/catch22/projects/aki_prediction_project/data/raw
+export PROCESSED_DIR=/media/volume/catch22/data/aki_prediction_project/studies/manuscript-core-v1/data/processed
+export AKI_ARTIFACT_ROOT=/media/volume/catch22/data/aki_prediction_project/studies/manuscript-broader-supplementary-v1
+python -m run_catch22 experiments --preset full --prep skip \
+  --cohort-scopes icu_waveform_sensitivity mortality_waveform_sensitivity \
+  --reuse-from /media/volume/catch22/data/aki_prediction_project/studies/manuscript-optimized-v1 \
+  --outer-folds 5 --inner-folds 3 --calibration-folds 5 --repeats 1 \
+  --max-workers 5 --bootstrap 5000 --bootstrap-seed 0 --no-bootstrap-stratified \
+  --dry-run
+```
+
+Expected: 180 logical configurations, 36 verified core references and 144 pending
+(72 per cohort), covering both branches and all three model families. Use
+`--cohort-scope` to select either cohort alone. Completed source models and their
+original fingerprints stay read-only; the new study records verified references.
+Mortality retains its existing source labels and exploratory status. Freeze the
+reviewed execution checkout before any subsequently authorized launch.
+
+## Window-duration decision
+
+Retain 10-second windows with a nominal five-second stride for this manuscript;
+the duration search is closed. The completed feature-only pilot selected no
+duration under its full rule. Forty seconds improved numerical coverage for one
+respiratory descriptor, without establishing better AKI prediction. No further
+duration ablation or gate tuning is planned. See the
+[methods rationale](METHODS.md#window-duration-rationale-and-retrospective-sensitivity-analysis),
+[pilot artifacts and pending saved-model audit](RESULTS.md#window-duration-pilot-and-feature-audit),
+and [completed pilot record](.agent/workflows/window-duration-pilot.md).
 
 ## Diagnostics and saved-result reporting
 
