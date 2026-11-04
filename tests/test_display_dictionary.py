@@ -30,12 +30,6 @@ def test_feature_set_labels_merge_defaults():
     assert merged["custom_key"] == "Custom Feature Set"
 
 
-def test_branch_label_supports_short_form():
-    names = load_display_dictionary()
-
-    assert names.branch_label("windowed", use_short=True) == "Windowed"
-
-
 def test_derived_waveform_statistics_do_not_inherit_source_signal_units():
     names = load_display_dictionary()
     for feature in ("Primus_AWP_CO_f1ecac", "SNUADC_ECG_II_SB_BinaryStats_mean_longstretch1"):

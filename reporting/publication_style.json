@@ -1,0 +1,202 @@
+{
+  "schema_version": 1,
+  "name": "VitalDB publication",
+  "colors": {
+    "blue": "#0072B2",
+    "orange": "#D55E00",
+    "green": "#009E73",
+    "purple": "#7B3294",
+    "brown": "#8C510A",
+    "ink": "#222222",
+    "reference": "#777777",
+    "grid": "#E1E4E6",
+    "mean": "#D8D8D8",
+    "support": "#B8B8B8",
+    "baseline": "#CACED2",
+    "baseline_edge": "#666666",
+    "connector": "#92979C",
+    "signed_contribution": "#30343B",
+    "zero": "#B4B9BE",
+    "combined_edge": "#00785C",
+    "combined_interval": "#D1EEE5",
+    "table_header": "#F1F3F4",
+    "table_band": "#EEF0F1",
+    "table_rule": "#D4D8DC",
+    "awp_only": "#a06b38",
+    "co2_only": "#bc5090",
+    "ecg_only": "#4c956c",
+    "pleth_only": "#6a4c93",
+    "monitors_only": "#52606d",
+    "ventilator_only": "#d08c24",
+    "preop_and_awp": "#8f5d2f",
+    "preop_and_co2": "#a23b72",
+    "preop_and_ecg": "#127475",
+    "preop_and_pleth": "#4f5d95",
+    "preop_and_all_minus_awp": "#7b8c38",
+    "preop_and_all_minus_co2": "#a64b00",
+    "preop_and_all_minus_ecg": "#8c564b",
+    "preop_and_all_minus_pleth": "#5f0f40"
+  },
+  "inputs": {
+    "preop_only": {
+      "label": "Clinical only",
+      "color": "blue",
+      "linestyle": "-",
+      "marker": "o"
+    },
+    "all_waveforms": {
+      "label": "Waveforms only",
+      "color": "orange",
+      "linestyle": ":",
+      "marker": "s"
+    },
+    "preop_and_all_waveforms": {
+      "label": "Clinical + waveforms",
+      "color": "green",
+      "linestyle": "--",
+      "marker": "^"
+    }
+  },
+  "branches": {
+    "non_windowed": {
+      "label": "Whole case",
+      "marker": "o",
+      "filled": true
+    },
+    "windowed": {
+      "label": "Windowed",
+      "marker": "s",
+      "filled": false
+    }
+  },
+  "folds": [
+    {
+      "color": "blue",
+      "linestyle": "-",
+      "marker": "o"
+    },
+    {
+      "color": "orange",
+      "linestyle": "--",
+      "marker": "s"
+    },
+    {
+      "color": "green",
+      "linestyle": "-.",
+      "marker": "^"
+    },
+    {
+      "color": "purple",
+      "linestyle": ":",
+      "marker": "D"
+    },
+    {
+      "color": "brown",
+      "linestyle": [
+        0,
+        [
+          4,
+          1,
+          1,
+          1
+        ]
+      ],
+      "marker": "v"
+    }
+  ],
+  "figure": {
+    "font_family": "DejaVu Sans",
+    "width_mm": 174,
+    "minimum_font_pt": 8,
+    "body_pt": 8,
+    "axis_label_pt": 8,
+    "tick_pt": 8,
+    "title_pt": 9,
+    "legend_pt": 8,
+    "spine_width_pt": 0.5,
+    "curve_width_pt": 1.1,
+    "grid_width_pt": 0.4,
+    "reference_width_pt": 0.7,
+    "marker_size_pt": 3.8,
+    "error_cap_pt": 1.5,
+    "reference_linestyle": [
+      0,
+      [
+        4,
+        3
+      ]
+    ]
+  },
+  "report": {
+    "title_pt": 14,
+    "axis_label_pt": 12,
+    "tick_pt": 10,
+    "legend_pt": 10
+  },
+  "word": {
+    "font_family": "Arial",
+    "body_pt": 10,
+    "table_pt": 9,
+    "caption_pt": 9,
+    "title_pt": 16,
+    "heading_1_pt": 14,
+    "heading_2_pt": 11,
+    "heading_3_pt": 10
+  },
+  "export": {
+    "vector_formats": [
+      "svg",
+      "pdf",
+      "eps"
+    ],
+    "png_dpi": 600,
+    "tiff_dpi": 600,
+    "jpg_dpi": 300,
+    "jpg_quality": 95,
+    "tiff_compression": "tiff_lzw",
+    "default_report_formats": [
+      "svg",
+      "png",
+      "jpg"
+    ]
+  },
+  "family_colors": {
+    "logistic_regression": "blue",
+    "xgboost": "orange",
+    "ebm": "green"
+  },
+  "feature_set_colors": {
+    "awp_only": "awp_only",
+    "co2_only": "co2_only",
+    "ecg_only": "ecg_only",
+    "pleth_only": "pleth_only",
+    "monitors_only": "monitors_only",
+    "ventilator_only": "ventilator_only",
+    "preop_and_awp": "preop_and_awp",
+    "preop_and_co2": "preop_and_co2",
+    "preop_and_ecg": "preop_and_ecg",
+    "preop_and_pleth": "preop_and_pleth",
+    "preop_and_all_minus_awp": "preop_and_all_minus_awp",
+    "preop_and_all_minus_co2": "preop_and_all_minus_co2",
+    "preop_and_all_minus_ecg": "preop_and_all_minus_ecg",
+    "preop_and_all_minus_pleth": "preop_and_all_minus_pleth"
+  },
+  "fallback_colors": [
+    "blue",
+    "orange",
+    "green",
+    "pleth_only",
+    "awp_only",
+    "preop_and_ecg",
+    "co2_only",
+    "monitors_only",
+    "ventilator_only",
+    "preop_and_all_minus_ecg"
+  ],
+  "proof": {
+    "body_pt": 10.5,
+    "title_pt": 13,
+    "heading_pt": 11,
+    "caption_pt": 9
+  }
+}

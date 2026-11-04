@@ -1,14 +1,12 @@
 # CPU environment replay
 
-These locks capture the Linux x86_64 / CPython 3.12.16 candidate prepared on
-October 30, 2026, from repository commit `b75138f`. They cover the primary
-Catch24/XGBoost/EBM pipeline plus pytest. They do not recover the original GPU
-environment or establish numerical equivalence of scientific results.
+These locks record the Linux x86_64 / CPython 3.12.16 environment prepared on
+October 30, 2026, from commit `b75138f`, for Catch24, XGBoost, EBM and pytest.
+The original GPU environment is separate. Scientific equivalence checks are
+recorded in the [study register](../.agent/workflows/manuscript-reorientation.md).
 
-For everyday environment recreation, use the Conda setup in the root README.
-It downloads the pinned package versions from their hosts. The captured-wheel
-procedure below is optional exact binary replay; it is not needed for ordinary
-development setup. CI and a separate binary archive are optional additions.
+For ordinary recreation, use the [Conda setup](../README.md#environment-and-verification).
+The captured wheels below support exact binary replay.
 
 - `conda-linux-64.explicit.txt`: 27 exact Conda URLs/builds with SHA256 hashes.
 - `requirements-linux-64.lock.txt`: 66 pinned pip distributions; also constrains
@@ -34,11 +32,10 @@ AKI_WHEELHOUSE=/home/exouser/codex-handoffs/catch22-cpu-2026-10-30/wheelhouse \
   bash scripts/cpu/rebuild-from-locks.sh
 ```
 
-The destination must not exist, even as an empty directory. The script uses
-`CONDA_EXE` or `conda` on PATH; set `AKI_CONDA_EXE` if needed. It never updates
-locks, rebuilds wheels, overwrites an environment, or deletes a failed rebuild.
-It checks wheel hashes, exact Conda builds and Python distribution versions,
-then runs `pip check`, launcher help, native checks and the offline suite.
+The destination must not exist. The script uses `CONDA_EXE` or `conda` on PATH;
+`AKI_CONDA_EXE` overrides that choice. It preserves locks, wheels and existing
+environments. It checks wheel hashes, exact Conda builds and distribution
+versions, then runs `pip check`, CLI help, native checks and the offline suite.
 Evidence is retained in a new `/tmp/aki-cpu-rebuild.*` directory printed at
 startup. Copy evidence elsewhere before temporary storage is cleaned.
 
@@ -63,11 +60,9 @@ CSV/Markdown/DOCX/PDF creation. Checks verify SHAP additivity, EBM explanation
 values, CSV roundtrip, Markdown/DOCX content, and PDF structure. This does not
 include visual review or optional browser image exports.
 
-The automated suite is offline; obsolete live-service diagnostics have been
-removed. Real-data smoke for the three model families,
-input provenance, cohort/split/schema checks and comparisons with original
-results remain separate prerequisites for scientific reproduction. Do not
-modify the original GPU VM or research volume to perform environment replay.
+These checks use synthetic inputs. Scientific reproduction also requires input
+provenance, cohort/split/schema checks and comparisons with the saved results.
+Environment replay preserves the original GPU environment and research volume.
 
 ## Verification recorded October 30, 2026
 
@@ -81,12 +76,13 @@ pytest filters and Python optimization did not weaken the checks. Existing
 environment/evidence paths, including normalized paths, were refused.
 Local logs and native reports are retained under the ignored directory
 `outputs/cpu-validation/2026-10-30/`. No real-data smoke or cloud/storage changes
-were performed; scientific result equivalence remains unverified.
+were performed. That environment check did not assess research-result equivalence;
+subsequent study checks are recorded in the study register.
 
 The ordinary README setup was also verified in a fresh environment using package
 hosts with pip caching disabled and no local wheelhouse. Installed distribution
 versions matched the snapshot, native checks passed, and all 81 offline tests
-passed. This is the default route for everyday recreation.
+passed. This is the ordinary recreation route.
 
 ## Changing dependencies
 
@@ -106,17 +102,14 @@ passed. This is the default route for everyday recreation.
    paths from `pip freeze`. Review all manifest/lock differences together.
 4. Recreate from the manifests in a fresh environment and run native checks and
    the complete offline suite before promoting the candidate. Version changes
-   may alter predictions even when tests
-   pass: use fixed, provenance-checked real-data inputs and compare features,
-   splits, predictions, calibration and thresholds before replacing research runs.
+   may alter predictions even when tests pass: compare features, splits, predictions,
+   calibration and thresholds on fixed, provenance-checked research inputs before
+   replacing runs.
 5. Retain the old and new Git revisions, verification logs, input hashes and run
-   settings. Keep patient data out of Git. Archiving package binaries separately
-   is optional for longer-term preservation.
+   settings. Keep patient data out of Git; retain wheels for exact binary replay.
 
-Replay and verification are scripted; lock refresh and off-VM binary retention
-are not currently automated, and no hosted CI workflow is configured. The local
-wheelhouse and Conda cache are sufficient for the exact binary rebuild verified
-above. Everyday setup uses the pinned manifests and package hosts.
+Lock refresh is manual. Exact replay uses the retained wheelhouse and available
+Conda packages; ordinary setup uses the pinned manifests and package hosts.
 
 This procedure follows the upstream guidance for
 [pip repeatable installs](https://pip.pypa.io/en/stable/topics/repeatable-installs/)

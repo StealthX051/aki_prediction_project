@@ -522,25 +522,6 @@ def test_fold_explanations_reject_incomplete_new_integrity_protocol(tmp_path):
     assert not (tmp_path / "output").exists()
 
 
-def test_compact_manuscript_tables_separate_core_nonwindowed_from_supplement(tmp_path):
-    from reporting.manuscript_assets import export_core_comparisons
-    records = []
-    for feature, branch in (("all_waveforms", "non_windowed"), ("awp_only", "non_windowed"),
-                            ("preop_only", "non_windowed"), ("preop_and_all_waveforms", "non_windowed"),
-                            ("preop_only", "windowed")):
-        records.append({"outcome": "any_aki", "branch": branch, "feature_set": feature,
-            "model_name": "Logistic regression", "auprc": .2, "auroc": .7, "brier": .1,
-            "sensitivity": .5, "specificity": .7, "precision": .2, "accuracy": .7, "f1": .3,
-            "delta_auprc": 0.0})
-    files = export_core_comparisons(analysis.prepare_metrics_for_display(pd.DataFrame(records)), tmp_path)
-    assert all(path.exists() for path in files)
-    main = pd.read_csv(tmp_path / "manuscript_any_aki_main.csv")
-    supplement = pd.read_csv(tmp_path / "manuscript_any_aki_supplement.csv")
-    assert main["Feature set"].tolist() == ["Preoperative only", "All waveforms", "Preoperative + all waveforms"]
-    assert len(supplement) == 2
-    assert main.columns.tolist()[3:6] == ["AUPRC", "AUROC", "Brier Score"]
-
-
 def _saved_protocol(ps, tmp_path, *, diagnostic=True, outer_folds=2, inner_folds=2, calibration_folds=5):
     model_dir = tmp_path / ps.model_name / ps.feature_set
     ps.path = model_dir / "predictions" / "test.csv"

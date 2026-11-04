@@ -4,8 +4,8 @@ description: Run the Catch22 pipeline
 
 # Catch22 execution
 
-Use [README.md](../../README.md) for current environment, source paths, fresh
-study roots, resource budgets, and launch commands. Scientific settings are in
+Use [README.md](../../README.md) for the environment, source paths, study
+roots and launcher commands. Scientific settings are in
 [METHODS.md](../../METHODS.md); artifact contracts are in
 [RESULTS.md](../../RESULTS.md). Do not duplicate commands here.
 
@@ -18,10 +18,9 @@ study roots, resource budgets, and launch commands. Scientific settings are in
   are recorded in the evidence register. Mortality supplements remain unstarted.
 - Retain 10/5-second windows for this manuscript. The duration pilot completed
   without selecting a candidate under its full rule; no additional duration
-  ablation or gate tuning is planned. The pending descriptor-interpretation
-  audit uses saved AKI models without refitting; see the
-  [completed pilot record](window-duration-pilot.md).
-- Real-data smoke uses a fresh disposable root and live VitalDB access.
+  ablation or gate tuning is planned. Any follow-up descriptor audit uses saved
+  models; its status is in the [pilot record](window-duration-pilot.md).
+- Requested real-data smoke uses a fresh disposable root and live VitalDB access.
 - Never overwrite historical artifacts or bypass failed provenance checks.
 - Record verification and run status in
   [the evidence register](manuscript-reorientation.md).

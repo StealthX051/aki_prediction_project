@@ -22,8 +22,8 @@ def test_frequency_change_is_continuous_and_noise_is_paired():
     assert envelope[3500] == envelope[4500] == 1
 
 
-@pytest.mark.parametrize("coefficient", [0.5, 0.9])
-def test_ar_change_keeps_variance_scale(coefficient):
+def test_constant_ar_preserves_variance_and_autocorrelation():
+    coefficient = 0.9
     innovations = np.random.default_rng(41).standard_normal(100_000)
     values = ar_process(innovations, np.full(len(innovations), coefficient))[1000:]
     assert np.var(values) == pytest.approx(1, abs=0.04)

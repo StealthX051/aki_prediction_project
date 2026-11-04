@@ -165,7 +165,7 @@ def _fake_outer_result(df: pd.DataFrame, model_type: str, validation_scheme: str
 
 
 @pytest.mark.parametrize("model_type,model_filename", [("xgboost", "model.json"), ("ebm", "model.pkl")])
-def test_train_evaluate_creates_artifacts(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, model_type: str, model_filename: str):
+def test_holdout_exports_preserve_predictions_calibration_and_threshold(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, model_type: str, model_filename: str):
     results_dir = tmp_path / "results"
     monkeypatch.setattr(train_module.utils, "RESULTS_DIR", results_dir)
     monkeypatch.setenv("RESULTS_DIR", str(results_dir))
@@ -196,10 +196,10 @@ def test_train_evaluate_creates_artifacts(monkeypatch: pytest.MonkeyPatch, tmp_p
     predictions_dir = output_dir / "predictions"
     artifacts_dir = output_dir / "artifacts"
 
-    assert (predictions_dir / "train_oof.csv").is_file()
-    assert (predictions_dir / "test.csv").is_file()
-    assert (artifacts_dir / "calibration.json").is_file()
-    assert (artifacts_dir / "threshold.json").is_file()
+    saved_calibration = json.loads((artifacts_dir / "calibration.json").read_text())
+    assert {key: saved_calibration[key] for key in ("intercept", "slope", "eps")} == {
+        "intercept": 0.0, "slope": 1.0, "eps": 1e-15,
+    }
     assert (output_dir / model_filename).is_file()
 
     written_test = pd.read_csv(predictions_dir / "test.csv")

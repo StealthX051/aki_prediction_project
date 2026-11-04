@@ -33,6 +33,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from reporting.display_dictionary import load_display_dictionary
 from reporting.feature_set_display import FeatureSetDisplay, feature_set_sort_key, order_feature_sets
+from reporting.publication_style import color as publication_color
 from reporting.figure_rendering import (
     feature_set_color,
     report_figure_style_context,
@@ -365,9 +366,7 @@ def generate_html_tables(metrics_df: pd.DataFrame, renderer: FeatureSetDisplay =
     for (outcome, branch, model_name), group in metrics_df.groupby(["Outcome", "Branch", "Model"]):
         table_df, table_df_display, delta_df, component_cols, _label_col = _build_report_tables(group, renderer)
 
-        cmap = LinearSegmentedColormap.from_list("soft_teal", ["#ffffff", "#b7dfc4"])
-        cmap_r = LinearSegmentedColormap.from_list("soft_teal_r", ["#f5c2c7", "#ffffff"])
-
+        main_styles = get_style_info(table_df)
         styler = table_df_display.style
         component_indices = [
             table_df_display.columns.get_loc(col) for col in component_cols if col in table_df_display.columns
@@ -405,34 +404,11 @@ def generate_html_tables(metrics_df: pd.DataFrame, renderer: FeatureSetDisplay =
                 )
             styler.set_table_styles(component_styles, overwrite=False)
 
-        def apply_gradient(series, val_col, color_map):
-            vals = table_df.loc[series.index, val_col]
-            min_v, max_v = vals.min(), vals.max()
-            if max_v == min_v:
-                return ["" for _ in series]
-            norm = plt.Normalize(min_v, max_v)
-            colors = [color_map(norm(v)) for v in vals]
-            return [f"background-color: {to_hex(color)}" for color in colors]
-
-        def highlight_best(series, val_col, mode="max"):
-            vals = table_df.loc[series.index, val_col]
-            is_best = vals == (vals.max() if mode == "max" else vals.min())
-            return ["font-weight: bold" if value else "" for value in is_best]
-
-        if "AUROC_val" in table_df.columns:
-            styler.apply(apply_gradient, val_col="AUROC_val", color_map=cmap, subset=["AUROC"])
-            styler.apply(highlight_best, val_col="AUROC_val", mode="max", subset=["AUROC"])
-        if "AUPRC_val" in table_df.columns:
-            styler.apply(apply_gradient, val_col="AUPRC_val", color_map=cmap, subset=["AUPRC"])
-            styler.apply(highlight_best, val_col="AUPRC_val", mode="max", subset=["AUPRC"])
-        if "Brier Score_val" in table_df.columns:
-            styler.apply(apply_gradient, val_col="Brier Score_val", color_map=cmap_r, subset=["Brier Score"])
-            styler.apply(highlight_best, val_col="Brier Score_val", mode="min", subset=["Brier Score"])
-        for col in ["Sensitivity", "Specificity", "F1 Score"]:
-            val_col = f"{col}_val"
-            if val_col in table_df.columns:
-                styler.apply(apply_gradient, val_col=val_col, color_map=cmap, subset=[col])
-                styler.apply(highlight_best, val_col=val_col, mode="max", subset=[col])
+        styler.apply(lambda column: [
+            "background-color:" + main_styles.get(index, {}).get(column.name, {}).get("bg", "white") + ";"
+            + ("font-weight:bold;" if main_styles.get(index, {}).get(column.name, {}).get("bold") else "")
+            for index in column.index], axis=0)
+        delta_styles = {}
 
         styler.hide(axis="index")
 
@@ -453,9 +429,7 @@ def generate_html_tables(metrics_df: pd.DataFrame, renderer: FeatureSetDisplay =
             delta_styler.format(format_cell)
 
             delta_candidates = [f"Δ {name}" for name in METRIC_DISPLAY_MAP.values()]
-            display_to_key = {
-                col: f"delta_{col.split('Δ ')[-1].lower().replace(' ', '_')}" for col in delta_candidates
-            }
+            display_to_key = {f"Δ {label}": f"delta_{key}" for key, label in METRIC_DISPLAY_MAP.items()}
             delta_styles = get_delta_style_info(table_df, display_to_key)
 
             def apply_delta_background(series, col_name):
@@ -500,6 +474,7 @@ def generate_html_tables(metrics_df: pd.DataFrame, renderer: FeatureSetDisplay =
             main_dataframe=table_df_display,
             delta_dataframe=delta_df,
             summary_text="\n\n".join([f"Outcome: {outcome} | Branch: {branch} | Model: {model_name}", *report_notes]),
+            main_styles=main_styles, delta_styles=delta_styles,
         )
 
     refresh_paper_bundle(PAPER_DIR)
@@ -515,11 +490,12 @@ def generate_markdown_report(metrics_df: pd.DataFrame, renderer: FeatureSetDispl
     if metrics_df.attrs.get("report_notes"):
         sections.append({"heading": "Analysis context", "text": "\n\n".join(metrics_df.attrs["report_notes"])})
     for (outcome, branch, model_name), group in ordered_metrics.groupby(["Outcome", "Branch", "Model"], sort=False):
-        _table_df, table_df_display, delta_df, _component_cols, _label_col = _build_report_tables(group, renderer)
+        table_df, table_df_display, delta_df, _component_cols, _label_col = _build_report_tables(group, renderer)
         heading = f"Outcome: {outcome} | Branch: {branch} | Model: {model_name}"
-        sections.append({"heading": heading, "dataframe": table_df_display})
+        sections.append({"heading": heading, "dataframe": table_df_display, "styles": get_style_info(table_df)})
         if delta_df is not None and not delta_df.empty:
-            sections.append({"heading": f"{heading} | Delta vs Reference", "dataframe": delta_df})
+            sections.append({"heading": f"{heading} | Delta vs Reference", "dataframe": delta_df,
+                             "styles": get_delta_style_info(table_df, {f"Δ {label}": f"delta_{key}" for key, label in METRIC_DISPLAY_MAP.items()})})
 
     write_markdown_sections(REPORTS_DIR / "report.md", title="AKI Prediction Project - Results Report", sections=sections)
     refresh_paper_bundle(PAPER_DIR)
@@ -592,8 +568,8 @@ def _calibration_bins(
 def _style_plot_axes(ax: plt.Axes) -> None:
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
-    ax.spines["left"].set_color("#52606d")
-    ax.spines["bottom"].set_color("#52606d")
+    ax.spines["left"].set_color(publication_color('ink'))
+    ax.spines["bottom"].set_color(publication_color('ink'))
     ax.spines["left"].set_linewidth(1.05)
     ax.spines["bottom"].set_linewidth(1.05)
 
@@ -742,7 +718,6 @@ def plot_curves(df: pd.DataFrame, config: Optional[PlotConfig] = None) -> None:
             save_report_figure_bundle(
                 fig_obj,
                 path,
-                formats=("svg", "png"),
                 close=True,
                 mirror_to_primary=True,
             )
@@ -768,7 +743,7 @@ def plot_curves(df: pd.DataFrame, config: Optional[PlotConfig] = None) -> None:
                 if payload["band"] and payload["lower"] is not None and payload["upper"] is not None:
                     ax.fill_between(payload["x"], payload["lower"], payload["upper"], color=color, alpha=0.18)
 
-            ax.plot([0, 1], [0, 1], linestyle="--", color="#7d8793", linewidth=1.1, label="Chance")
+            ax.plot([0, 1], [0, 1], linestyle="--", color=publication_color('reference'), linewidth=1.1, label="Chance")
             ax.set_xlabel('False Positive Rate')
             ax.set_ylabel('True Positive Rate')
             ax.set_title(f'ROC Curves - {outcome} ({branch}) - {model_name}{status_suffix}')
@@ -798,7 +773,7 @@ def plot_curves(df: pd.DataFrame, config: Optional[PlotConfig] = None) -> None:
             if prevalence is not None:
                 ax.axhline(
                     prevalence,
-                    color="#7d8793",
+                    color=publication_color('reference'),
                     linestyle="--",
                     linewidth=1.1,
                     alpha=0.8,
@@ -865,10 +840,10 @@ def plot_curves(df: pd.DataFrame, config: Optional[PlotConfig] = None) -> None:
                             xytext=(0, 6),
                             ha='center',
                             fontsize=7,
-                            color='#52606d',
+                            color=publication_color('ink'),
                         )
 
-            ax.plot([0, 1], [0, 1], linestyle="--", color="#7d8793", linewidth=1.1)
+            ax.plot([0, 1], [0, 1], linestyle="--", color=publication_color('reference'), linewidth=1.1)
             ax.set_xlabel('Mean Predicted Probability')
             ax.set_ylabel('Fraction of Positives')
             ax.set_title(f'Calibration Curves - {outcome} ({branch}) - {model_name}{status_suffix}')
@@ -879,7 +854,7 @@ def plot_curves(df: pd.DataFrame, config: Optional[PlotConfig] = None) -> None:
             if max_prob_seen > 0:
                 if cfg.show_xlim_inset:
                     inset_ax = inset_axes(ax, width="35%", height="35%", loc="upper left", borderpad=1.2)
-                    inset_ax.plot([0, 1], [0, 1], linestyle="--", color="#7d8793", linewidth=1.0, alpha=0.6)
+                    inset_ax.plot([0, 1], [0, 1], linestyle="--", color=publication_color('reference'), linewidth=1.0, alpha=0.6)
                     inset_ax.set_xlim(0, 0.3)
                     inset_ax.set_ylim(ax.get_ylim())
                     inset_ax.set_xticks([0, 0.15, 0.3])
@@ -911,7 +886,7 @@ def plot_curves(df: pd.DataFrame, config: Optional[PlotConfig] = None) -> None:
                     bbox_to_anchor=(0, -0.32, 1, 0.25),
                     bbox_transform=ax.transAxes,
                 )
-                rug_ax.hist(all_probs, bins=min(20, cfg.n_bins * 2), color="#2d6ba3", alpha=0.30, edgecolor="none")
+                rug_ax.hist(all_probs, bins=min(20, cfg.n_bins * 2), color=publication_color('blue'), alpha=0.30, edgecolor="none")
                 rug_ax.set_xlim(ax.get_xlim())
                 rug_ax.set_yticks([])
                 rug_ax.set_xticks(ax.get_xticks())
@@ -1033,7 +1008,8 @@ def get_delta_style_info(df: pd.DataFrame, display_to_key: Dict[str, str]) -> Di
             if not mask.get(idx, False):
                 continue
             val = vals.loc[idx]
-            color = cmap_pos(norm(abs(val))) if val >= 0 else cmap_neg(norm(abs(val)))
+            favorable = val < 0 if metric_key == "delta_brier" else val > 0
+            color = cmap_pos(norm(abs(val))) if favorable else cmap_neg(norm(abs(val)))
             style_info[idx][display_col] = {'bg': to_hex(color)}
 
     return style_info
@@ -1147,14 +1123,7 @@ def generate_docx_report(metrics_df: pd.DataFrame, renderer: FeatureSetDisplay =
         doc.add_paragraph() # Spacer
 
         # Delta table (if available)
-        delta_candidates = [
-            'Δ AUROC',
-            'Δ AUPRC',
-            'Δ Brier Score',
-            'Δ Sensitivity',
-            'Δ Specificity',
-            'Δ F1 Score',
-        ]
+        delta_candidates = [f"Δ {label}" for label in METRIC_DISPLAY_MAP.values()]
         label_header = header_renames.get(label_source, label_source)
         delta_source_cols: List[str] = []
         delta_headers: List[str] = []
@@ -1174,7 +1143,7 @@ def generate_docx_report(metrics_df: pd.DataFrame, renderer: FeatureSetDisplay =
                 delta_table_df = delta_table_df.rename(columns=header_renames)
             delta_headers = list(delta_table_df.columns)
 
-            display_to_key = {col: f"delta_{col.split('Δ ')[-1].lower().replace(' ', '_')}" for col in delta_candidates}
+            display_to_key = {f"Δ {label}": f"delta_{key}" for key, label in METRIC_DISPLAY_MAP.items()}
             delta_styles = get_delta_style_info(table_df, display_to_key)
 
             delta_table = doc.add_table(rows=1, cols=len(delta_headers))
@@ -1299,14 +1268,7 @@ def generate_pdf_report(metrics_df: pd.DataFrame, renderer: FeatureSetDisplay = 
             plt.close()
 
             # Delta table as separate page if available
-            delta_candidates = [
-                'Δ AUROC',
-                'Δ AUPRC',
-                'Δ Brier Score',
-                'Δ Sensitivity',
-                'Δ Specificity',
-                'Δ F1 Score',
-            ]
+            delta_candidates = [f"Δ {label}" for label in METRIC_DISPLAY_MAP.values()]
             label_header = header_renames.get(label_source, label_source)
             delta_source_cols: List[str] = []
             delta_headers: List[str] = []
@@ -1351,7 +1313,7 @@ def generate_pdf_report(metrics_df: pd.DataFrame, renderer: FeatureSetDisplay = 
                 delta_table.set_fontsize(10)
                 delta_table.scale(1, 2.5)
 
-                display_to_key = {col: f"delta_{col.split('Δ ')[-1].lower().replace(' ', '_')}" for col in delta_candidates}
+                display_to_key = {f"Δ {label}": f"delta_{key}" for key, label in METRIC_DISPLAY_MAP.items()}
                 delta_styles = get_delta_style_info(table_df, display_to_key)
 
                 for (row, col), cell in delta_table.get_celld().items():

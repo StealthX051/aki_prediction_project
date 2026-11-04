@@ -1,46 +1,46 @@
 # Experimental Aeon branch
 
-Aeon is exploratory. It is not part of the validated Catch22 paper pipeline,
-and there is no maintained top-level launcher for it.
+Aeon is outside the validated Catch24 manuscript pipeline. Its retained module
+interfaces are listed below; there is no top-level Aeon launcher.
 
-Use the Conda environment first:
-
-```bash
-conda activate aki_prediction_project
-```
+Training requires an Aeon-capable candidate environment. `environment.yml` and
+`requirements-cpu.txt` do not include Aeon or its optional feature-extraction
+dependencies. Keep these separate from the validated CPU environment. Configure
+existing cohort/preoperative inputs before using the preparation commands.
 
 ## Direct commands
 
+Select isolated output paths under the research volume:
+
 ```bash
+export AEON_OUT_DIR=/media/volume/catch22/data/aki_prediction_project/experimental/aeon/data
+export AKI_AEON_RESULTS=/media/volume/catch22/data/aki_prediction_project/experimental/aeon/experiments
+
 # Export fixed-length waveform tensors
 python -m data_preparation.step_02_aeon_export --limit 50
 
-# Prepare aligned preoperative features for the retained Aeon cases
+# Prepare preoperative features for the retained Aeon cases
 python -m data_preparation.step_04_aeon_prep
 
-# Train one Aeon configuration
+# Train one experimental configuration
 python -m model_creation_aeon.step_06_aeon_train \
   --model minirocket \
   --outcome any_aki \
   --channels all \
   --include_preop \
-  --results_dir results/aeon/experiments
+  --results_dir "$AKI_AEON_RESULTS"
 
-# Aggregate metrics from saved predictions
-python -m results_recreation.metrics_summary \
-  --results-dir results/aeon/experiments \
-  --delta-mode reference \
-  --reference-feature-set preop_only
-
-# Rebuild reports from the aggregated metrics
-RESULTS_DIR=results/aeon/experiments PAPER_DIR=results/aeon/paper \
-python -m reporting.make_report
+# Summarize saved unscoped predictions
+python -m results_recreation.metrics_summary --legacy \
+  --results-dir "$AKI_AEON_RESULTS" --delta-mode none
 ```
 
-## Caveats
+Aeon outputs use the legacy artifact schema and do not satisfy the strict Catch24
+manifest contract. The trainer does not produce a `preop_only` reference, so the
+example requests absolute metrics. Current paper-report generation also expects
+scoped result paths; an Aeon report requires an adapted layout and explicit
+legacy mode.
 
-- Aeon is experimental and not kept in strict feature-parity with the primary
-  Catch22 cohort and split contract.
-- The removed root shell runners are not supported.
-- Use `AEON_OUT_DIR`, `RESULTS_DIR`, and `PAPER_DIR` overrides when isolating
-  exploratory outputs.
+These interfaces were checked against the source argument parsers. Aeon training
+and report generation have not been validated in the supported CPU environment.
+Its cohort and split handling remain experimental.

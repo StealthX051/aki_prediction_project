@@ -1,15 +1,13 @@
 # Results artifacts
 
-This document describes saved artifacts and paper-output regeneration.
-Scientific definitions and inference limits are in [METHODS.md](METHODS.md);
-execution and root selection are in [README.md](README.md).
+Saved artifact layout and reporting commands. Scientific definitions are in
+[METHODS.md](METHODS.md); execution and study paths are in [README.md](README.md).
 
-The 36-configuration main core study is complete at frozen revision `fcff7c7`.
-The numerical equivalence gate and broader ICU/exploratory mortality core studies
-completed, followed by 144 new main supplementary configurations and 72 new
-broader ICU supplementary configurations. Completed cores are reused as verified
-references. Additional mortality supplements remain unstarted. Historical and
-diagnostic outputs remain separate, explicitly labeled evidence.
+Completed studies contain 180 main-cohort, 90 broader-ICU and 18 exploratory
+mortality configurations. The 36 main-core configurations were fitted at frozen
+revision `fcff7c7`; supplementary studies reuse verified core references.
+Additional mortality supplements remain unstarted. Historical and diagnostic
+outputs are labeled separately.
 
 ## Layout and integrity
 
@@ -69,7 +67,7 @@ artifacts and must not replace the frozen modeling inputs.
 
 ## Regenerate from saved artifacts
 
-Use the [scoped saved-result commands](README.md#diagnostics-and-saved-result-reporting)
+Use the [scoped saved-result commands](README.md#future-analyses-and-saved-result-reporting)
 after selecting the existing study and processed-data paths. These consume saved
 data and models without fitting. The default reporting policy is 5,000
 unstratified patient-cluster draws, seed 0. The report-only launcher records
@@ -84,6 +82,11 @@ prediction file inconsistent with its verified fold union. Explicit `--legacy`
 reading supports historical artifacts but does not certify them as definitive.
 
 ## Publication bundle
+
+The portable manuscript workspace contains reading books, editable tables,
+figures and their numeric sources. Its [versioned rebuild code](reporting/manuscript_workspace/README.md)
+updates an unpacked workspace without replacing research data or author
+manuscripts. Generated workspaces and ZIPs remain outside Git.
 
 The scoped paper tree contains tables, figures, reports, metadata, and a
 `manifest.json` linking exported files. The principal outputs are:
@@ -156,10 +159,9 @@ Aeon and archived outputs are outside the manuscript pathway.
 
 ## Window-duration pilot and feature audit
 
-The manuscript retains the original 10/5-second windowed representation.
-The subsequent outcome-blinded duration pilot is a supplementary technical
-sensitivity analysis, not an AKI predictive ablation or prospective justification
-of the original choice. Its independent artifact root is
+The manuscript retains 10-second windows with a nominal five-second stride.
+The subsequent outcome-blinded pilot assessed descriptor stability, without
+evaluating AKI prediction across durations. Its artifact root is
 `/media/volume/catch22/data/aki_prediction_project/pilots/window-duration-v2`:
 
 - `REPORT.md`: completed feature audit and 120 paired synthetic challenges.
@@ -172,47 +174,39 @@ of the original choice. Its independent artifact root is
   of 2,000 patient-bootstrap draws. All lengths passed the availability gate;
   40 seconds first achieved 95% coverage for all 24 descriptors in every channel.
 
-Preserve this frozen report and its original rule. The current interpretation
-and decision are in [METHODS.md](METHODS.md#window-duration-rationale-and-retrospective-sensitivity-analysis)
-and the [completed pilot record](.agent/workflows/window-duration-pilot.md).
-No further duration experiments or gate revisions are planned for this manuscript.
+The interpretation and retained-duration decision are in
+[METHODS.md](METHODS.md#window-duration-rationale-and-retrospective-sensitivity-analysis)
+and the [pilot record](.agent/workflows/window-duration-pilot.md). The frozen
+report and rule remain unchanged; no further duration experiments or gate
+revisions are planned.
 
-Pending follow-up: inspect `CO_Embed2_Dist_tau_d_expfit_meandiff` in the saved
-windowed AKI models, including all mean/SD/min/max variants for CO2/AWP and
-associated missingness indicators where present. Use verified saved outer-fold
-bundles and family-appropriate explanations across folds; do not refit, compare
-importance scales across families, or remove features on this basis. Low
-importance does not establish harmlessness; high importance motivates checking
-the values' provenance and interpretation. Implementation-defined fallback zeros
-are not automatically waveform errors. This audit has not yet been performed.
+Open follow-up: a targeted cross-family interpretation audit of
+`CO_Embed2_Dist_tau_d_expfit_meandiff` in saved windowed AKI models, including all
+CO2/AWP mean/SD/min/max variants and associated missingness indicators. It requires
+verified outer-fold bundles and family-specific explanations, without refitting
+or post-hoc feature removal. Finite fallback zeros are not necessarily waveform
+errors.
 
 ## Optimized extension and protected references
 
-The broader ICU and exploratory mortality core batches contain 18 configurations
-each. Their results/paper namespaces are separate from the completed main core.
-The new study's `control/reused_inventory.json` records absolute original paths,
-original fingerprints and integrity hashes for the protected 36 main runs.
-External baseline references are validated against their own frozen provenance;
-new checkpoints retain strict current-source matching. Missing or corrupt
-required references fail rather than trigger refitting.
+The broader ICU and exploratory mortality core batches each completed 18
+configurations, with 180 verified fold bundles across the two batches. Their
+results/paper namespaces are separate from the main core. The extension study's
+`control/reused_inventory.json` records original paths, fingerprints and hashes
+for the protected 36 main runs. Reuse verifies their frozen provenance; new
+checkpoints require current-source matching. Missing or corrupt references stop
+execution instead of triggering refits. The relaunch check selected zero fits.
 
-`control/execution_plan.json`, `control/active_scheduler.json`, per-job
-logs/resource samples, and `control/supervisor_status.json` describe execution.
-The active-scheduler file points to the current execution epoch's summary;
-earlier resource logs and the original execution snapshot are preserved.
-Reviewed orchestration overlays record their source commit and exact source
-hashes separately, without changing scientific fingerprints.
-Full per-fold HPO histories are saved under each configuration's
-`artifacts/trials/`. The equivalence gate exports a saved-artifact agreement
-report before the remaining extension jobs are admitted. Mortality DCA records
-its exact 0.1–5% grid and exploratory interpretation. Reports and explanations
-consume saved predictions/bundles only.
-
-Both extension batches completed: 18 ICU and 18 exploratory mortality
-configurations, with 180 verified fold bundles and saved-result reports. The
-protected main study remained unchanged, and the relaunch check selected zero
-fits. Computational validation completeness does not establish admission-level
-outcome adjudication or clinical validation.
+Execution records comprise `control/execution_plan.json`,
+`control/active_scheduler.json`, per-job logs/resource samples and
+`control/supervisor_status.json`. The active-scheduler file identifies the latest
+execution epoch; earlier resource logs and code snapshots are retained.
+Orchestration overlays record source commits and hashes separately from
+scientific fingerprints. Per-fold HPO histories are in `artifacts/trials/`.
+The saved equivalence report records the agreement required before extension
+jobs were admitted. Mortality DCA retains its 0.1–5% grid and exploratory status.
+Computational validation does not establish admission-level outcome adjudication
+or clinical validation.
 
 The mortality source-label audit confirmed 52 positive operation records in 47
 patients among 5,765 operations/5,543 patients in each branch (42 patients with
@@ -220,9 +214,9 @@ one positive operation and five with two). Six patients have mixed source
 mortality flags; three also have matching reported stay lengths. These are
 unresolved linkage questions, not confirmed same-admission label errors.
 The source flags match the official API and all 18 saved OOF configurations.
-Operation-level results and labels are retained; no first/last-operation
-deduplication or model rerun was performed. See the mortality/admission section
-of `METHODS.md` for interpretation and the evidence register for audit artifacts.
+Operation-level labels and results are retained without first/last-operation
+deduplication or model reruns. See [mortality and admission linkage](METHODS.md#operation-level-mortality-and-admission-linkage)
+for interpretation and the evidence register for audit artifacts.
 
 Fold metadata records floating prediction dtypes. Checkpoint reload uses those
 dtypes and round-trip CSV parsing so partial resume preserves native XGBoost

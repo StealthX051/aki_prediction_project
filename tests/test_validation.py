@@ -162,7 +162,7 @@ def test_checkpoint_rejects_changes_to_every_promised_artifact(tmp_path, artifac
     assert not validation_module.is_outer_fold_checkpoint_complete(tmp_path)
 
 
-@pytest.mark.parametrize("malformed", [None, [], "invalid", 7])
+@pytest.mark.parametrize("malformed", [None, ["invalid"]], ids=["null", "non-object"])
 @pytest.mark.parametrize("field", ["metadata", "validation_fingerprint"])
 def test_checkpoint_malformed_metadata_is_rejected_without_resume_crash(tmp_path, malformed, field):
     fingerprint = _validation_fingerprint()

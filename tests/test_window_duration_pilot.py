@@ -3,6 +3,7 @@ import numpy as np
 import pytest
 
 from scripts import window_duration_pilot as pilot
+from scripts.window_duration_failures import EMBEDDING
 
 
 def test_grid_rounding_flat_windows_and_nan_propagation(monkeypatch):
@@ -36,3 +37,27 @@ def test_terminal_partial_and_single_window_sample_sd():
 def test_grid_rejects_unprocessed_nonfinite_signal():
     with pytest.raises(ValueError, match="finite"):
         pilot.extract_grid(np.array([1., np.inf]), 100, 10)
+
+
+def test_channel_preserves_raw_features_and_masks_verified_fallbacks(tmp_path):
+    # A filtered ramp triggers the pinned extractor's degenerate embedding
+    # branch. Use the real extractor and detector through channel checkpointing.
+    channel = pilot.CHANNELS[0]
+    filtered = tmp_path / "filtered/000__0.npy"
+    filtered.parent.mkdir()
+    np.save(filtered, np.arange(2500, dtype=float))
+    pilot.write_json(filtered.with_suffix(".json"), {
+        "sha256": pilot.sha(filtered), "source_key": channel,
+    })
+    before = filtered.read_bytes()
+    metadata = pilot.process_channel((tmp_path, {"index": 0, "reference": {}}, channel))
+    index = pilot.FEATURE_NAMES.index(EMBEDDING)
+    mean_index = pilot.FEATURE_NAMES.index("DN_Mean")
+    with np.load(tmp_path / "channels/000__0.npz", allow_pickle=False) as saved:
+        raw, audited = saved["aggregates"], saved["audited_aggregates"]
+        assert (raw[0, :, :, index] == 0).all()
+        assert np.isnan(audited[0, :, :, index]).all()
+        assert raw[0, 0, 0, mean_index] == pytest.approx(1249.5)
+        np.testing.assert_array_equal(audited[..., mean_index], raw[..., mean_index])
+    assert metadata["diagnostics"][0]["verified_fallback_windows_per_descriptor"][index] == 4
+    assert filtered.read_bytes() == before

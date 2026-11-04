@@ -1,30 +1,15 @@
 # Display dictionary
 
-`metadata/display_dictionary.json` is the single source of truth for
-publication-facing labels used in tables, figures, and interpretability
-artifacts.
+[`metadata/display_dictionary.json`](../metadata/display_dictionary.json) supplies
+default labels to the shared reporting modules through
+`reporting.display_dictionary.DisplayDictionary`. Curated manuscript templates
+can supply display-specific labels; their CSVs retain source feature IDs.
 
-The JSON is loaded by `reporting.display_dictionary.DisplayDictionary`.
+## Entries
 
-## Main sections
-
-The dictionary currently covers:
-
-- `outcomes`
-- `branches`
-- `model_types`
-- `feature_sets`
-- `features`
-- `waveforms`
-- `catch22_statistics`
-- `catch22_aggregates`
-
-Each entry typically provides:
-
-- `label`
-- optional `short_label`
-- optional `unit`
-- optional `description`
+Sections cover outcomes, branches, model types, feature sets, features, waveforms,
+Catch22 statistics and window aggregates. An entry is a label string or an object
+with `label` and optional `short_label`, `unit` and `description` fields.
 
 ## Resolution behavior
 
@@ -34,9 +19,6 @@ Feature lookup follows this order:
 2. recognized one-hot categorical prefix
 3. waveform plus Catch22 template parsing
 4. raw feature name fallback
-
-This allows the reporting stack to render human-readable labels without
-hardcoding them into every report module.
 
 ## Where it is used
 
@@ -58,14 +40,11 @@ Catch24 statistics do not automatically inherit the waveform's physical unit: a
 dimensionless descriptor or sample-based timescale must not be labeled mV or
 hPa. Moment features such as mean and standard deviation can have physical
 units, but those require explicit registration rather than a blanket unit for
-every waveform descriptor. Saved fold explanations retain raw names alongside these display
-labels. LR coefficient scaling and EBM/SHAP output scales are described by the
-explanation metadata rather than inferred from a feature's clinical unit.
+every waveform descriptor. Saved fold explanations retain raw names alongside
+display labels. Explanation metadata defines LR coefficient scaling and EBM/SHAP
+output scales; a feature's clinical unit does not determine those scales.
 
-## Maintenance guidance
+## Updates
 
-- Add new feature sets, outcomes, or derived features here before regenerating
-  manuscript-facing outputs.
-- Keep labels concise and publication-ready.
-- Review dictionary changes alongside the code and artifacts that consume them
-  so labels do not drift from the underlying analysis.
+Register new feature labels and units before regenerating reports. Check the
+resulting tables and figures against the source IDs and values.

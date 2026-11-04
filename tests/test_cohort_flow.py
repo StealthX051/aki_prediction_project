@@ -37,7 +37,7 @@ def test_normalize_counts_uses_display_dictionary(display_dict):
     assert flow.stages[-1].title == "Final cohort"
 
 
-def test_render_creates_files(tmp_path: Path, monkeypatch):
+def test_graphviz_dot_preserves_exclusions_outcome_branches_and_resolution(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("AKI_STORAGE_POLICY", "off")
     monkeypatch.setattr("reporting.cohort_flow.refresh_paper_bundle", lambda _paper_dir: {})
     monkeypatch.setattr("reporting.cohort_flow.shutil.which", lambda _name: "/usr/bin/dot")
@@ -120,6 +120,14 @@ def test_render_uses_matplotlib_fallback_when_graphviz_missing(tmp_path: Path, m
     assert (tmp_path / "missing_dot.svg").exists()
     assert (tmp_path / "primary_figures" / "missing_dot.png").exists()
     assert (tmp_path / "primary_figures" / "missing_dot.svg").exists()
+    import matplotlib.pyplot as plt
+    image = plt.imread(tmp_path / "missing_dot.png")
+    assert image.ndim == 3 and min(image.shape[:2]) > 100
+    # Missing Graphviz must still produce the actual population and outcome
+    # labels through the Matplotlib renderer, not empty placeholder files.
+    svg = (tmp_path / "missing_dot.svg").read_text()
+    assert "Final cohort" in svg and "n = 3 operations" in svg
+    assert "AKI" in svg and "n = 1" in svg and "n = 2" in svg
 
 
 def test_normalize_counts_inserts_pre_waveform_custom_filter_before_waveform_stage():

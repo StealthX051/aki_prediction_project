@@ -53,7 +53,7 @@ WAVEFORM_PREFIXES = {
     'awp': 'Primus_AWP'
 }
 
-# Continuous Preop Columns (from 04_hpo_xgboost.ipynb)
+# Continuous preoperative columns.
 CONTINUOUS_PREOP_COLS = [
     'age', 'bmi', 'preop_hb', 'preop_plt', 'preop_pt', 'preop_aptt', 'preop_na',
     'preop_k', 'preop_gluc', 'preop_alb', 'preop_ast', 'preop_alt',

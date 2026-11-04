@@ -234,6 +234,16 @@ def test_plot_curves_exports_svg_and_png(tmp_path: Path, monkeypatch):
         assert (figures_dir / f"{stem}.svg").exists()
         assert (figures_dir / "primary_figures" / f"{stem}.png").exists()
         assert (figures_dir / "primary_figures" / f"{stem}.svg").exists()
+        image = plt.imread(figures_dir / f"{stem}.png")
+        assert image.ndim == 3 and min(image.shape[:2]) > 100
+        assert np.isfinite(image).all() and np.ptp(image[:, :, :3]) > 0
+
+    # The exported curves must retain the known perfect-ranking scores, not
+    # merely create files with the expected names.
+    assert "AUC = 1.000" in (figures_dir / "roc_any_aki_windowed_XGBoost.svg").read_text()
+    assert "AP = 1.000" in (figures_dir / "pr_any_aki_windowed_XGBoost.svg").read_text()
+    calibration = (figures_dir / "calibration_any_aki_windowed_XGBoost.svg").read_text()
+    assert "Mean Predicted Probability" in calibration and "Fraction of Positives" in calibration
 
 
 def test_supplemental_fold_variability_is_numerically_correct_and_not_labeled_as_ci(tmp_path: Path, monkeypatch):

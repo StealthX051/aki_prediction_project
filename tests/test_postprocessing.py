@@ -1,5 +1,3 @@
-from pathlib import Path
-
 import numpy as np
 import pytest
 from sklearn.datasets import make_classification
@@ -11,8 +9,6 @@ from model_creation.postprocessing import (
     find_youden_j_threshold,
     fit_logistic_recalibration,
     generate_stratified_oof_predictions,
-    read_json,
-    write_json,
 )
 
 
@@ -129,14 +125,3 @@ def test_youden_j_threshold_matches_hand_calculated_confusion_counts(probabiliti
 
     with pytest.raises(ValueError):
         find_youden_j_threshold(y_true, np.array([0.1, 1.2, 0.3, 0.4]))
-
-
-def test_json_helpers(tmp_path: Path):
-    data = {"intercept": 0.1, "slope": 0.9, "eps": 1e-3}
-    path = tmp_path / "params.json"
-
-    write_json(path, data)
-    assert path.exists()
-
-    loaded = read_json(path)
-    assert loaded == data

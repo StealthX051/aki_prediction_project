@@ -96,6 +96,12 @@ def validate_prediction_dataframe(
                 f"{identity_columns}: {dupes.to_dict(orient='records')}"
             )
 
+    for column in ("y_prob_raw", "threshold"):
+        if column in df.columns:
+            values = np.asarray(df[column], dtype=float)
+            if not (np.isfinite(values) & (values >= 0) & (values <= 1)).all():
+                raise ValueError(f"{path} contains nonfinite or out-of-range values in '{column}'")
+
     thresholds = np.asarray(df["threshold"], dtype=float)
     unique_thresholds = np.unique(thresholds)
     if require_single_threshold and len(unique_thresholds) != 1:
@@ -109,6 +115,9 @@ def validate_prediction_dataframe(
 
     if not ((0 <= df["y_prob_calibrated"]).all() and (df["y_prob_calibrated"] <= 1).all()):
         raise ValueError(f"{path} contains calibrated probabilities outside [0, 1]")
+
+    if not df["y_pred_label"].isin([0, 1]).all():
+        raise ValueError(f"{path} contains non-binary y_pred_label values")
 
     predicted = (df["y_prob_calibrated"] >= df["threshold"]).astype(int)
     if not np.array_equal(predicted.values, df["y_pred_label"].astype(int).values):
