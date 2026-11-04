@@ -1,20 +1,10 @@
 # Methods
 
-This file captures the active scientific contract for the repository. It is
-intended to be more manuscript-oriented than `README.md`: the operational run
-commands live in the README, while this file preserves the scientific
-definitions, preprocessing contract, modeling design, and evaluation rules for
-the Catch22 manuscript pipeline.
-
-The manuscript implementation uses Catch24/Catch22 with logistic regression,
-XGBoost, and EBM. The main AKI/ICU core analysis and the broader ICU and exploratory
-mortality core analyses have completed at full budget. Mortality retains the
-source-label limitations described below. Diagnostic outputs verify implementation
-and are not manuscript performance estimates. All full analyses use five
-patient-grouped outer folds,
-three HPO folds, and five training-only calibration folds. Run inventories and
-execution status live in `RESULTS.md` and the evidence register; Aeon remains
-separate and experimental.
+Scientific definitions and analysis methods for the Catch24/Catch22 manuscript.
+The models are logistic regression, XGBoost and EBM; Aeon is experimental.
+[README.md](README.md) gives run commands, and [RESULTS.md](RESULTS.md) describes
+completed studies and saved artifacts. Diagnostic runs are excluded from
+manuscript performance estimates.
 
 ## Study design and data source
 
@@ -22,14 +12,8 @@ This is a retrospective observational study using VitalDB, an open-access
 intraoperative dataset from Seoul National University Hospital containing 6,388
 non-cardiac surgical cases.
 
-The repository combines:
-
-- preoperative clinical and laboratory data
-- intraoperative physiological waveforms
-- patient-grouped model development and evaluation
-
-The current paper-facing path is the modular Python pipeline under
-`data_preparation/`, `model_creation/`, `results_recreation/`, and `reporting/`.
+Preoperative clinical and laboratory data are combined with intraoperative
+waveforms and evaluated using patient-grouped model development and validation.
 
 ## Cohort construction
 
@@ -64,9 +48,6 @@ Outcome-specific eligibility is layered onto the shared outer cohort:
 - `icu_admission` and `mortality` require:
   - the shared outer cohort
   - outcome-specific eligibility and a valid binary label
-
-This design allows the repository to preserve a common waveform-qualified cohort
-while still enforcing outcome-specific clinical requirements where needed.
 
 ### Manuscript comparison scopes
 
@@ -202,8 +183,7 @@ Derived preoperative variables include:
 - `inpatient_preop`
 - `preop_egfr_ckdepi_2021`
 
-The repository intentionally prefers a derived CKD-EPI 2021 eGFR over the raw
-dataset `preop_gfr` field.
+CKD-EPI 2021 eGFR replaces the source `preop_gfr` field.
 Source creatinine is explicitly in mg/dL; a high magnitude is not treated as
 evidence of another unit. Nonpositive/nonfinite creatinine values remain missing
 in predictors and eGFR derivation. eGFR requires a finite age and a recorded
@@ -404,8 +384,7 @@ the following feature-set families:
 - preop-plus-single-waveform ablations
 - leave-one-waveform-out fused ablations
 
-Two-channel waveform-only combinations are intentionally excluded from the
-default grid.
+Two-channel waveform-only combinations are excluded from the default grid.
 The core comparisons use preoperative clinical variables alone, all four
 waveforms alone, and their combination, in that fixed presentation order.
 Whole-case comparisons are the main presentation; windowed and additional
@@ -449,24 +428,15 @@ estimator (TPE) search runs serially within that study. Its objective is the
 unweighted mean of the three inner-fold AP scores computed from raw model
 probabilities, before recalibration. Each outer fold selects its own
 hyperparameters. The default budgets are 20 LR trials and 50 XGBoost/EBM trials,
-with base random seed 42 and outer-fold seed offsets. The prespecified search
-domains below can be used for a supplementary methods table; final selected
-parameters are retained per outer fold.
+with base random seed 42 and outer-fold seed offsets. Search domains are listed
+below; selected parameters are retained per outer fold.
 
 ### Fold-local preprocessing
 
-The following steps are fit on training data only within the active partition:
-
-- categorical handling and rare-category collapse
-- numeric clipping
-- optional imputation
-- hyperparameter optimization
-- calibration
-- threshold selection
-
-No held-out outer-test or final holdout-test outcomes are used to fit
-preprocessing statistics, model parameters, calibrators, or decision
-thresholds.
+Each inner, calibration and final training fit learns categorical mappings,
+rare-category pooling, numeric clipping and applicable imputation/scaling from
+its own training partition. Held-out outer-test or holdout-test data do not set
+preprocessing statistics, model parameters, calibrators or decision thresholds.
 
 For logistic regression, numeric median imputation, numeric standardization,
 and training-derived missingness indicators are fit inside each training fold.
@@ -581,15 +551,12 @@ inner bags. Manuscript mode retains 14 refit outer and 20 inner bags and the
 original search. Compute profiles and thread environments are fingerprinted;
 bounded diagnostic artifacts cannot be relabeled as definitive results.
 
-The EBM path remains part of the primary grid. Explanation exports do not alter
-reported predictive performance.
-
 ### Hyperparameter search domains
 
 Continuous domains are linear-scale unless marked logarithmic; listed values
-are categorical choices. TPE samples adaptively within these domains. Parameters not searched retain the recorded
-implementation/package defaults. All selected values remain local to the
-corresponding outer-training model.
+are categorical choices. TPE samples adaptively within these domains. Unsearched
+parameters retain the recorded implementation/package defaults. Selected
+parameters are local to each outer-training model.
 
 | Model | Parameter | Search domain |
 | --- | --- | --- |
@@ -669,12 +636,11 @@ cross-family contrasts. All metric and decision-curve differences use the same
 draws, verified by hashes of their actual sampled row indices. Statistics are
 operation-weighted: every operation from a selected patient is retained, and
 the resampled operation count supplies the denominator.
-These intervals condition on saved fitted models and predictions; they do not
-include the full variability of repeating cohort construction, HPO, and model
-fitting. Comparisons across the supplementary grid are exploratory unless a
-multiplicity policy is specified before reviewing definitive results.
-These percentile intervals are conditional uncertainty summaries, not a claim
-of exact coverage for the complete nested model-development procedure.
+Percentile intervals condition on the saved fitted models and predictions.
+They do not repeat cohort construction, HPO or model fitting and do not guarantee
+exact coverage for the full development procedure. Supplementary-grid
+comparisons are exploratory unless a multiplicity policy was specified before
+reviewing definitive results.
 
 ### Prespecified comparisons and DeLong eligibility
 
@@ -702,11 +668,11 @@ formal AP p-values or significance-based model selection are introduced.
 
 ### Decision-curve analysis
 
-Exploratory decision curves use saved calibrated predictions with model, treat-all, and treat-none
-net benefit. Default probability ranges are 0.01-0.30 for AKI and 0.05-0.60 for
+Exploratory decision curves compare model, treat-all and treat-none net benefit
+using saved calibrated predictions. Default probability ranges are 0.01-0.30 for AKI and 0.05-0.60 for
 ICU, in 0.01 steps. Exploratory mortality uses 0.001-0.050 in 0.001 steps
 (0.1-5% risk). The threshold grids are fixed analysis settings, not selected by
-examining held-out outcomes. Plots alone do not establish clinical utility.
+examining held-out outcomes.
 At probability threshold `p_t`, net benefit is
 `TP/N - (FP/N) * p_t/(1-p_t)`, where `N` counts evaluated operations. Treat-none
 net benefit is zero; treat-all uses the same cohort prevalence and threshold
@@ -741,9 +707,7 @@ ratios; category contrasts require coefficient differences within the same
 fold. All explanations describe associations, remain separate from logistic
 recalibration, and are not causal effects.
 
-Display labels and units are centralized in
-`metadata/display_dictionary.json` so manuscript-facing outputs remain
-consistent across tables and figures.
+Display labels and units come from `metadata/display_dictionary.json`.
 Publication descriptives use median (IQR), missingness, operation/patient counts,
 and display-only NSR/abnormal ECG grouping. Main ROC/PR figures and legend scores
 use pooled outer predictions, matching the tables; fold variability is an
@@ -765,7 +729,5 @@ configuration, and HPO trials remain sequential and seeded. Scheduler source
 changes are recorded separately from the unchanged scientific code; restarting
 reuses only checkpoints that pass the original scientific fingerprint checks.
 
-The manuscript should supply its verified dataset citation, collection period,
-and applicable ethics/data-use statement from source and study records; those
-administrative details are not inferred from the modeling code. Aeon models
-remain outside this manuscript pathway.
+Verify the dataset citation, collection period and ethics/data-use statement
+against source and study records.

@@ -11,13 +11,13 @@ import pandas as pd
 
 from reporting.feature_set_display import CORE_FEATURE_SET_ORDER, feature_set_sort_key
 from reporting.display_dictionary import load_display_dictionary
+from reporting.publication_style import FAMILY_COLORS, color, REFERENCE_STYLE
 from reporting.figure_rendering import feature_set_color, report_figure_style_context, save_report_figure_bundle
 
 DEFAULT_RANGES = {"any_aki": (0.01, 0.30), "icu_admission": (0.05, 0.60), "mortality": (0.001, 0.050)}
 # Integer grids avoid rounding rare-outcome thresholds to zero.
 _GRID_INTEGERS = {"any_aki": (1, 30, 100), "icu_admission": (5, 60, 100), "mortality": (1, 50, 1000)}
 FAMILY_ORDER = ("logistic_regression", "xgboost", "ebm")
-FAMILY_COLORS = {"logistic_regression": "#2d6ba3", "xgboost": "#bf3b3b", "ebm": "#2f855a"}
 FAMILY_LABELS = {"logistic_regression": "LR", "xgboost": "XGBoost", "ebm": "EBM"}
 
 
@@ -161,14 +161,14 @@ def export_decision_curves(predictions: pd.DataFrame, output_dir: Path) -> list[
             tables.append(table)
             ax.plot(thresholds, table["model"], label=labels.get(feature_set, feature_set), color=feature_set_color(feature_set))
         reference = tables[0]
-        ax.plot(thresholds, reference["treat_all"], "--", color="grey", label="Treat all")
-        ax.axhline(0, color="black", linewidth=1, label="Treat none")
+        ax.plot(thresholds, reference["treat_all"], linestyle=REFERENCE_STYLE, color=color("reference"), label="Treat all")
+        ax.axhline(0, color=color("ink"), linewidth=1, label="Treat none")
         status = f" [{group['analysis_status'].iloc[0]}]" if "analysis_status" in group else ""
         ax.set(xlabel="Threshold probability", ylabel="Net benefit", xlim=(lower, upper),
                title=f"Exploratory decision curves — {outcome}, {branch}, {family}{status}")
         ax.legend()
         stem = output_dir / f"dca_{outcome}_{branch}_{family}"
-        paths.extend(save_report_figure_bundle(fig, stem, formats=("png", "svg"), close=True))
+        paths.extend(save_report_figure_bundle(fig, stem, close=True))
         table_path = stem.with_suffix(".csv")
         pd.concat(tables, ignore_index=True).to_csv(table_path, index=False)
         paths.append(table_path)
@@ -209,7 +209,7 @@ def _saved_curve_metadata(frame, *, outcome, branch, comparison_status, plotted_
 
 
 def _save_saved_curve(fig, stem, frame, *, outcome, branch, comparison_status, plotted_feature_sets=None):
-    paths = save_report_figure_bundle(fig, stem, formats=("png", "svg"), close=True)
+    paths = save_report_figure_bundle(fig, stem, close=True)
     table_path, metadata_path = stem.with_suffix(".csv"), stem.with_suffix(".json")
     frame.to_csv(table_path, index=False)
     metadata_path.write_text(json.dumps(_saved_curve_metadata(
@@ -314,12 +314,12 @@ def render_comparison_curves(
                                          squeeze=False, constrained_layout=True, sharex=True)
                 for ax, identity in zip(axes[:, 0], comparisons):
                     rows = group.loc[group.comparison_id.eq(identity.comparison_id)].sort_values("threshold_probability")
-                    color = FAMILY_COLORS.get(identity.candidate_model, "#2f855a")
-                    ax.plot(rows.threshold_probability, rows.delta, color=color)
+                    curve_color = FAMILY_COLORS.get(identity.candidate_model, color("green"))
+                    ax.plot(rows.threshold_probability, rows.delta, color=curve_color)
                     finite = np.isfinite(rows.lower) & np.isfinite(rows.upper)
                     ax.fill_between(rows.threshold_probability.to_numpy(), rows.lower.to_numpy(), rows.upper.to_numpy(),
-                                    where=finite.to_numpy(), color=color, alpha=0.16)
-                    ax.axhline(0, color="#52606d", linewidth=0.8)
+                                    where=finite.to_numpy(), color=curve_color, alpha=0.16)
+                    ax.axhline(0, color=color("reference"), linewidth=0.8)
                     if identity.candidate_model == identity.reference_model:
                         left = labels.get(identity.candidate_feature_set, identity.candidate_feature_set)
                         right = labels.get(identity.reference_feature_set, identity.reference_feature_set)
@@ -339,8 +339,8 @@ def render_comparison_curves(
 
 
 def _plot_default_strategies(ax, rows):
-    ax.plot(rows.threshold_probability, rows.treat_all, "--", color="grey", label="Treat all")
-    ax.axhline(0, color="black", linewidth=1, label="Treat none")
+    ax.plot(rows.threshold_probability, rows.treat_all, linestyle=REFERENCE_STYLE, color=color("reference"), label="Treat all")
+    ax.axhline(0, color=color("ink"), linewidth=1, label="Treat none")
 
 
 def _family_sort_key(family):

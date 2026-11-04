@@ -4,10 +4,10 @@ import os
 
 import pytest
 
+from scripts import window_duration_resources as resources
 from scripts.window_duration_resources import (
     GIB, PilotDrained, adaptive_map, admission_limit, growth_limit,
 )
-from model_creation.config_scheduler import _PressureWindow
 
 
 def _worker_probe(value):
@@ -39,17 +39,6 @@ def test_growth_is_bounded_and_reductions_do_not_wait_for_cooldown():
     assert growth_limit(0, 8, now=5, last_growth=0, telemetry_ready=False, initial_limit=8) == (8, 0)
 
 
-def test_full_pressure_window_rejects_short_dips_and_missing_samples():
-    pressure = _PressureWindow(60, 5, 0)
-    for now in range(5, 60, 5):
-        pressure.add(now, 52)
-    assert pressure.mean(55) is None
-    pressure.add(60, 0)
-    assert pressure.mean(60) == pytest.approx(52 * 55 / 60)
-    pressure.add(65, None)
-    assert pressure.mean(65) is None
-
-
 def test_existing_drain_request_admits_no_work_and_records_pending(tmp_path):
     stop, progress = tmp_path / "stop", tmp_path / "progress.json"
     stop.touch()
@@ -63,14 +52,20 @@ def test_existing_drain_request_admits_no_work_and_records_pending(tmp_path):
     assert record["completed"] == 0 and record["pending"] == 2
 
 
-def test_spawn_pool_returns_results_and_stays_bounded(tmp_path):
+def test_spawn_pool_returns_results_and_stays_bounded(tmp_path, monkeypatch):
+    # Inventory is external to the pool contract. Real low-memory hosts must
+    # neither stall this test nor make its two-worker assertion impossible.
+    monkeypatch.setattr(resources, "available_cpu_count", lambda: 2)
+    monkeypatch.setattr(resources, "resource_snapshot", lambda _: {
+        "memory_available_bytes": 128 * GIB,
+    })
     progress = tmp_path / "progress.json"
     parent_priority = os.getpriority(os.PRIO_PROCESS, 0)
     results = list(adaptive_map(_worker_probe, [-1, -2, -3, -4], max_workers=2,
                                 initial_workers=2, volume=tmp_path, progress_path=progress))
     assert sorted(row[0] for row in results) == [1, 2, 3, 4]
     assert 1 <= len({row[1] for row in results}) <= 2
-    assert all(row[2] == parent_priority + 5 for row in results)
+    assert all(row[2] == min(19, parent_priority + 5) for row in results)
     record = json.loads(progress.read_text())
     assert record["status"] == "complete"
     assert record["completed"] == 4 and record["inflight"] == 0

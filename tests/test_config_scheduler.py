@@ -195,6 +195,8 @@ def test_pressure_window_weights_time_and_rejects_missing_or_stale_samples():
     window = scheduler._PressureWindow(4, 1, 0)
     for second, busy in enumerate([20, 40, 60, 80], start=1):
         window.add(second, busy)
+        if second < 4:
+            assert window.mean(second) is None
     assert window.mean(4) == pytest.approx(50)
     window.add(5, 100)
     assert window.mean(5) == pytest.approx(70)

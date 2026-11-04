@@ -15,20 +15,19 @@ from artifact_paths import (
 )
 
 
-@pytest.mark.parametrize("old_target_kind", ["empty", "nonempty", "missing"])
-def test_refresh_existing_symlink_preserves_old_target(tmp_path, old_target_kind):
+@pytest.mark.parametrize("old_target_exists", [True, False], ids=["populated-target", "broken-link"])
+def test_refresh_existing_symlink_preserves_old_target(tmp_path, old_target_exists):
     old_target, new_target, link = tmp_path / "old", tmp_path / "new", tmp_path / "link"
-    if old_target_kind != "missing":
+    if old_target_exists:
         old_target.mkdir()
-    if old_target_kind == "nonempty":
         (old_target / "keep.txt").write_text("keep")
     link.symlink_to(old_target)
     returned = ensure_repo_symlink(link, new_target)
     assert returned == link
     assert link.is_symlink() and link.resolve(strict=False) == new_target
     assert not old_target.is_symlink()
-    assert old_target.exists() == (old_target_kind != "missing")
-    if old_target_kind == "nonempty":
+    assert old_target.exists() is old_target_exists
+    if old_target_exists:
         assert (old_target / "keep.txt").read_text() == "keep"
 
 
@@ -56,6 +55,7 @@ def test_build_catch22_layout_defaults_to_media_root(monkeypatch):
     assert layout.smoke_root == DEFAULT_ARTIFACT_ROOT / "smoke_test_outputs"
     assert layout.log_file == DEFAULT_ARTIFACT_ROOT / "logs" / "experiment_log.txt"
     assert layout.raw_dir == project_root / "data" / "raw"
+    assert resolve_log_file("smoke_test.log", default_dir=project_root / "logs") == project_root / "logs/smoke_test.log"
 
 
 def test_enforce_storage_policy_modes(tmp_path: Path, monkeypatch):
@@ -71,14 +71,6 @@ def test_enforce_storage_policy_modes(tmp_path: Path, monkeypatch):
 
     monkeypatch.setenv("AKI_STORAGE_POLICY", "off")
     enforce_storage_policy(candidate, allowed_root=tmp_path / "allowed-volume")
-
-
-def test_resolve_log_file_can_target_custom_default_dir(monkeypatch):
-    monkeypatch.delenv("LOG_FILE", raising=False)
-
-    resolved = resolve_log_file("smoke_test.log", default_dir=Path("/tmp/aki_smoke"))
-
-    assert resolved == Path("/tmp/aki_smoke/smoke_test.log")
 
 
 def test_refresh_repo_convenience_paths_creates_symlinks(tmp_path: Path):

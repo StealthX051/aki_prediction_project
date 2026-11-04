@@ -63,7 +63,6 @@ def test_write_prediction_files_roundtrips_train_and_test_values(tmp_path: Path,
     for filename, expected in (("train_oof.csv", train_df), ("test.csv", test_df)):
         written = pd.read_csv(tmp_path / filename)
         pd.testing.assert_frame_equal(written, expected)
-        assert REQUIRED_PREDICTION_COLUMNS <= set(written)
         assert validate_prediction_dataframe(written, tmp_path / filename) == pytest.approx(.7)
 
 
@@ -150,3 +149,44 @@ def test_write_prediction_files_allows_duplicate_train_caseids_but_not_test_case
 
     pd.testing.assert_frame_equal(pd.read_csv(tmp_path / "train_oof.csv"), train_df)
     pd.testing.assert_frame_equal(pd.read_csv(tmp_path / "test.csv"), test_df)
+
+
+@pytest.mark.parametrize("column,value,varying", [
+    ("y_prob_raw", float("nan"), False),
+    ("y_prob_raw", float("inf"), False),
+    ("y_prob_raw", -.1, False),
+    ("y_prob_raw", 1.1, False),
+    ("threshold", float("inf"), False),
+    ("threshold", float("inf"), True),
+    ("threshold", -.1, False),
+    ("threshold", 1.1, True),
+    ("y_pred_label", .5, False),
+])
+def test_invalid_prediction_numerics_are_rejected(tmp_path, column, value, varying):
+    frame = _base_predictions()
+    if column == "y_pred_label":
+        frame[column] = frame[column].astype(float)
+        frame.loc[0, column] = value
+    else:
+        frame[column] = value
+        frame["y_pred_label"] = (frame.y_prob_calibrated >= frame.threshold).astype(int)
+    with pytest.raises(ValueError, match=column):
+        validate_prediction_dataframe(frame, tmp_path / "invalid.csv", require_single_threshold=not varying)
+
+
+@pytest.mark.parametrize("thresholds", [[0., 0., 0.], [1., 1., 1.], [0., .5, 1.]])
+def test_boundary_thresholds_preserve_valid_rowwise_labels(tmp_path, thresholds):
+    frame = _base_predictions()
+    frame["threshold"] = thresholds
+    frame["y_pred_label"] = (frame.y_prob_calibrated >= frame.threshold).astype(int)
+    original = frame.copy(deep=True)
+    result = validate_prediction_dataframe(frame, tmp_path / "valid.csv", require_single_threshold=False)
+    assert result == pytest.approx(sorted(thresholds)[1])
+    pd.testing.assert_frame_equal(frame, original)
+
+
+def test_raw_probability_guard_allows_explicit_schema_without_raw_values(tmp_path):
+    frame = _base_predictions().drop(columns="y_prob_raw")
+    assert validate_prediction_dataframe(
+        frame, tmp_path / "calibrated.csv", required_columns=REQUIRED_PREDICTION_COLUMNS - {"y_prob_raw"}
+    ) == .5

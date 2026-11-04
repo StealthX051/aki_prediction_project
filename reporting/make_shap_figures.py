@@ -26,6 +26,7 @@ from artifact_paths import enforce_storage_policy, get_paper_dir, get_results_di
 from model_creation import utils as model_utils
 from reporting.display_dictionary import DisplayDictionary, load_display_dictionary
 from reporting.figure_rendering import report_figure_style_context, save_report_figure_bundle
+from reporting.publication_style import color as publication_color
 from reporting.manuscript_assets import refresh_paper_bundle
 
 logger = logging.getLogger(__name__)
@@ -42,9 +43,9 @@ BACKGROUND_SAMPLE_SIZE = 200
 MAX_SCATTER_FEATURES = 12
 FEATURED_SCATTER_COUNT = 6
 MIN_ROWS_PER_CHUNK = 256
-NEGATIVE_COLOR = "#2d6ba3"
-POSITIVE_COLOR = "#bf3b3b"
-TREND_COLOR = "#111827"
+NEGATIVE_COLOR = publication_color("blue")
+POSITIVE_COLOR = publication_color("orange")
+TREND_COLOR = publication_color("ink")
 
 
 @dataclass(frozen=True)
@@ -268,17 +269,17 @@ def _feature_label(feature_name: str, *, include_unit: bool = False) -> str:
 
 
 def _render_empty_plot(ax, message: str) -> None:
-    ax.text(0.5, 0.5, message, ha="center", va="center", transform=ax.transAxes, color="#52606d")
+    ax.text(0.5, 0.5, message, ha="center", va="center", transform=ax.transAxes, color=publication_color("ink"))
 
 
 def _style_axes(ax, *, draw_zero_line: bool = False) -> None:
     if draw_zero_line:
-        ax.axhline(0.0, color="#7d8793", linestyle="--", linewidth=1.0, alpha=0.85, zorder=1)
+        ax.axhline(0.0, color=publication_color("reference"), linestyle="--", linewidth=1.0, alpha=0.85, zorder=1)
     ax.grid(True, which="major", linestyle="--", linewidth=0.75, alpha=0.16, zorder=0)
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
-    ax.spines["left"].set_color("#52606d")
-    ax.spines["bottom"].set_color("#52606d")
+    ax.spines["left"].set_color(publication_color("ink"))
+    ax.spines["bottom"].set_color(publication_color("ink"))
     ax.spines["left"].set_linewidth(1.05)
     ax.spines["bottom"].set_linewidth(1.05)
 

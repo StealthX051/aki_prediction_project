@@ -103,42 +103,6 @@ def test_experiments_fail_fast_when_generated_paths_are_off_media(tmp_path: Path
     assert "Starting Experiments" not in captured.out
 
 
-def test_experiments_skip_reporting_on_validation_failures(tmp_path: Path, monkeypatch, capsys):
-    monkeypatch.setenv("PROCESSED_DIR", str(tmp_path / "data" / "processed"))
-    monkeypatch.setenv("RESULTS_DIR", str(tmp_path / "results" / "catch22" / "experiments"))
-    monkeypatch.setenv("PAPER_DIR", str(tmp_path / "results" / "catch22" / "paper"))
-    monkeypatch.setenv("LOG_FILE", str(tmp_path / "experiment.log"))
-    monkeypatch.setenv("AKI_STORAGE_POLICY", "off")
-    monkeypatch.setattr(run_catch22, "refresh_repo_convenience_paths", lambda *args, **kwargs: None)
-
-    calls: list[tuple[str, list[str]]] = []
-
-    def fake_run_module(module: str, args: list[str], *, env, log_handle) -> int:
-        calls.append((module, list(args)))
-        if module == "data_preparation.validate_processed_artifacts":
-            _write_prepared_fixture(env["PROCESSED_DIR"])
-            return 0
-        if module == "model_creation.step_07_train_evaluate":
-            return 1
-        pytest.fail(f"Unexpected module call: {module}")
-
-    monkeypatch.setattr(run_catch22, "run_module", fake_run_module)
-    _mock_experiment_queue(monkeypatch, calls, exit_code=1)
-
-    result = run_catch22.main(["experiments", "--prep", "skip", "--only-xgboost", "--no-resume"])
-
-    captured = capsys.readouterr()
-    assert result == 1
-    assert any(module == "data_preparation.validate_processed_artifacts" for module, _ in calls)
-    assert any(module == "model_creation.step_07_train_evaluate" for module, _ in calls)
-    assert "skipping metrics/report generation" in captured.out
-    import json
-    saved = json.loads((tmp_path / "results/catch22/experiments/main_shared/nested_cv/run_manifest.json").read_text())
-    assert saved["status"] == "failed"
-    assert saved["execution_history"] and all(row["exit_code"] == 1 for row in saved["execution_history"])
-    assert "Running evaluation (results -> results directory)" not in captured.out
-
-
 def test_smoke_uses_isolated_root_and_selected_models(tmp_path: Path, monkeypatch):
     smoke_root = tmp_path / "smoke"
     monkeypatch.setenv("SMOKE_ROOT", str(smoke_root))
@@ -467,15 +431,14 @@ def test_mortality_scope_dry_run_has_exploratory_role_and_no_aki_requirement(tmp
     assert not root.exists()
 
 
-@pytest.mark.parametrize("scopes", [
-    ["icu_waveform_sensitivity"], ["mortality_waveform_sensitivity"],
-    ["icu_waveform_sensitivity", "mortality_waveform_sensitivity"],
-])
 @pytest.mark.parametrize("features", [[], ["--feature-sets", "preop_and_ecg"]], ids=["full", "subset"])
-def test_broader_full_supplements_reuse_core_without_fitting(scopes, features, tmp_path, monkeypatch, capsys):
+def test_broader_full_supplements_reuse_core_without_fitting(features, tmp_path, monkeypatch, capsys):
     import itertools
     import json
     from model_creation import experiment_queue, run_inventory
+    # One mixed request checks each population plus cross-scope matching; the
+    # single-scope CLI paths are covered by the core allowlist tests above.
+    scopes = ["icu_waveform_sensitivity", "mortality_waveform_sensitivity"]
     root = tmp_path / "future-supplements"
     monkeypatch.setenv("AKI_ARTIFACT_ROOT", str(root))
     for variable in ("RESULTS_DIR", "PAPER_DIR", "LOG_FILE"):
@@ -548,8 +511,12 @@ def test_supplementary_fold_plan_must_match_reused_core():
         _verify_reused_fold_plan({"fold_assignment_hashes": {key: "different-patient-folds"}}, [reference])
 
 
-@pytest.mark.parametrize("exit_code", [0, None], ids=["missing-bundles", "spawn-failure"])
-def test_failed_or_incomplete_configuration_skips_reports(tmp_path, monkeypatch, exit_code):
+@pytest.mark.parametrize("exit_code,status,reported_code", [
+    pytest.param(1, "failed", 1, id="failed-job"),
+    pytest.param(0, "artifact_validation_failed", 1, id="missing-bundles"),
+    pytest.param(None, "failed", None, id="spawn-failure"),
+])
+def test_failed_or_incomplete_configuration_skips_reports(tmp_path, monkeypatch, exit_code, status, reported_code):
     import json
     root = tmp_path / "new-study"
     monkeypatch.setenv("AKI_ARTIFACT_ROOT", str(root))
@@ -569,7 +536,8 @@ def test_failed_or_incomplete_configuration_skips_reports(tmp_path, monkeypatch,
     manifest_path = root / "results/catch22/experiments/main_shared/nested_cv/run_manifest.json"
     manifest = json.loads(manifest_path.read_text())
     assert manifest["status"] == "failed"
-    assert manifest["execution_history"][0]["status"] == ("artifact_validation_failed" if exit_code == 0 else "failed")
+    assert manifest["execution_history"][0]["status"] == status
+    assert manifest["execution_history"][0]["exit_code"] == reported_code
     assert not any(module.startswith("reporting") or module == "results_recreation.metrics_summary" for module, _ in calls)
 
 

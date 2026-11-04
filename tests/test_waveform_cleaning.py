@@ -247,3 +247,44 @@ def test_extraction_fingerprint_records_resampling_and_rejects_changed_policy(tm
     with pytest.raises(ArtifactCompatibilityError, match="fingerprint mismatch"):
         extraction.load_processed_pairs(output, errors,
             {**fingerprint, "resampling_policy": {**fingerprint["resampling_policy"], "padtype": "constant"}})
+
+
+@pytest.mark.parametrize("primary", ["present", "raises", "none", "empty"])
+def test_actual_loader_prefers_primary_and_substitutes_only_loading_failures(monkeypatch, primary):
+    calls = []
+    wave = np.sin(2 * np.pi * np.arange(5000) / 500)
+
+    def load_case(caseid, track, interval):
+        calls.append((caseid, track, interval))
+        if track == "SNUADC/ECG_II":
+            if primary == "raises":
+                raise OSError("synthetic network failure")
+            if primary == "none":
+                return None
+            if primary == "empty":
+                return np.array([])
+        return wave.copy()
+
+    monkeypatch.setattr(signals.vitaldb, "load_case", load_case)
+    monkeypatch.setattr(extraction, "GENERATE_FULL_FEATURES", True)
+    monkeypatch.setattr(extraction, "GENERATE_WINDOWED_FEATURES", False)
+    result, _ = extraction._process_case((123, 0, 10, "SNUADC/ECG_II"))
+    expected = ["SNUADC/ECG_II"] + ([] if primary == "present" else ["SNUADC/ECG_V5"])
+    assert calls == [(123, track, 1 / 500) for track in expected]
+    assert "error" not in result and "error" not in result["full"]
+    assert len(result["full"]) == 26  # Actual filter, resampling and Catch24.
+
+
+def test_primary_waveform_quality_failure_does_not_trigger_substitution(monkeypatch):
+    calls = []
+
+    def load_case(caseid, track, interval):
+        calls.append(track)
+        if track == "SNUADC/ECG_II":
+            return np.full(5000, np.nan)
+        return np.sin(2 * np.pi * np.arange(5000) / 500)
+
+    monkeypatch.setattr(signals.vitaldb, "load_case", load_case)
+    result, _ = extraction._process_case((123, 0, 10, "SNUADC/ECG_II"))
+    assert result["error"]["error"] == "invalid_signal_gt_5_pct_nonfinite"
+    assert calls == ["SNUADC/ECG_II"]

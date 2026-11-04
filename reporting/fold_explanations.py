@@ -15,7 +15,8 @@ import pandas as pd
 
 from model_creation import utils
 from artifact_paths import get_scoped_results_dir, get_scoped_paper_dir
-from reporting.figure_rendering import save_report_figure_bundle
+from reporting.figure_rendering import save_report_figure_bundle, report_figure_style_context
+from reporting.publication_style import color
 from data_preparation.artifact_metadata import file_sha256
 from reporting.display_dictionary import load_display_dictionary
 
@@ -29,11 +30,12 @@ def _bar(table: pd.DataFrame, value: str, destination: Path, title: str):
     selected = table.loc[table[value].abs().nlargest(20).index].iloc[::-1]
     display = _feature_labels(selected["feature"])
     labels = [textwrap.fill(display[str(feature)], width=45) for feature in selected["feature"]]
-    fig, ax = plt.subplots(figsize=(9, max(4, 0.25 * sum(label.count("\n") + 1 for label in labels))), constrained_layout=True)
-    ax.barh(labels, selected[value])
-    xlabel = "Raw log-odds coefficient (numeric inputs per training SD)" if value == "coefficient" else value
-    ax.set(title=title, xlabel=xlabel)
-    return save_report_figure_bundle(fig, destination, formats=("png", "svg"), close=True)
+    with report_figure_style_context():
+        fig, ax = plt.subplots(figsize=(9, max(4, 0.25 * sum(label.count("\n") + 1 for label in labels))), constrained_layout=True)
+        ax.barh(labels, selected[value], color=color('ink'))
+        xlabel = "Raw log-odds coefficient (numeric inputs per training SD)" if value == "coefficient" else value
+        ax.set(title=title, xlabel=xlabel)
+        return save_report_figure_bundle(fig, destination, close=True)
 
 
 def export_fold_bundle(fold_dir: Path, raw: pd.DataFrame, output_dir: Path) -> list[Path]:
@@ -105,10 +107,11 @@ def export_fold_bundle(fold_dir: Path, raw: pd.DataFrame, output_dir: Path) -> l
         importance["display_label"] = importance.feature.map(display_labels)
         importance.to_csv(output_dir / "shap_importance.csv", index=False)
         paths.extend(_bar(importance, "mean_absolute_SHAP", output_dir / "shap_importance", title_prefix + "Held-out outer-fold SHAP"))
-        shap.summary_plot(values, transformed.rename(columns=display_labels), show=False, max_display=20)
-        if title_prefix:
-            plt.gcf().suptitle(title_prefix + "Held-out outer-fold SHAP")
-        paths.extend(save_report_figure_bundle(plt.gcf(), output_dir / "shap_beeswarm", formats=("png", "svg"), close=True))
+        with report_figure_style_context():
+            shap.summary_plot(values, transformed.rename(columns=display_labels), show=False, max_display=20)
+            if title_prefix:
+                plt.gcf().suptitle(title_prefix + "Held-out outer-fold SHAP")
+            paths.extend(save_report_figure_bundle(plt.gcf(), output_dir / "shap_beeswarm", close=True))
     elif family == "ebm":
         explanation = model.explain_global()
         global_data = explanation.data()
@@ -140,12 +143,13 @@ def export_fold_bundle(fold_dir: Path, raw: pd.DataFrame, output_dir: Path) -> l
             if scores.ndim != 1 or len(scores) == 0:
                 continue
             x = np.arange(len(scores))
-            fig, ax = plt.subplots(figsize=(8, 4), constrained_layout=True)
-            if len(names) == len(scores) + 1 and np.issubdtype(names.dtype, np.number):
-                x = (names[:-1].astype(float) + names[1:].astype(float)) / 2
-            ax.plot(x, scores)
-            ax.set(title=title_prefix + _feature_labels([term])[str(term)], xlabel="Feature value / encoded category index", ylabel="Raw model log-odds contribution")
-            paths.extend(save_report_figure_bundle(fig, output_dir / f"response_{idx:03d}", formats=("png", "svg"), close=True))
+            with report_figure_style_context():
+                fig, ax = plt.subplots(figsize=(8, 4), constrained_layout=True)
+                if len(names) == len(scores) + 1 and np.issubdtype(names.dtype, np.number):
+                    x = (names[:-1].astype(float) + names[1:].astype(float)) / 2
+                ax.plot(x, scores, color=color('ink'))
+                ax.set(title=title_prefix + _feature_labels([term])[str(term)], xlabel="Feature value / encoded category index", ylabel="Raw model log-odds contribution")
+                paths.extend(save_report_figure_bundle(fig, output_dir / f"response_{idx:03d}", close=True))
         special_path = output_dir / "special_bin_scores.csv"
         pd.DataFrame(special_bins, columns=["term", "bin_type", "raw_log_odds_contribution", "training_weight"]).to_csv(special_path, index=False)
         paths.append(special_path)

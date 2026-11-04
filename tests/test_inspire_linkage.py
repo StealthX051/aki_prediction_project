@@ -11,21 +11,26 @@ from scripts.audit_inspire_linkage import (
 
 def test_death_timing_is_scoped_to_the_operation_admission():
     frame = pd.DataFrame({
-        "admission_time": [0, 100, 0, 0, 200, 0],
-        "discharge_time": [50, 200, 50, 50, 100, 50],
-        "opend_time": [10, 120, 10, 10, 210, 10],
-        "inhosp_death_time": [150, 150, None, 10, 220, 50],
-        "icuin_time": [20, None, None, 5, None, 70],
+        "admission_time": [0, 100, 0, 0, 200, 0, 0, 0, 0],
+        "discharge_time": [50, 200, 50, 50, 100, 50, 2000, 2000, 2000],
+        "opend_time": [10, 120, 10, 10, 210, 10, 10, 10, 10],
+        "inhosp_death_time": [150, 150, None, 10, 220, 50, None, None, None],
+        "icuin_time": [20, None, None, 5, None, 70, 10, 1450, 1451],
     })
     audit = timing_audit(frame)
     assert audit.mortality_timing.tolist() == [
         "outside_operation_admission", "after_operation_within_admission",
         "no_recorded_time", "at_or_before_operation_end",
         "invalid_or_missing_stay_chronology", "after_operation_within_admission",
+        "no_recorded_time", "no_recorded_time", "no_recorded_time",
     ]
     assert audit.icu_timing.iloc[[0, 2, 3, 5]].tolist() == [
         "within_24h_after_operation_end", "no_recorded_time",
         "before_operation_end", "outside_operation_admission",
+    ]
+    assert audit.icu_timing.iloc[-3:].tolist() == [
+        "within_24h_after_operation_end", "within_24h_after_operation_end",
+        "over_24h_after_operation_end",
     ]
 
 
@@ -93,9 +98,10 @@ def test_nonfinite_times_and_invalid_icu_los_remain_unascertained():
 
 def test_creatinine_windows_exclude_operation_end_and_stop_at_discharge(tmp_path):
     path = tmp_path / "labs.csv"
-    pd.DataFrame({"subject_id": [100] * 8, "item_name": ["creatinine"] * 8,
-                  "chart_time": [10, 11, 2890, 2891, 3000, 3001, 12, 13],
-                  "value": [1, 1, 1, 1, 1, 1, -1, float("inf")]}).to_csv(path, index=False)
+    pd.DataFrame({"subject_id": [100] * 8 + [101, 100],
+                  "item_name": ["creatinine"] * 9 + ["potassium"],
+                  "chart_time": [10, 11, 2890, 2891, 3000, 3001, 12, 13, 11, 12],
+                  "value": [1, 1, 1, 1, 1, 1, -1, float("inf"), 1, 1]}).to_csv(path, index=False)
     frame = pd.DataFrame({"_merge": ["both"], "subject_id": [100],
                           "admission_time": [0], "opend_time": [10], "discharge_time": [3000]})
     result = creatinine_surveillance(frame, path)

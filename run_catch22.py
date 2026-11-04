@@ -6,10 +6,8 @@ import json
 import os
 import subprocess
 import sys
-import time
 from contextlib import contextmanager
 from dataclasses import replace
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, Sequence
 
@@ -25,7 +23,7 @@ from artifact_paths import (
     resolve_log_file,
 )
 from data_preparation.cohort_scopes import COHORT_SCOPES, SCOPE_OUTCOMES, scope_required_columns
-from runtime_resources import available_cpu_count, resource_snapshot
+from runtime_resources import available_cpu_count
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 

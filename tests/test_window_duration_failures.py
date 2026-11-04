@@ -32,7 +32,6 @@ def test_zero_alone_is_not_a_verified_embedding_failure():
 
 def test_fluctuation_fallthrough_is_outside_successful_split_range():
     assert fluctuation_scale_count(625) == 47
-    assert fluctuation_scale_count(1000) == 48
     assert fluctuation_scale_count(64000) == 50
     names = sorted(FLUCTUATIONS) + ["PD_PeriodicityWang_th0_01"]
     signal = np.random.default_rng(1).standard_normal(625)

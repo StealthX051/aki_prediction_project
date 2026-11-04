@@ -76,13 +76,20 @@ def test_paper_pdf_text_fits_inside_cells_with_long_labels_and_signed_intervals(
                                  notes='95% patient-cluster intervals. Descriptive ranks only.')
 
 
-def test_supplement_preserves_branch_identity_and_different_populations(tmp_path):
+def test_core_and_supplement_preserve_inputs_branches_and_populations(tmp_path):
     scores = _scores().iloc[:2].copy()
     scores['feature_set'] = 'preop_and_pleth'
     scores['branch'] = ['non_windowed', 'windowed']
     scores['n_patients'] = [39, 38]
     scores['prevalence'] = [.1, .3]
-    assets.export_core_comparisons(prepare_metrics_for_display(scores), tmp_path)
+    combined = pd.concat([_scores(), scores], ignore_index=True)
+    assets.export_core_comparisons(prepare_metrics_for_display(combined), tmp_path)
+    main = pd.read_csv(tmp_path / 'manuscript_any_aki_main.csv')
+    for _, group in main.groupby('Model', sort=False):
+        assert group['Feature set'].tolist() == ['Preoperative only', 'All waveforms', 'Preoperative + all waveforms']
+    assert [column for column in main if column in {'AUPRC', 'AUROC', 'Brier Score'}] == ['AUPRC', 'AUROC', 'Brier Score']
+    supplement = pd.read_csv(tmp_path / 'manuscript_any_aki_supplement.csv')
+    assert len(supplement) == 2
     base = tmp_path / 'manuscript_any_aki_supplement'
     html = base.with_suffix('.html').read_text()
     assert 'Whole case' in html and 'Windowed' in html

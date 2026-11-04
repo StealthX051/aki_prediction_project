@@ -149,7 +149,7 @@ Low importance would lower concern, not prove harmlessness; high importance
 would motivate checking value provenance and interpretation, not automatically
 invalidate a model. An implementation-defined fallback under a degenerate or
 near-degenerate embedding-distance distribution is not automatically a waveform
-error. This follow-up has **not yet been performed**.
+error. The requested cross-family review remains incomplete.
 
 ## Manuscript wording
 

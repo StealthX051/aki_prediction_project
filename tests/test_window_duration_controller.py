@@ -82,15 +82,22 @@ def test_intact_swapped_checkpoint_pairs_fail_identity(checkpoint_root, other):
 
 
 @pytest.mark.parametrize("field", ["aggregates", "audited_aggregates", "matched", "phases"])
-def test_changed_assembled_payload_fails_before_summary(checkpoint_root, field):
+def test_changed_assembled_payload_fails_before_summary(checkpoint_root, field, monkeypatch):
     root, manifest, _ = checkpoint_root
     with np.load(root / "pilot.npz", allow_pickle=False) as bundle:
         changed = {name: bundle[name] for name in bundle.files}
     changed[field].flat[-1] += 1
     np.savez_compressed(root / "pilot.npz", **changed)
+    (root / "control/status.json").write_text(json.dumps({"status": "features_complete"}))
+    # The fixture has no frozen code/environment snapshot. Retain the real
+    # controller ordering and assembly validation after that external boundary.
+    monkeypatch.setattr(controller, "verify_freeze", lambda *args: None)
+    def unexpected_summary(*args, **kwargs):
+        pytest.fail("An altered assembly reached summary generation")
+
+    monkeypatch.setattr(controller, "write_summary", unexpected_summary)
     with pytest.raises(ValueError, match=f"assembly differs.*{field}"):
-        controller.verify_pilot_assembly(root, manifest)
-    assert not (root / "summary").exists()
+        controller.execute(root, workers=1, synthetic_workers=1)
 
 
 def test_changed_channel_payload_fails_checksum(checkpoint_root):

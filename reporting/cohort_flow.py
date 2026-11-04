@@ -52,6 +52,7 @@ from artifact_paths import enforce_storage_policy, get_scoped_results_dir, get_s
 from data_preparation.cohort_scopes import COHORT_SCOPES
 from reporting.display_dictionary import DisplayDictionary, load_display_dictionary
 from reporting.figure_rendering import mirror_figure_variants, report_figure_style_context, save_report_figure_bundle
+from reporting.publication_style import color as publication_color, FONT_FAMILY
 from reporting.manuscript_assets import PNG_DPI, refresh_paper_bundle
 
 logger = logging.getLogger(__name__)
@@ -518,7 +519,7 @@ def _graph_attrs(title: Optional[str]) -> str:
         'pad="0.18"',
         'nodesep="0.55"',
         'ranksep="0.9"',
-        'fontname="Times New Roman"',
+        f'fontname="{FONT_FAMILY}"',
     ]
     if title:
         attrs.extend(
@@ -538,13 +539,13 @@ def _cohort_flow_dot(stages: Sequence[CohortStage], outcome_split: Optional[Outc
     lines = [
         "digraph cohort_flow {",
         f"  graph [{_graph_attrs(title)}];",
-        '  node [shape=box, style="rounded,filled", fontname="Times New Roman", fontsize=12, penwidth=1.5, color="#667d93", fillcolor="#f8fafc", margin="0.20,0.14"];',
-        '  edge [color="#667d93", penwidth=1.5, arrowsize=0.75];',
+        f'  node [shape=box, style="rounded,filled", fontname="{FONT_FAMILY}", fontsize=12, penwidth=1.5, color="{publication_color("ink")}", fillcolor="white", margin="0.20,0.14"];',
+        f'  edge [color="{publication_color("ink")}", penwidth=1.5, arrowsize=0.75];',
     ]
 
     for idx, stage in enumerate(stages):
         stage_id = stage_ids[idx]
-        fillcolor = "#f2f7fb" if idx == len(stages) - 1 else "#f8fafc"
+        fillcolor = publication_color("table_band") if idx == len(stages) - 1 else "white"
         lines.append(
             f'  {stage_id} [label="{_dot_label(_stage_node_lines(stage), left_aligned=False)}", '
             f'width=4.0, height=1.0, fillcolor="{fillcolor}"];'
@@ -556,7 +557,7 @@ def _cohort_flow_dot(stages: Sequence[CohortStage], outcome_split: Optional[Outc
             lines.append(
                 f'  {exclusion_id} [label="{_dot_label(_exclusion_node_lines(stage), left_aligned=True)}", '
                 'width=3.55, fontsize=10.5, style="rounded,filled,dashed", '
-                'color="#7b8b99", fillcolor="#fbfcfd", margin="0.16,0.12"];'
+                f'color="{publication_color("reference")}", fillcolor="white", margin="0.16,0.12"];'
             )
         exclusion_ids.append(exclusion_id)
 
@@ -568,7 +569,7 @@ def _cohort_flow_dot(stages: Sequence[CohortStage], outcome_split: Optional[Outc
         if not exclusion_id:
             continue
         lines.append(
-            f'  {stage_ids[idx]}:e -> {exclusion_id}:w [style=dashed, color="#7b8b99", '
+            f'  {stage_ids[idx]}:e -> {exclusion_id}:w [style=dashed, color="{publication_color("reference")}", '
             'constraint=false, minlen=2];'
         )
         lines.append(f"  {{ rank=same; {stage_ids[idx]}; {exclusion_id}; }}")
@@ -580,8 +581,8 @@ def _cohort_flow_dot(stages: Sequence[CohortStage], outcome_split: Optional[Outc
         negative_label, positive_label = _split_labels(outcome_split)
         lines.extend(
             [
-                f'  final_negative [label="{_dot_label(_split_node_lines(negative_label, outcome_split.false_count), left_aligned=False)}", width=3.0, height=0.95, fillcolor="#f8fafc"];',
-                f'  final_positive [label="{_dot_label(_split_node_lines(positive_label, outcome_split.true_count), left_aligned=False)}", width=3.0, height=0.95, fillcolor="#edf5fb"];',
+                f'  final_negative [label="{_dot_label(_split_node_lines(negative_label, outcome_split.false_count), left_aligned=False)}", width=3.0, height=0.95, fillcolor="white"];',
+                f'  final_positive [label="{_dot_label(_split_node_lines(positive_label, outcome_split.true_count), left_aligned=False)}", width=3.0, height=0.95, fillcolor="{publication_color("table_band")}"];',
                 f'  {stage_ids[-1]}:s -> final_negative:n [minlen=1];',
                 f'  {stage_ids[-1]}:s -> final_positive:n [minlen=1];',
                 "  { rank=same; final_negative; final_positive; }",
@@ -627,7 +628,7 @@ def _draw_box(
         fontsize=fontsize,
         fontweight="bold" if centered else "normal",
         linespacing=1.35,
-        color="#1f2933",
+        color=publication_color("ink"),
     )
 
 
@@ -636,7 +637,7 @@ def _draw_arrow(ax: plt.Axes, start: tuple[float, float], end: tuple[float, floa
         "",
         xy=end,
         xytext=start,
-        arrowprops={"arrowstyle": "-|>", "lw": 1.5, "color": "#607286", "shrinkA": 2, "shrinkB": 2},
+        arrowprops={"arrowstyle": "-|>", "lw": 1.5, "color": publication_color("ink"), "shrinkA": 2, "shrinkB": 2},
     )
 
 
@@ -644,9 +645,18 @@ def _draw_cohort_flow_fallback(
     stages: Sequence[CohortStage],
     outcome_split: Optional[OutcomeSplit],
     title: Optional[str],
+    *,
+    publication: bool = False,
 ) -> plt.Figure:
+    """Render the retained spine and exclusions; publication uses a native 174 mm canvas."""
     stage_lines = [_stage_node_lines(stage) for stage in stages]
     exclusion_lines = [_exclusion_node_lines(stage) for stage in stages]
+    if publication:
+        exclusion_lines = [
+            _wrap_lines([stage.removal_reason or stage.title], width=30)
+            + [f"n = {_format_n(stage.removed)}"] if stage.removed else []
+            for stage in stages
+        ]
     split_lines = None
     if outcome_split:
         negative_label, positive_label = _split_labels(outcome_split)
@@ -664,17 +674,19 @@ def _draw_cohort_flow_fallback(
     side_heights = [text_height(lines, 8.7) if lines else 0 for lines in exclusion_lines]
     row_heights = [max(main, side) for main, side in zip(main_heights, side_heights)]
     branch_height = max(text_height(lines, 9.8) for lines in split_lines) if split_lines else 0
-    row_gap = 0.38
+    row_gap = 0.24 if publication else 0.38
     bottom_margin = 0.35
     split_space = branch_height + 0.65 if split_lines else 0
     title_space = 0.7 if title else 0.25
     figure_height = sum(row_heights) + max(0, len(stages)-1) * row_gap + bottom_margin + split_space + title_space
-    fig = plt.figure(figsize=(10.6, figure_height))
+    figure_width = 174 / 25.4 if publication else 10.6
+    fig = plt.figure(figsize=(figure_width, figure_height))
     ax = fig.add_axes((0, 0, 1, 1))
-    ax.set_xlim(0, 10.6)
+    ax.set_xlim(0, figure_width)
     ax.set_ylim(0, figure_height)
     ax.axis("off")
-    main_x, main_w, side_x, side_w = 0.4, 5.0, 6.1, 4.1
+    scale = figure_width / 10.6
+    main_x, main_w, side_x, side_w = [value * scale for value in (0.4, 5.0, 6.1, 4.1)]
     stage_boxes: List[tuple[float, float, float, float]] = []
     exclusion_boxes: List[Optional[tuple[float, float, float, float]]] = []
     row_top = figure_height - title_space
@@ -688,10 +700,11 @@ def _draw_cohort_flow_fallback(
             exclusion_boxes.append(None)
         row_top -= row_heights[idx] + row_gap
 
+    exclusion_guides = []
     with report_figure_style_context():
         for idx, stage in enumerate(stages):
             x, y, width, height = stage_boxes[idx]
-            fillcolor = "#f2f7fb" if idx == len(stages) - 1 else "#f8fafc"
+            fillcolor = publication_color("table_band") if idx == len(stages) - 1 else "white"
             _draw_box(
                 ax,
                 x=x,
@@ -700,7 +713,7 @@ def _draw_cohort_flow_fallback(
                 height=height,
                 lines=stage_lines[idx],
                 facecolor=fillcolor,
-                edgecolor="#607286",
+                edgecolor=publication_color("ink"),
                 fontsize=10.2,
             )
 
@@ -714,20 +727,20 @@ def _draw_cohort_flow_fallback(
                     width=ex_width,
                     height=ex_height,
                     lines=exclusion_lines[idx],
-                    facecolor="#fbfcfd",
-                    edgecolor="#7b8b99",
+                    facecolor="white",
+                    edgecolor=publication_color("reference"),
                     fontsize=8.7,
                     dashed=True,
                     centered=False,
                 )
                 stage_mid_y = y + height / 2
-                ax.plot(
+                exclusion_guides.extend(ax.plot(
                     [x + width, ex_x],
                     [stage_mid_y, stage_mid_y],
-                    color="#7b8b99",
+                    color=publication_color("reference"),
                     lw=1.2,
                     linestyle=(0, (3, 2)),
-                )
+                ))
 
         for idx in range(len(stage_boxes) - 1):
             x, y, width, _height = stage_boxes[idx]
@@ -739,8 +752,8 @@ def _draw_cohort_flow_fallback(
             )
 
         if outcome_split and split_lines is not None:
-            left_box = (0.4, bottom_margin, 4.3, branch_height)
-            right_box = (5.4, bottom_margin, 4.3, branch_height)
+            left_box = (0.4 * scale, bottom_margin, 4.3 * scale, branch_height)
+            right_box = (5.4 * scale, bottom_margin, 4.3 * scale, branch_height)
             _draw_box(
                 ax,
                 x=left_box[0],
@@ -748,8 +761,8 @@ def _draw_cohort_flow_fallback(
                 width=left_box[2],
                 height=left_box[3],
                 lines=split_lines[0],
-                facecolor="#f8fafc",
-                edgecolor="#607286",
+                facecolor="white",
+                edgecolor=publication_color("ink"),
                 fontsize=9.8,
             )
             _draw_box(
@@ -759,8 +772,8 @@ def _draw_cohort_flow_fallback(
                 width=right_box[2],
                 height=right_box[3],
                 lines=split_lines[1],
-                facecolor="#eef5fb",
-                edgecolor="#607286",
+                facecolor=publication_color("table_band"),
+                edgecolor=publication_color("ink"),
                 fontsize=9.8,
             )
 
@@ -769,22 +782,53 @@ def _draw_cohort_flow_fallback(
             parent_center = parent_x + parent_w / 2
             left_center = left_box[0] + left_box[2] / 2
             right_center = right_box[0] + right_box[2] / 2
-            ax.plot([parent_center, parent_center], [parent_y, split_y], color="#607286", lw=1.5)
-            ax.plot([left_center, right_center], [split_y, split_y], color="#607286", lw=1.5)
+            ax.plot([parent_center, parent_center], [parent_y, split_y], color=publication_color("ink"), lw=1.5)
+            ax.plot([left_center, right_center], [split_y, split_y], color=publication_color("ink"), lw=1.5)
             _draw_arrow(ax, (left_center, split_y), (left_center, left_box[1] + left_box[3]))
             _draw_arrow(ax, (right_center, split_y), (right_center, right_box[1] + right_box[3]))
 
         if title:
             ax.text(
-                5.3,
+                figure_width / 2,
                 figure_height - 0.18,
                 title,
                 ha="center",
                 va="top",
                 fontsize=14,
                 fontweight="bold",
-                color="#1f2933",
+                color=publication_color("ink"),
             )
+    if publication:
+        ax.text(side_x + side_w / 2, stage_boxes[0][1] + stage_boxes[0][3] / 2,
+                "Excluded operations", ha="center", va="center", fontsize=9.5,
+                color=publication_color("ink"))
+        for patch in ax.patches:
+            patch.set_facecolor("white")
+            patch.set_edgecolor(publication_color("ink"))
+            patch.set_linewidth(.9)
+            patch.set_linestyle("solid")
+        for text in ax.texts:
+            text.set_color(publication_color("ink"))
+            text.set_fontweight("normal")
+            if getattr(text, "arrow_patch", None) is not None:
+                text.arrow_patch.set_color(publication_color("ink"))
+                text.arrow_patch.set_linewidth(1)
+        # Replace exclusion guides by explicit arrows anchored on box bounds.
+        for line in exclusion_guides:
+            line.remove()
+        for main, excluded in zip(stage_boxes, exclusion_boxes):
+            if excluded is None:
+                continue
+            x, y, width, height = main
+            ex_x, ex_y, ex_width, ex_height = excluded
+            ax.annotate("", xy=(ex_x, ex_y + ex_height / 2),
+                        xytext=(x + width, y + height / 2),
+                        arrowprops={"arrowstyle": "-|>", "lw": 1, "color": publication_color("ink"),
+                                    "shrinkA": 2, "shrinkB": 2})
+        # Only the final retained cohort is emphasized.
+        for text in ax.texts:
+            if text.get_text() == "\n".join(stage_lines[-1]):
+                text.set_fontweight("bold")
     return fig
 
 

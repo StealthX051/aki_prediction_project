@@ -8,9 +8,15 @@ Use the root docs and the production modules under `data_preparation/`,
 
 ## Contents
 
-- `archive/notebooks/`: early exploratory notebooks
-- `archive/scripts/`: legacy utilities and older training code
+- `archive/notebooks/`: exploratory preparation, training and results notebooks, including superseded top-level notebooks
+- `archive/scripts/`: legacy utilities, the hard-coded duration inspection script, superseded XGBoost HPO and older training code
 - `archive/environment_linux.yml`: archived environment snapshot
+- [Historical manuscript log](docs/manuscript-reorientation-2026-11-04.md): dated launch, audit and manuscript decisions
+
+Generated historical split CSVs and training logs are outside the code tree.
+Local reference copies are under the ignored `outputs/legacy-reference/`;
+previous committed copies remain available in Git history. Current research
+inputs and fitted artifacts belong on the research volume.
 
 ## Guidance
 

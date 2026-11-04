@@ -68,3 +68,11 @@ __pycache__/
 
 # Windows
 Thumbs.db
+
+# Source-controlled publication appearance (other JSON files are generated results).
+!reporting/publication_style.json
+
+# Unpacked writing exports and downloadable manuscript bundles.
+/manuscript-workspace/
+/publication-packet/
+/VitalDB_*.zip
